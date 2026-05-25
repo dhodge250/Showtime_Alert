@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}{{ theater.name }} – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('main.theaters') }}" class="back-link">← Back to Theaters</a>
+  <h1>{{ theater.name }}</h1>
+  <span class="chain-badge chain-{{ theater.chain|lower }}">{{ theater.chain }}</span>
+</div>
+
+<div class="detail-grid">
+  <!-- Theater Info -->
+  <section class="card theater-info-card">
+    <h2>Theater Information</h2>
+    <div class="info-grid">
+      <div class="info-item">
+        <span class="info-label">Address</span>
+        <span class="info-value">{{ theater.address }}, {{ theater.city }}, {{ theater.state }} {{ theater.zip_code }}</span>
+      </div>
+      {% if theater.screen_size %}
+      <div class="info-item">
+        <span class="info-label">Screen Size</span>
+        <span class="info-value">{{ theater.screen_size }}</span>
+      </div>
+      {% endif %}
+      {% if theater.projector_type %}
+      <div class="info-item">
+        <span class="info-label">Projector Type</span>
+        <span class="info-value">{{ theater.projector_type }}</span>
+      </div>
+      {% endif %}
+      {% if theater.audio_system %}
+      <div class="info-item">
+        <span class="info-label">Audio System</span>
+        <span class="info-value">{{ theater.audio_system }}</span>
+      </div>
+      {% endif %}
+      {% if theater.phone %}
+      <div class="info-item">
+        <span class="info-label">Phone</span>
+        <span class="info-value">{{ theater.phone }}</span>
+      </div>
+      {% endif %}
+      {% if theater.website %}
+      <div class="info-item">
+        <span class="info-label">Website</span>
+        <span class="info-value"><a href="{{ theater.website }}" target="_blank">{{ theater.website }}</a></span>
+      </div>
+      {% endif %}
+    </div>
+    <div class="theater-actions">
+      <a href="{{ url_for('main.alerts') }}?theater_id={{ theater.id }}" class="btn btn-primary">
+        🔔 Set Alert for This Theater
+      </a>
+    </div>
+  </section>
+
+  <!-- Mini Map -->
+  <section class="card map-card">
+    <h2>Location</h2>
+    <div id="theater-mini-map"></div>
+  </section>
+</div>
+
+<!-- Showtimes -->
+<section class="card" style="margin-top: 24px">
+  <h2>Upcoming Showtimes</h2>
+  {% if showtimes %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>Movie</th><th>Format</th><th>Date/Time</th><th>Tickets</th></tr>
+      </thead>
+      <tbody>
+        {% for st in showtimes %}
+        <tr>
+          <td><strong>{{ st.movie.title if st.movie else '–' }}</strong></td>
+          <td><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
+          <td>{{ st.show_datetime.strftime('%A, %B %d, %Y at %I:%M %p') }}</td>
+          <td>
+            {% if st.tickets_available %}
+              {% if st.tickets_url %}
+                <a href="{{ st.tickets_url }}" target="_blank" class="btn-sm btn-primary">Buy Tickets →</a>
+              {% else %}
+                <span class="chip chip-green">Available</span>
+              {% endif %}
+            {% else %}
+              <span class="chip chip-red">Sold Out</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>No upcoming showtimes found for this theater.</p>
+    <p>Check back after the next scrape or <button class="btn-link" onclick="triggerScrape()">scrape now</button>.</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  {% if theater.latitude and theater.longitude %}
+  const map = L.map('theater-mini-map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap',
+    maxZoom: 18,
+  }).addTo(map);
+
+  const theaterIcon = L.divIcon({
+    html: '<div class="map-marker map-marker-theater">🎬</div>',
+    className: '',
+    iconSize: [36, 36],
+    iconAnchor: [18, 36],
+  });
+
+  const lat = {{ theater.latitude }};
+  const lng = {{ theater.longitude }};
+  map.setView([lat, lng], 15);
+  L.marker([lat, lng], { icon: theaterIcon })
+    .addTo(map)
+    .bindPopup('<strong>{{ theater.name }}</strong>')
+    .openPopup();
+
+  // User location
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      const { latitude, longitude } = pos.coords;
+      const userIcon = L.divIcon({
+        html: '<div class="map-marker map-marker-user">📍</div>',
+        className: '',
+        iconSize: [36, 36],
+        iconAnchor: [18, 36],
+      });
+      L.marker([latitude, longitude], { icon: userIcon })
+        .addTo(map)
+        .bindPopup('<strong>Your Location</strong>');
+
+      // Draw line between user and theater
+      const polyline = L.polyline([[latitude, longitude], [lat, lng]], {
+        color: '#00d4ff', dashArray: '6 4', weight: 2,
+      }).addTo(map);
+      map.fitBounds(polyline.getBounds(), { padding: [30, 30] });
+    });
+  }
+  {% else %}
+  document.getElementById('theater-mini-map').innerHTML =
+    '<p style="padding:20px;text-align:center;color:#999">Map coordinates not available</p>';
+  {% endif %}
+
+  async function triggerScrape() {
+    const resp = await fetch('/api/scheduler/trigger', { method: 'POST' });
+    const data = await resp.json();
+    if (resp.ok) location.reload();
+  }
+</script>
+{% endblock %}

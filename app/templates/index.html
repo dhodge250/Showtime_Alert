@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>🎬 IMAX Alert Dashboard</h1>
+  <p class="subtitle">Real-time IMAX showtime monitoring and ticket alerts</p>
+</div>
+
+<!-- Stats row -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-value">{{ theaters|length }}</div>
+    <div class="stat-label">Theaters Monitored</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ movies|length }}</div>
+    <div class="stat-label">Movies Tracked</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ recent_showtimes|length }}</div>
+    <div class="stat-label">Active Showtimes</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ alerts|selectattr('alert_sent','equalto',False)|list|length }}</div>
+    <div class="stat-label">Pending Alerts</div>
+  </div>
+</div>
+
+<div class="two-col">
+  <!-- Recent Showtimes -->
+  <section class="card">
+    <div class="card-header">
+      <h2>🕐 Available Showtimes</h2>
+      <button class="btn-sm btn-primary" id="refresh-btn" onclick="triggerScrape()">
+        ↻ Refresh Now
+      </button>
+    </div>
+    {% if recent_showtimes %}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr><th>Movie</th><th>Theater</th><th>Format</th><th>Date/Time</th><th>Tickets</th></tr>
+        </thead>
+        <tbody>
+          {% for st in recent_showtimes %}
+          <tr>
+            <td><strong>{{ st.movie.title if st.movie else '–' }}</strong></td>
+            <td>{{ st.theater.name if st.theater else '–' }}</td>
+            <td><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
+            <td>{{ st.show_datetime.strftime('%b %d, %Y %I:%M %p') }}</td>
+            <td>
+              {% if st.tickets_available %}
+                {% if st.tickets_url %}
+                  <a href="{{ st.tickets_url }}" target="_blank" class="btn-link">Buy →</a>
+                {% else %}
+                  <span class="chip chip-green">Available</span>
+                {% endif %}
+              {% else %}
+                <span class="chip chip-red">Sold Out</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <p>No showtimes found yet.</p>
+      <button class="btn btn-primary" onclick="triggerScrape()">Scrape Now</button>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- Active Alerts -->
+  <section class="card">
+    <div class="card-header">
+      <h2>🔔 Active Alerts</h2>
+      <a href="{{ url_for('main.alerts') }}" class="btn-sm btn-outline">Manage</a>
+    </div>
+    {% if alerts %}
+    <ul class="alert-list">
+      {% for a in alerts %}
+      <li class="alert-item {% if a.alert_sent %}sent{% endif %}">
+        <div class="alert-icon">{% if a.alert_sent %}✅{% else %}🔔{% endif %}</div>
+        <div class="alert-info">
+          <strong>{{ a.movie.title if a.movie else 'Any Movie' }}</strong>
+          <span>@ {{ a.theater.name if a.theater else 'Any Theater' }}</span>
+          {% if a.alert_sent %}<span class="chip chip-green">Sent</span>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-state">
+      <p>No alerts configured.</p>
+      <a href="{{ url_for('main.alerts') }}" class="btn btn-primary">Set Up Alerts</a>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+<!-- Scheduler status -->
+<section class="card" style="margin-top:24px">
+  <div class="card-header">
+    <h2>⚙️ Scheduler Status</h2>
+  </div>
+  <div id="scheduler-status">Loading…</div>
+</section>
+
+<div id="toast" class="toast hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function triggerScrape() {
+    const btn = document.getElementById('refresh-btn');
+    btn.disabled = true;
+    btn.textContent = '↻ Scraping…';
+    try {
+      const resp = await fetch('/api/scheduler/trigger', { method: 'POST' });
+      const data = await resp.json();
+      showToast(
+        resp.ok
+          ? `✅ Scrape complete: ${data.new_showtimes} new showtimes, ${data.notifications_sent} notifications sent.`
+          : `❌ Error: ${data.message}`,
+        resp.ok ? 'success' : 'error'
+      );
+      if (resp.ok && data.new_showtimes > 0) {
+        setTimeout(() => location.reload(), 1500);
+      }
+    } catch (e) {
+      showToast('❌ Request failed', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '↻ Refresh Now';
+    }
+  }
+
+  async function loadSchedulerStatus() {
+    try {
+      const resp = await fetch('/api/scheduler/status');
+      const data = await resp.json();
+      const el = document.getElementById('scheduler-status');
+      if (data.running) {
+        const job = data.jobs[0];
+        const next = job ? new Date(job.next_run).toLocaleString() : 'unknown';
+        el.innerHTML = `<span class="chip chip-green">Running</span> &mdash; Next scrape: <strong>${next}</strong>`;
+      } else {
+        el.innerHTML = `<span class="chip chip-red">Stopped</span>`;
+      }
+    } catch {}
+  }
+
+  function showToast(msg, type) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `toast ${type}`;
+    setTimeout(() => el.className = 'toast hidden', 4000);
+  }
+
+  loadSchedulerStatus();
+</script>
+{% endblock %}
