@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Profile – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>👤 User Profile</h1>
+  <p class="subtitle">Manage your notification preferences and location</p>
+</div>
+
+<div class="single-col">
+  <section class="card">
+    {% if saved %}
+    <div class="alert-banner success">✅ Profile saved successfully!</div>
+    {% endif %}
+
+    <form method="POST" action="{{ url_for('main.profile') }}" class="form">
+      {% if user %}
+      <input type="hidden" name="user_id" value="{{ user.id }}">
+      {% endif %}
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Full Name *</label>
+          <input type="text" name="name" class="form-control" required
+                 value="{{ user.name if user else '' }}" placeholder="Your name">
+        </div>
+        <div class="form-group">
+          <label>Email Address</label>
+          <input type="email" name="email" class="form-control"
+                 value="{{ user.email if user else '' }}" placeholder="you@example.com">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Phone Number <span class="hint">(for SMS alerts)</span></label>
+          <input type="tel" name="phone" class="form-control"
+                 value="{{ user.phone if user else '' }}" placeholder="+1 555 000 0000">
+        </div>
+      </div>
+
+      <h3 style="margin-top:24px">Notification Preferences</h3>
+      <div class="form-row checkbox-row">
+        <label class="checkbox-label">
+          <input type="checkbox" name="notify_email"
+                 {% if not user or user.notify_email %}checked{% endif %}>
+          Email Notifications
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="notify_sms"
+                 {% if user and user.notify_sms %}checked{% endif %}>
+          SMS Notifications
+        </label>
+      </div>
+
+      <h3 style="margin-top:24px">Your Location <span class="hint">(for distance to theaters)</span></h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Location Name</label>
+          <input type="text" name="location_name" class="form-control"
+                 value="{{ user.location_name if user else '' }}"
+                 placeholder="e.g. My Home" id="location_name">
+        </div>
+        <div class="form-group">
+          <button type="button" class="btn btn-outline" onclick="detectLocation()" style="margin-top:24px">
+            📍 Detect My Location
+          </button>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Latitude</label>
+          <input type="number" step="any" name="location_lat" class="form-control"
+                 value="{{ user.location_lat if user else '' }}" id="location_lat" placeholder="e.g. 40.7128">
+        </div>
+        <div class="form-group">
+          <label>Longitude</label>
+          <input type="number" step="any" name="location_lon" class="form-control"
+                 value="{{ user.location_lon if user else '' }}" id="location_lon" placeholder="e.g. -74.0060">
+        </div>
+      </div>
+
+      <!-- Location preview map -->
+      {% if user and user.location_lat and user.location_lon %}
+      <div id="profile-map" style="height:250px; border-radius:8px; margin:16px 0;"></div>
+      {% endif %}
+
+      <button type="submit" class="btn btn-primary">Save Profile</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function detectLocation() {
+    if (!navigator.geolocation) {
+      alert('Geolocation not supported by your browser.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(pos => {
+      document.getElementById('location_lat').value = pos.coords.latitude.toFixed(6);
+      document.getElementById('location_lon').value = pos.coords.longitude.toFixed(6);
+      if (!document.getElementById('location_name').value) {
+        document.getElementById('location_name').value = 'My Location';
+      }
+    }, err => {
+      alert('Could not detect location: ' + err.message);
+    });
+  }
+
+  {% if user and user.location_lat and user.location_lon %}
+  const map = L.map('profile-map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap', maxZoom: 18,
+  }).addTo(map);
+  const userIcon = L.divIcon({
+    html: '<div class="map-marker map-marker-user">📍</div>',
+    className: '', iconSize: [36, 36], iconAnchor: [18, 36],
+  });
+  const lat = {{ user.location_lat }};
+  const lng = {{ user.location_lon }};
+  map.setView([lat, lng], 13);
+  L.marker([lat, lng], { icon: userIcon })
+    .addTo(map)
+    .bindPopup('<strong>{{ user.location_name or "Your Location" }}</strong>')
+    .openPopup();
+  {% endif %}
+</script>
+{% endblock %}

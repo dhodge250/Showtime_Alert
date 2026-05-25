@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Theaters – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>🗺️ IMAX Theaters</h1>
+  <p class="subtitle">Browse IMAX locations, specs, and showtimes</p>
+</div>
+
+<div class="two-col-map">
+  <!-- Theater List -->
+  <section class="theater-list" id="theater-list">
+    {% for theater in theaters %}
+    <div class="theater-card" id="tc-{{ theater.id }}"
+         onclick="selectTheater({{ theater.id }}, {{ theater.latitude }}, {{ theater.longitude }})">
+      <div class="theater-card-header">
+        <span class="chain-badge chain-{{ theater.chain|lower }}">{{ theater.chain }}</span>
+        <h3>{{ theater.name }}</h3>
+      </div>
+      <div class="theater-card-body">
+        <p class="theater-address">📍 {{ theater.address }}, {{ theater.city }}, {{ theater.state }}</p>
+        {% if theater.screen_size %}
+        <p>🖥️ <strong>Screen:</strong> {{ theater.screen_size }}</p>
+        {% endif %}
+        {% if theater.projector_type %}
+        <p>📽️ <strong>Projector:</strong> {{ theater.projector_type }}</p>
+        {% endif %}
+        {% if theater.audio_system %}
+        <p>🔊 <strong>Audio:</strong> {{ theater.audio_system }}</p>
+        {% endif %}
+        {% if theater.phone %}
+        <p>📞 {{ theater.phone }}</p>
+        {% endif %}
+      </div>
+      <div class="theater-card-footer">
+        <a href="{{ url_for('main.theater_detail', theater_id=theater.id) }}" class="btn-sm btn-outline">
+          View Showtimes →
+        </a>
+        {% if theater.website %}
+        <a href="{{ theater.website }}" target="_blank" class="btn-sm btn-ghost">Website ↗</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </section>
+
+  <!-- Map -->
+  <section class="map-section">
+    <div id="theater-map"></div>
+    <div class="map-legend">
+      <span>🔵 IMAX Theater</span>
+      <span>🟢 Your Location</span>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Theater data for map
+  const theatersData = {{ theaters_json | tojson }};
+
+  // Init map
+  const map = L.map('theater-map', { zoomControl: true });
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 18,
+  }).addTo(map);
+
+  // Theater markers
+  const theaterIcon = L.divIcon({
+    html: '<div class="map-marker map-marker-theater">🎬</div>',
+    className: '',
+    iconSize: [36, 36],
+    iconAnchor: [18, 36],
+  });
+
+  const userIcon = L.divIcon({
+    html: '<div class="map-marker map-marker-user">📍</div>',
+    className: '',
+    iconSize: [36, 36],
+    iconAnchor: [18, 36],
+  });
+
+  const markers = {};
+  const bounds = [];
+
+  theatersData.forEach(t => {
+    if (!t.latitude || !t.longitude) return;
+    const lat = parseFloat(t.latitude);
+    const lng = parseFloat(t.longitude);
+    bounds.push([lat, lng]);
+
+    const marker = L.marker([lat, lng], { icon: theaterIcon })
+      .addTo(map)
+      .bindPopup(`
+        <div class="popup-content">
+          <strong>${t.name}</strong><br>
+          ${t.address}, ${t.city}, ${t.state}<br>
+          <em>${t.projector_type || ''}</em><br>
+          <a href="/theaters/${t.id}">View Showtimes →</a>
+        </div>
+      `);
+    markers[t.id] = marker;
+  });
+
+  if (bounds.length > 0) {
+    map.fitBounds(bounds, { padding: [40, 40] });
+  } else {
+    map.setView([39.5, -98.35], 4); // Center of US
+  }
+
+  // User location
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      const { latitude: lat, longitude: lng } = pos.coords;
+      L.marker([lat, lng], { icon: userIcon })
+        .addTo(map)
+        .bindPopup('<strong>Your Location</strong>')
+        .openPopup();
+    });
+  }
+
+  function selectTheater(id, lat, lng) {
+    // Highlight card
+    document.querySelectorAll('.theater-card').forEach(c => c.classList.remove('selected'));
+    const card = document.getElementById(`tc-${id}`);
+    if (card) {
+      card.classList.add('selected');
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    // Fly to marker
+    if (lat && lng) {
+      map.flyTo([lat, lng], 14, { animate: true, duration: 0.8 });
+      if (markers[id]) markers[id].openPopup();
+    }
+  }
+</script>
+{% endblock %}

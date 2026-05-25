@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Alerts – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>🔔 Alert Management</h1>
+  <p class="subtitle">Configure which movies and theaters to watch for new showtimes</p>
+</div>
+
+<div class="two-col">
+  <!-- Create Alert Form -->
+  <section class="card">
+    <h2>Create New Alert</h2>
+    <form id="alert-form" class="form">
+      <div class="form-group">
+        <label>User</label>
+        {% if users %}
+        <select name="user_id" id="user_id" required class="form-control">
+          <option value="">— Select User —</option>
+          {% for user in users %}
+          <option value="{{ user.id }}">{{ user.name }} ({{ user.email or 'no email' }})</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <p class="hint">No users found. <a href="{{ url_for('main.profile') }}">Create a profile</a> first.</p>
+        {% endif %}
+      </div>
+
+      <div class="form-group">
+        <label>Movie <span class="hint">(leave blank = any movie)</span></label>
+        <select name="movie_id" id="movie_id" class="form-control">
+          <option value="">Any Movie</option>
+          {% for movie in movies %}
+          <option value="{{ movie.id }}" {% if request.args.get('movie_id')|int == movie.id %}selected{% endif %}>
+            {{ movie.title }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Theater <span class="hint">(leave blank = any theater)</span></label>
+        <select name="theater_id" id="theater_id" class="form-control">
+          <option value="">Any Theater</option>
+          {% for theater in theaters %}
+          <option value="{{ theater.id }}" {% if request.args.get('theater_id')|int == theater.id %}selected{% endif %}>
+            {{ theater.name }} ({{ theater.city }}, {{ theater.state }})
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-help">
+        <p>📌 You'll receive a notification as soon as a new showtime matching your selection is detected.</p>
+        <p>✅ Once an alert is sent, it won't fire again for the same movie.</p>
+      </div>
+
+      <button type="submit" class="btn btn-primary" id="create-btn">Create Alert</button>
+      <div id="form-msg" class="form-msg hidden"></div>
+    </form>
+  </section>
+
+  <!-- Existing Alerts -->
+  <section class="card">
+    <h2>Your Alerts</h2>
+    {% if preferences %}
+    <ul class="alert-preference-list">
+      {% for pref in preferences %}
+      <li class="pref-item {% if not pref.is_active %}inactive{% endif %}">
+        <div class="pref-info">
+          <div class="pref-title">
+            {{ pref.movie.title if pref.movie else '🎬 Any Movie' }}
+            <span class="at">@</span>
+            {{ pref.theater.name if pref.theater else '🏛️ Any Theater' }}
+          </div>
+          <div class="pref-meta">
+            👤 {{ pref.user.name if pref.user else '–' }}
+            &bull; {{ pref.created_at.strftime('%b %d, %Y') }}
+          </div>
+          <div class="pref-status">
+            {% if not pref.is_active %}
+              <span class="chip chip-gray">Inactive</span>
+            {% elif pref.alert_sent %}
+              <span class="chip chip-green">✅ Alert sent {{ pref.alert_sent_at.strftime('%b %d') if pref.alert_sent_at else '' }}</span>
+            {% else %}
+              <span class="chip chip-blue">🔔 Watching</span>
+            {% endif %}
+          </div>
+        </div>
+        {% if pref.is_active and not pref.alert_sent %}
+        <button class="btn-sm btn-danger" onclick="deleteAlert({{ pref.id }})">✕ Remove</button>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-state">
+      <p>No alerts configured yet.</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('alert-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('create-btn');
+    btn.disabled = true;
+
+    const body = {
+      user_id: parseInt(document.getElementById('user_id').value) || null,
+      movie_id: parseInt(document.getElementById('movie_id').value) || null,
+      theater_id: parseInt(document.getElementById('theater_id').value) || null,
+    };
+
+    if (!body.user_id) {
+      showMsg('Please select a user.', 'error');
+      btn.disabled = false;
+      return;
+    }
+
+    try {
+      const resp = await fetch('/api/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        showMsg('✅ Alert created!', 'success');
+        setTimeout(() => location.reload(), 1000);
+      } else {
+        showMsg(`❌ ${data.error}`, 'error');
+      }
+    } catch (err) {
+      showMsg('❌ Request failed', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function deleteAlert(id) {
+    if (!confirm('Remove this alert?')) return;
+    const resp = await fetch(`/api/alerts/${id}`, { method: 'DELETE' });
+    if (resp.ok) {
+      showToast('Alert removed.', 'success');
+      setTimeout(() => location.reload(), 700);
+    }
+  }
+
+  function showMsg(msg, type) {
+    const el = document.getElementById('form-msg');
+    el.textContent = msg;
+    el.className = `form-msg ${type}`;
+  }
+
+  function showToast(msg, type) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `toast ${type}`;
+    setTimeout(() => el.className = 'toast hidden', 3000);
+  }
+</script>
+{% endblock %}
