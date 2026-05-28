@@ -1,0 +1,53 @@
+# IMAX Alert — Docker Compose
+#
+# Local development usage:
+#   docker compose up --build
+#   App available at http://localhost:5000
+#
+# TrueNAS Scale (Custom App / Install via YAML):
+#   - Replace the ./data and ./.env bind-mount paths with your actual
+#     TrueNAS dataset paths before pasting into the Custom Config editor.
+#   - Example TrueNAS paths:
+#       ./data  →  /mnt/tank/imax-alert/data
+#       ./.env  →  /mnt/tank/imax-alert/.env
+#
+# The DATABASE_URL env var redirects SQLite to the bind-mounted data/
+# directory so the database survives container rebuilds.
+
+services:
+  imax-alert:
+    build: .
+    image: imax-alert:latest
+    container_name: imax-alert
+    restart: unless-stopped
+
+    ports:
+      - "5000:5000"
+
+    # Bind-mount persistent storage from the host / TrueNAS dataset.
+    # ./data  — SQLite database lives here (survives rebuilds)
+    # ./.env  — environment / credentials file (read-only inside container)
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+
+    environment:
+      - FLASK_ENV=production
+      # Redirect SQLite DB to the bind-mounted data directory.
+      # Four slashes = absolute path inside the container.
+      - DATABASE_URL=sqlite:////app/data/imax_alert.db
+      # Override any of these here or in .env:
+      # - SECRET_KEY=change-me
+      # - SCRAPER_INTERVAL_MINUTES=30
+      # - VENUE_CRAWL_INTERVAL_DAYS=7
+
+    # python-dotenv will load /app/.env automatically at startup.
+    # Secrets should live in .env, not hardcoded above.
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/login')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

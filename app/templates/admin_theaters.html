@@ -1,0 +1,854 @@
+{% extends "base.html" %}
+{% block title %}Admin – Theaters{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-header-row">
+    <div>
+      <h1>Theater Admin</h1>
+      <p class="subtitle" id="result-count">{{ theaters|length }} total theaters (including inactive)</p>
+    </div>
+    <div class="page-header-actions">
+      <a href="{{ url_for('main.admin_theater_new') }}" class="btn btn-primary">+ Add Theater</a>
+      <button id="scrape-btn" class="btn btn-outline" onclick="triggerScrape(this)">
+        Scrape Showtimes
+      </button>
+      <button id="crawl-btn" class="btn btn-outline" onclick="triggerCrawl(this)">
+        {% if crawl_running %}Crawl Running…{% else %}Refresh Theater List{% endif %}
+      </button>
+      <button id="geocode-btn" class="btn btn-outline"
+              onclick="triggerGeocode(this)"
+              {% if geocode_status.running %}disabled{% endif %}>
+        {% if geocode_status.running %}
+          Geocoding… ({{ geocode_status.processed }}/{{ geocode_status.total }})
+        {% else %}
+          Geocode Missing
+        {% endif %}
+      </button>
+      <button id="clear-btn" class="btn btn-danger"
+              onclick="openClearModal()">
+        Clear Showtimes
+      </button>
+    </div>
+  </div>
+</div>
+
+{% if last_summary %}
+<div class="admin-crawl-summary">
+  <strong>Last crawl:</strong>
+  {{ last_summary.get('finished_at', '') }} &mdash;
+  {% if last_summary.get('error') %}
+    <span class="text-error">Error: {{ last_summary.error }}</span>
+  {% else %}
+    {{ last_summary.get('venues_found', 0) }} found,
+    {{ last_summary.get('inserted', 0) }} inserted,
+    {{ last_summary.get('updated', 0) }} updated,
+    {{ last_summary.get('geocoded', 0) }} geocoded,
+    {{ last_summary.get('geocode_failed', 0) }} geocode failures
+  {% endif %}
+</div>
+{% endif %}
+
+{# Geocode status bar — hidden until a job has run or is running #}
+<div id="geocode-status-bar" class="admin-crawl-summary"
+  {% if not geocode_status.running and not geocode_status.finished_at %}style="display:none"{% endif %}>
+  {% if geocode_status.running %}
+    <strong>Geocoding in progress:</strong>
+    {{ geocode_status.processed }} / {{ geocode_status.total }}
+    &mdash; {{ geocode_status.geocoded }} geocoded, {{ geocode_status.failed }} failed
+  {% elif geocode_status.finished_at %}
+    <strong>Last geocode:</strong>
+    {{ geocode_status.finished_at }} &mdash;
+    {{ geocode_status.geocoded }} geocoded, {{ geocode_status.failed }} failed
+    {% if geocode_status.errors %}<span class="text-error">, {{ geocode_status.errors|length }} error(s)</span>{% endif %}
+  {% endif %}
+</div>
+
+<!-- Filter bar -->
+<div class="admin-filter-bar">
+  <input type="text" id="admin-search" placeholder="Search name, city…" oninput="onFilterChange()" class="admin-search-input" />
+
+  <select id="filter-chain" onchange="onFilterChange()">
+    <option value="">All Chains</option>
+    {% for c in chains %}
+    <option value="{{ c.name|lower }}">{{ c.name }}</option>
+    {% endfor %}
+  </select>
+
+  <select id="filter-country" onchange="onCountryChange()">
+    <option value="">All Countries</option>
+    {% set seen_countries = theaters | map(attribute='country') | select | unique | sort %}
+    {% for c in seen_countries %}
+    <option value="{{ c|lower }}">{{ c }}</option>
+    {% endfor %}
+  </select>
+
+  <select id="filter-state" onchange="onStateChange()">
+    <option value="">All States/Regions</option>
+  </select>
+
+  <select id="filter-city" onchange="onFilterChange()">
+    <option value="">All Cities</option>
+  </select>
+
+  <select id="filter-aspect" onchange="onFilterChange()">
+    <option value="">All Aspect Ratios</option>
+    {% for ar in aspect_ratios %}
+    <option value="{{ ar.label|lower }}">{{ ar.label }}</option>
+    {% endfor %}
+  </select>
+
+  <select id="filter-projector" onchange="onFilterChange()">
+    <option value="">All Projectors</option>
+    {% for pt in projector_types %}
+    <option value="{{ pt.name|lower }}">{{ pt.name }}</option>
+    {% endfor %}
+  </select>
+
+  <label class="admin-toggle">
+    <input type="checkbox" id="show-inactive" onchange="onFilterChange()" />
+    Show inactive
+  </label>
+
+  <button id="btn-clear" class="btn-sm btn-ghost" onclick="clearFilters()" disabled>Clear</button>
+</div>
+
+{# ── Lookup data embedded for inline-edit dropdowns ── #}
+<script id="lookup-data" type="application/json">
+{
+  "chains":        [{% for c in chains %}{"id":{{ c.id }},"label":"{{ c.name|e }}"}{% if not loop.last %},{% endif %}{% endfor %}],
+  "countries":     [{% for c in countries %}{"id":{{ c.id }},"label":"{{ c.name|e }}"}{% if not loop.last %},{% endif %}{% endfor %}],
+  "regions":       [{% for r in regions %}{"id":{{ r.id }},"label":"{{ r.name|e }}","country_id":{{ r.country_id or 'null' }}}{% if not loop.last %},{% endif %}{% endfor %}],
+  "cities":        [{% for c in cities %}{"id":{{ c.id }},"label":"{{ c.name|e }}","region_id":{{ c.region_id or 'null' }},"country_id":{{ c.country_id or 'null' }}}{% if not loop.last %},{% endif %}{% endfor %}],
+  "aspect_ratios": [{% for a in aspect_ratios %}{"id":{{ a.id }},"label":"{{ a.label|e }}"}{% if not loop.last %},{% endif %}{% endfor %}],
+  "projectors":    [{% for p in projector_types %}{"id":{{ p.id }},"label":"{{ p.name|e }}"}{% if not loop.last %},{% endif %}{% endfor %}],
+  "audio_systems": [{% for a in audio_systems %}{"id":{{ a.id }},"label":"{{ a.name|e }}"}{% if not loop.last %},{% endif %}{% endfor %}],
+  "continents":    [{% for c in continents %}{"id":{{ c.id }},"label":"{{ c.name|e }}"}{% if not loop.last %},{% endif %}{% endfor %}]
+}
+</script>
+
+<div class="admin-table-wrap">
+  <table class="admin-table" id="admin-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Chain</th>
+        <th>City</th>
+        <th>State/Region</th>
+        <th>Country</th>
+        <th>Aspect Ratio</th>
+        <th>Projector</th>
+        <th>Audio</th>
+        <th>Continent</th>
+        <th>Digital AR</th>
+        <th>Film Projector</th>
+        <th>Commercial</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in theaters %}
+      <tr class="admin-row{% if not t.is_active %} admin-row-inactive{% endif %}"
+          data-id="{{ t.id }}"
+          data-name="{{ t.name|lower }}"
+          data-chain="{{ (t.chain_name or '')|lower }}"
+          data-state="{{ (t.state or '')|lower }}"
+          data-city="{{ (t.city_name or t.city or '')|lower }}"
+          data-country="{{ (t.country_name or t.country or '')|lower }}"
+          data-aspect="{{ (t.aspect_ratio_label or '')|lower }}"
+          data-projector="{{ (t.projector_type_name or '')|lower }}"
+          data-active="{{ '1' if t.is_active else '0' }}">
+        <td class="admin-cell-name">
+          <a href="{{ url_for('main.admin_theater_edit', theater_id=t.id) }}">{{ t.name }}</a>
+        </td>
+        {# inline-edit FK cells #}
+        <td class="ie-cell" data-field="chain_id" data-lookup="chains"
+            data-current-id="{{ t.chain_id or '' }}" data-current-label="{{ t.chain_name or '' }}">
+          <span class="ie-val">{{ t.chain_name or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="city_id" data-lookup="cities"
+            data-current-id="{{ t.city_id or '' }}" data-current-label="{{ t.city_name or t.city or '' }}">
+          <span class="ie-val">{{ t.city_name or t.city or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="region_id" data-lookup="regions"
+            data-current-id="{{ t.region_id or '' }}" data-current-label="{{ t.state or '' }}">
+          <span class="ie-val">{{ t.state or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="country_id" data-lookup="countries"
+            data-current-id="{{ t.country_id or '' }}" data-current-label="{{ t.country_name or t.country or '' }}">
+          <span class="ie-val">{{ t.country_name or t.country or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="aspect_ratio_id" data-lookup="aspect_ratios"
+            data-current-id="{{ t.aspect_ratio_id or '' }}" data-current-label="{{ t.aspect_ratio_label or '' }}">
+          <span class="ie-val">{{ t.aspect_ratio_label or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="projector_type_id" data-lookup="projectors"
+            data-current-id="{{ t.projector_type_id or '' }}" data-current-label="{{ t.projector_type_name or '' }}">
+          <span class="ie-val">{{ t.projector_type_name or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="audio_system_id" data-lookup="audio_systems"
+            data-current-id="{{ t.audio_system_id or '' }}" data-current-label="{{ t.audio_system_name or '' }}">
+          <span class="ie-val">{{ t.audio_system_name or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="continent_id" data-lookup="continents"
+            data-current-id="{{ t.continent_id or '' }}" data-current-label="{{ t.continent_name or '' }}">
+          <span class="ie-val">{{ t.continent_name or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="digital_projector_ar_id" data-lookup="aspect_ratios"
+            data-current-id="{{ t.digital_projector_ar_id or '' }}" data-current-label="{{ t.digital_projector_ar_label or '' }}">
+          <span class="ie-val">{{ t.digital_projector_ar_label or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td class="ie-cell" data-field="film_projector_type_id" data-lookup="projectors"
+            data-current-id="{{ t.film_projector_type_id or '' }}" data-current-label="{{ t.film_projector_type_name or '' }}">
+          <span class="ie-val">{{ t.film_projector_type_name or '—' }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td>{{ t.commercial_films or '—' }}</td>
+        <td>
+          <span class="status-badge {% if t.is_active %}status-active{% else %}status-inactive{% endif %}">
+            {{ 'Active' if t.is_active else 'Inactive' }}
+          </span>
+        </td>
+        <td class="admin-actions">
+          <a href="{{ url_for('main.admin_theater_edit', theater_id=t.id) }}" class="btn-sm btn-outline">Edit</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div id="toast" class="toast" style="display:none"></div>
+
+<!-- ── Clear Showtimes Modal ─────────────────────────────────────── -->
+<div id="clear-modal" class="modal-overlay" style="display:none" onclick="handleClearOverlayClick(event)">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="clear-modal-title">
+    <div class="modal-header">
+      <h2 id="clear-modal-title">Clear Showtimes</h2>
+      <button class="modal-close" onclick="closeClearModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Theater filter -->
+      <div class="form-group">
+        <label for="clear-theater-input">Theater</label>
+        <div class="typeahead-wrap">
+          <div class="typeahead-input-row">
+            <input id="clear-theater-input" type="text" class="form-control"
+                   placeholder="Any theater — type to filter…"
+                   autocomplete="off"
+                   oninput="onClearTheaterInput(event)">
+            <button class="typeahead-clear-btn" id="clear-theater-x"
+                    onclick="clearTheaterFilter()" style="display:none"
+                    aria-label="Clear theater filter">&times;</button>
+          </div>
+          <ul id="clear-theater-suggestions" class="typeahead-suggestions" style="display:none"></ul>
+        </div>
+      </div>
+
+      <!-- Movie filter -->
+      <div class="form-group">
+        <label for="clear-movie-input">Movie</label>
+        <div class="typeahead-wrap">
+          <div class="typeahead-input-row">
+            <input id="clear-movie-input" type="text" class="form-control"
+                   placeholder="Any movie — type to filter…"
+                   autocomplete="off"
+                   oninput="onClearMovieInput(event)">
+            <button class="typeahead-clear-btn" id="clear-movie-x"
+                    onclick="clearMovieFilter()" style="display:none"
+                    aria-label="Clear movie filter">&times;</button>
+          </div>
+          <ul id="clear-movie-suggestions" class="typeahead-suggestions" style="display:none"></ul>
+        </div>
+      </div>
+
+      <!-- Older-than filter -->
+      <div class="form-group">
+        <label for="clear-before-select">Older than</label>
+        <select id="clear-before-select" class="form-control" onchange="onClearBeforeChange()">
+          <option value="">All time</option>
+          <option value="today">Before today</option>
+          <option value="30d">Before 30 days ago</option>
+          <option value="custom">Custom date…</option>
+        </select>
+        <input id="clear-before-custom" type="date" class="form-control" style="display:none;margin-top:.5rem"
+               onchange="onClearBeforeChange()">
+      </div>
+
+      <!-- Live preview -->
+      <p id="clear-preview" class="clear-preview-text">Counting…</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeClearModal()">Cancel</button>
+      <button id="clear-confirm-btn" class="btn btn-danger" onclick="executeClear()" disabled>
+        Clear Showtimes
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Lookup data ───────────────────────────────────────────────────────
+const LOOKUP = JSON.parse(document.getElementById('lookup-data').textContent);
+
+// ── Data for cascading filter dropdowns ───────────────────────────────
+const rows = Array.from(document.querySelectorAll('#admin-table tbody .admin-row'));
+
+const countryStates = {};
+const stateCities   = {};
+rows.forEach(r => {
+  const country = r.dataset.country;
+  const state   = r.dataset.state;
+  const city    = r.dataset.city;
+  if (country && state) {
+    if (!countryStates[country]) countryStates[country] = new Set();
+    countryStates[country].add(state);
+  }
+  if (state && city) {
+    if (!stateCities[state]) stateCities[state] = new Set();
+    stateCities[state].add(city);
+  }
+});
+
+const stateLabels = {};
+const cityLabels  = {};
+rows.forEach(r => {
+  if (r.dataset.state) stateLabels[r.dataset.state] = r.querySelector('td:nth-child(4) .ie-val').textContent.trim();
+  if (r.dataset.city)  cityLabels[r.dataset.city]   = r.querySelector('td:nth-child(3) .ie-val').textContent.trim();
+});
+
+// ── Cascade filter helpers ────────────────────────────────────────────
+function rebuildStateDropdown(country) {
+  const sel = document.getElementById('filter-state');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All States/Regions</option>';
+  const states = country ? Array.from(countryStates[country] || []) : Object.keys(stateLabels);
+  states.sort().forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = stateLabels[s] || s;
+    sel.appendChild(opt);
+  });
+  sel.value = states.includes(prev) ? prev : '';
+}
+
+function rebuildCityDropdown(state) {
+  const sel = document.getElementById('filter-city');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All Cities</option>';
+  const cities = state ? Array.from(stateCities[state] || []) : Object.keys(cityLabels);
+  cities.sort().forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = cityLabels[c] || c;
+    sel.appendChild(opt);
+  });
+  sel.value = cities.includes(prev) ? prev : '';
+}
+
+function onCountryChange() {
+  rebuildStateDropdown(document.getElementById('filter-country').value);
+  rebuildCityDropdown('');
+  onFilterChange();
+}
+function onStateChange() {
+  rebuildCityDropdown(document.getElementById('filter-state').value);
+  onFilterChange();
+}
+
+function onFilterChange() {
+  const q           = document.getElementById('admin-search').value.toLowerCase();
+  const chain       = document.getElementById('filter-chain').value;
+  const country     = document.getElementById('filter-country').value;
+  const state       = document.getElementById('filter-state').value;
+  const city        = document.getElementById('filter-city').value;
+  const aspect      = document.getElementById('filter-aspect').value;
+  const projector   = document.getElementById('filter-projector').value;
+  const showInactive = document.getElementById('show-inactive').checked;
+
+  const anyActive = q || chain || country || state || city || aspect || projector || showInactive;
+  document.getElementById('btn-clear').disabled = !anyActive;
+
+  let visible = 0;
+  rows.forEach(row => {
+    const matchSearch    = !q || row.dataset.name.includes(q) || row.dataset.city.includes(q) || row.dataset.country.includes(q);
+    const matchChain     = !chain     || row.dataset.chain     === chain;
+    const matchCountry   = !country   || row.dataset.country   === country;
+    const matchState     = !state     || row.dataset.state     === state;
+    const matchCity      = !city      || row.dataset.city      === city;
+    const matchAspect    = !aspect    || row.dataset.aspect    === aspect;
+    const matchProjector = !projector || row.dataset.projector === projector;
+    const matchActive    = showInactive || row.dataset.active === '1';
+    const show = matchSearch && matchChain && matchCountry && matchState && matchCity && matchAspect && matchProjector && matchActive;
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+
+  const total = {{ theaters|length }};
+  const subtitle = document.getElementById('result-count');
+  subtitle.textContent = visible === total
+    ? total + ' total theaters (including inactive)'
+    : visible + ' of ' + total + ' theaters shown';
+}
+
+function clearFilters() {
+  document.getElementById('admin-search').value = '';
+  document.getElementById('filter-chain').value = '';
+  document.getElementById('filter-country').value = '';
+  document.getElementById('filter-aspect').value = '';
+  document.getElementById('filter-projector').value = '';
+  document.getElementById('show-inactive').checked = false;
+  rebuildStateDropdown('');
+  rebuildCityDropdown('');
+  onFilterChange();
+}
+
+// ── Showtime scraper controls ─────────────────────────────────────────
+function triggerScrape(btn) {
+  btn.disabled = true; btn.textContent = 'Scraping…';
+  fetch('/api/scheduler/trigger', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'ok') {
+        const found = data.new_showtimes || 0;
+        btn.textContent = found + ' new showtime' + (found !== 1 ? 's' : '') + ' found';
+        showToast(found + ' new showtime' + (found !== 1 ? 's' : '') + ' found.');
+      } else {
+        btn.textContent = 'Error — check logs';
+      }
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Scrape Showtimes'; }, 4000);
+    })
+    .catch(() => {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Scrape Showtimes'; }, 3000);
+    });
+}
+
+// ── Crawl controls ────────────────────────────────────────────────────
+function triggerCrawl(btn) {
+  btn.disabled = true; btn.textContent = 'Starting…';
+  fetch('/api/venues/crawl/trigger', {method:'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'started') { btn.textContent = 'Crawl Running…'; pollCrawl(btn); }
+      else if (data.status === 'already_running') { btn.textContent = 'Already Running'; setTimeout(() => { btn.disabled=false; btn.textContent='Run Venue Crawl'; }, 3000); }
+      else { btn.textContent = 'Error — check logs'; btn.disabled = false; }
+    })
+    .catch(() => { btn.textContent='Error'; btn.disabled=false; });
+}
+function pollCrawl(btn) {
+  const interval = setInterval(() => {
+    fetch('/api/venues/crawl/status').then(r => r.json()).then(data => {
+      if (!data.crawl_running) { clearInterval(interval); btn.textContent = 'Done — Reloading…'; setTimeout(() => location.reload(), 1000); }
+    });
+  }, 3000);
+}
+
+// ── Bulk geocoder controls ────────────────────────────────────────────
+function updateGeocodeBar(data) {
+  const bar = document.getElementById('geocode-status-bar');
+  bar.style.display = '';
+  if (data.running) {
+    bar.innerHTML = '<strong>Geocoding in progress:</strong> ' +
+      data.processed + ' / ' + data.total +
+      ' &mdash; ' + data.geocoded + ' geocoded, ' + data.failed + ' failed';
+  } else if (data.finished_at) {
+    const errPart = data.errors && data.errors.length
+      ? ', <span class="text-error">' + data.errors.length + ' error(s)</span>'
+      : '';
+    bar.innerHTML = '<strong>Last geocode:</strong> ' + data.finished_at +
+      ' &mdash; ' + data.geocoded + ' geocoded, ' + data.failed + ' failed' + errPart;
+  }
+}
+
+let _geocodePollTimer = null;
+
+function startGeocodePolling() {
+  if (_geocodePollTimer) return;
+  const btn = document.getElementById('geocode-btn');
+  _geocodePollTimer = setInterval(() => {
+    fetch('/api/geocode/bulk/status')
+      .then(r => r.json())
+      .then(data => {
+        updateGeocodeBar(data);
+        if (data.running) {
+          btn.textContent = 'Geocoding… (' + data.processed + '/' + data.total + ')';
+        } else {
+          clearInterval(_geocodePollTimer);
+          _geocodePollTimer = null;
+          btn.disabled = false;
+          btn.textContent = 'Geocode Missing';
+        }
+      })
+      .catch(() => {
+        clearInterval(_geocodePollTimer);
+        _geocodePollTimer = null;
+        btn.disabled = false;
+        btn.textContent = 'Geocode Missing';
+      });
+  }, 3000);
+}
+
+function triggerGeocode(btn) {
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  fetch('/api/geocode/bulk/trigger', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'started') {
+        btn.textContent = 'Geocoding… (0/' + data.total + ')';
+        startGeocodePolling();
+      } else if (data.status === 'already_running') {
+        btn.textContent = 'Already Running';
+        startGeocodePolling();
+      } else if (data.status === 'nothing_to_do') {
+        btn.disabled = false;
+        btn.textContent = 'Geocode Missing';
+        showToast('All theaters already have coordinates.');
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Error — check logs';
+      }
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = 'Geocode Missing'; });
+}
+
+// Resume polling if a geocode job was already running when the page loaded
+{% if geocode_status.running %}startGeocodePolling();{% endif %}
+
+// ── Inline dropdown editing ───────────────────────────────────────────
+let activeCancel = null;
+
+document.querySelectorAll('.ie-cell').forEach(cell => {
+  cell.addEventListener('click', e => startInlineEdit(cell, e));
+});
+
+function startInlineEdit(cell, e) {
+  e?.stopPropagation();
+  if (cell.dataset.editing) return;
+  activeCancel?.();
+
+  const valSpan    = cell.querySelector('.ie-val');
+  const hint       = cell.querySelector('.edit-hint');
+  const theaterId  = cell.closest('tr').dataset.id;
+  const field      = cell.dataset.field;
+  const lookupKey  = cell.dataset.lookup;
+  const currentId  = cell.dataset.currentId;   // '' or numeric string
+  const options    = LOOKUP[lookupKey] || [];
+
+  hint.style.display  = 'none';
+  valSpan.style.display = 'none';
+  cell.dataset.editing = '1';
+
+  const wrap    = document.createElement('div');
+  wrap.className = 'inline-edit-wrap';
+  wrap.addEventListener('click', e => e.stopPropagation());
+
+  const sel = document.createElement('select');
+  sel.style.cssText = 'flex:1 1 auto;min-width:120px;padding:3px 6px;font-size:13px;background:var(--bg-card);border:1px solid var(--accent);border-radius:4px;color:var(--text)';
+  const blankOpt = document.createElement('option');
+  blankOpt.value = ''; blankOpt.textContent = '— none —';
+  sel.appendChild(blankOpt);
+  options.forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = String(o.id); opt.textContent = o.label;
+    if (String(o.id) === currentId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if (!currentId) sel.value = '';
+
+  const saveBtn   = document.createElement('button');
+  saveBtn.className = 'btn-sm btn-primary'; saveBtn.textContent = 'Save';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-sm btn-ghost'; cancelBtn.textContent = 'Cancel';
+  const errSpan = document.createElement('span');
+  errSpan.className = 'inline-edit-error';
+
+  wrap.appendChild(sel); wrap.appendChild(saveBtn); wrap.appendChild(cancelBtn);
+  cell.appendChild(wrap); cell.appendChild(errSpan);
+  sel.focus();
+
+  function cancel() {
+    wrap.remove(); errSpan.remove();
+    valSpan.style.display = ''; hint.style.display = '';
+    delete cell.dataset.editing;
+    activeCancel = null;
+  }
+  activeCancel = cancel;
+
+  async function save() {
+    const newId = sel.value;
+    if (newId === (currentId || '')) { cancel(); return; }
+    saveBtn.disabled = cancelBtn.disabled = true;
+    const resp = await fetch(`/api/theaters/${theaterId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({[field]: newId === '' ? null : parseInt(newId)}),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      // find the display label key returned from API
+      const newLabel = Object.values(data).find((v, i) => Object.keys(data)[i] !== 'id') ?? '';
+      // get correct label from lookup options
+      const chosen = options.find(o => String(o.id) === newId);
+      const displayLabel = chosen ? chosen.label : '';
+      valSpan.textContent = displayLabel || '—';
+      cell.dataset.currentId    = newId;
+      cell.dataset.currentLabel = displayLabel;
+      // update row data-* for filter to work
+      const row = cell.closest('tr');
+      if (field === 'chain_id')        { row.dataset.chain     = displayLabel.toLowerCase(); }
+      if (field === 'city_id')         { row.dataset.city      = displayLabel.toLowerCase(); }
+      if (field === 'region_id')       { row.dataset.state     = displayLabel.toLowerCase(); }
+      if (field === 'country_id')      { row.dataset.country   = displayLabel.toLowerCase(); }
+      if (field === 'aspect_ratio_id') { row.dataset.aspect    = displayLabel.toLowerCase(); }
+      if (field === 'projector_type_id'){ row.dataset.projector = displayLabel.toLowerCase(); }
+      cancel();
+      showToast('Saved.');
+    } else {
+      errSpan.textContent = data.error || 'Error saving.';
+      saveBtn.disabled = cancelBtn.disabled = false;
+    }
+  }
+
+  saveBtn.addEventListener('click', save);
+  cancelBtn.addEventListener('click', cancel);
+  sel.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); save(); }
+    if (e.key === 'Escape') { cancel(); }
+  });
+}
+
+// ── Clear Showtimes Modal ─────────────────────────────────────────────
+let _clearTheaterId  = null;   // selected theater id, or null = any
+let _clearMovieId    = null;   // selected movie id, or null = any
+let _clearBeforeISO  = null;   // ISO string, or null = all time
+let _previewTimer    = null;   // debounce handle for preview fetch
+let _movieTimer      = null;   // debounce handle for movie type-ahead
+let _allTheaters     = null;   // cached [{id,name}, …] loaded once on first open
+
+function openClearModal() {
+  // Reset state
+  _clearTheaterId = null;
+  _clearMovieId   = null;
+  _clearBeforeISO = null;
+  document.getElementById('clear-theater-input').value = '';
+  document.getElementById('clear-theater-x').style.display = 'none';
+  document.getElementById('clear-theater-suggestions').style.display = 'none';
+  document.getElementById('clear-movie-input').value = '';
+  document.getElementById('clear-movie-x').style.display = 'none';
+  document.getElementById('clear-movie-suggestions').style.display = 'none';
+  document.getElementById('clear-before-select').value = '';
+  document.getElementById('clear-before-custom').style.display = 'none';
+  document.getElementById('clear-before-custom').value = '';
+  document.getElementById('clear-preview').textContent = 'Counting…';
+  document.getElementById('clear-confirm-btn').disabled = true;
+  document.getElementById('clear-modal').style.display = 'flex';
+
+  // Load theater cache once, then trigger initial preview
+  if (_allTheaters === null) {
+    fetch('/api/theaters')
+      .then(r => r.json())
+      .then(data => {
+        _allTheaters = data.map(t => ({ id: t.id, name: t.name }));
+        updateClearPreview();
+      })
+      .catch(() => { _allTheaters = []; updateClearPreview(); });
+  } else {
+    updateClearPreview();
+  }
+}
+
+function closeClearModal() {
+  document.getElementById('clear-modal').style.display = 'none';
+}
+
+function handleClearOverlayClick(e) {
+  if (e.target === document.getElementById('clear-modal')) closeClearModal();
+}
+
+// ── Theater type-ahead ────────────────────────────────────────────────
+function onClearTheaterInput(e) {
+  const term = e.target.value.trim().toLowerCase();
+  _clearTheaterId = null;                         // deselect on any typing
+  document.getElementById('clear-theater-x').style.display = term ? '' : 'none';
+  scheduleClearPreview();
+
+  const ul = document.getElementById('clear-theater-suggestions');
+  if (!term || !_allTheaters) { ul.style.display = 'none'; return; }
+
+  const matches = _allTheaters
+    .filter(t => t.name.toLowerCase().includes(term))
+    .slice(0, 8);
+
+  if (!matches.length) { ul.style.display = 'none'; return; }
+
+  ul.innerHTML = '';
+  matches.forEach(t => {
+    const li = document.createElement('li');
+    li.textContent = t.name;
+    li.addEventListener('click', () => selectClearTheater(t.id, t.name));
+    ul.appendChild(li);
+  });
+  ul.style.display = '';
+}
+
+function selectClearTheater(id, name) {
+  _clearTheaterId = id;
+  document.getElementById('clear-theater-input').value = name;
+  document.getElementById('clear-theater-x').style.display = '';
+  document.getElementById('clear-theater-suggestions').style.display = 'none';
+  scheduleClearPreview();
+}
+
+function clearTheaterFilter() {
+  _clearTheaterId = null;
+  document.getElementById('clear-theater-input').value = '';
+  document.getElementById('clear-theater-x').style.display = 'none';
+  document.getElementById('clear-theater-suggestions').style.display = 'none';
+  scheduleClearPreview();
+}
+
+// ── Movie type-ahead ──────────────────────────────────────────────────
+function onClearMovieInput(e) {
+  const term = e.target.value.trim();
+  _clearMovieId = null;
+  document.getElementById('clear-movie-x').style.display = term ? '' : 'none';
+  scheduleClearPreview();
+
+  clearTimeout(_movieTimer);
+  if (!term) {
+    document.getElementById('clear-movie-suggestions').style.display = 'none';
+    return;
+  }
+  _movieTimer = setTimeout(() => {
+    fetch('/api/movies/search?q=' + encodeURIComponent(term))
+      .then(r => r.json())
+      .then(data => {
+        const ul = document.getElementById('clear-movie-suggestions');
+        if (!data.length) { ul.style.display = 'none'; return; }
+        ul.innerHTML = '';
+        data.slice(0, 8).forEach(m => {
+          const li = document.createElement('li');
+          li.textContent = m.title;
+          li.addEventListener('click', () => selectClearMovie(m.id, m.title));
+          ul.appendChild(li);
+        });
+        ul.style.display = '';
+      });
+  }, 250);
+}
+
+function selectClearMovie(id, title) {
+  _clearMovieId = id;
+  document.getElementById('clear-movie-input').value = title;
+  document.getElementById('clear-movie-x').style.display = '';
+  document.getElementById('clear-movie-suggestions').style.display = 'none';
+  scheduleClearPreview();
+}
+
+function clearMovieFilter() {
+  _clearMovieId = null;
+  document.getElementById('clear-movie-input').value = '';
+  document.getElementById('clear-movie-x').style.display = 'none';
+  document.getElementById('clear-movie-suggestions').style.display = 'none';
+  scheduleClearPreview();
+}
+
+// ── Older-than select ─────────────────────────────────────────────────
+function onClearBeforeChange() {
+  const sel    = document.getElementById('clear-before-select').value;
+  const custom = document.getElementById('clear-before-custom');
+
+  if (sel === 'custom') {
+    custom.style.display = '';
+    const d = custom.value;
+    _clearBeforeISO = d ? new Date(d).toISOString() : null;
+  } else {
+    custom.style.display = 'none';
+    if (sel === '') {
+      _clearBeforeISO = null;
+    } else if (sel === 'today') {
+      const t = new Date();
+      t.setUTCHours(0, 0, 0, 0);
+      _clearBeforeISO = t.toISOString();
+    } else if (sel === '30d') {
+      const t = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      _clearBeforeISO = t.toISOString();
+    }
+  }
+  scheduleClearPreview();
+}
+
+// ── Preview count ─────────────────────────────────────────────────────
+function scheduleClearPreview() {
+  clearTimeout(_previewTimer);
+  document.getElementById('clear-preview').textContent = 'Counting…';
+  document.getElementById('clear-confirm-btn').disabled = true;
+  _previewTimer = setTimeout(updateClearPreview, 300);
+}
+
+function updateClearPreview() {
+  const params = buildClearParams();
+  fetch('/api/showtimes/count' + (params ? '?' + params : ''))
+    .then(r => r.json())
+    .then(data => {
+      const n = data.count;
+      const preview = document.getElementById('clear-preview');
+      if (n === 0) {
+        preview.textContent = 'No showtimes match these filters.';
+        document.getElementById('clear-confirm-btn').disabled = true;
+      } else {
+        preview.textContent = `This will delete ${n} showtime${n !== 1 ? 's' : ''}.`;
+        document.getElementById('clear-confirm-btn').disabled = false;
+      }
+    })
+    .catch(() => {
+      document.getElementById('clear-preview').textContent = 'Error fetching count.';
+      document.getElementById('clear-confirm-btn').disabled = true;
+    });
+}
+
+function buildClearParams() {
+  const parts = [];
+  if (_clearTheaterId) parts.push('theater_id=' + _clearTheaterId);
+  if (_clearMovieId)   parts.push('movie_id='   + _clearMovieId);
+  if (_clearBeforeISO) parts.push('before='     + encodeURIComponent(_clearBeforeISO));
+  return parts.join('&');
+}
+
+// ── Execute clear ─────────────────────────────────────────────────────
+function executeClear() {
+  const btn    = document.getElementById('clear-confirm-btn');
+  const params = buildClearParams();
+  btn.disabled = true;
+  btn.textContent = 'Clearing…';
+
+  fetch('/api/showtimes' + (params ? '?' + params : ''), { method: 'DELETE' })
+    .then(r => r.json())
+    .then(data => {
+      const n = data.deleted || 0;
+      showToast(`Deleted ${n} showtime${n !== 1 ? 's' : ''}.`);
+      closeClearModal();
+    })
+    .catch(() => {
+      showToast('Error clearing showtimes — check logs.');
+      btn.disabled = false;
+      btn.textContent = 'Clear Showtimes';
+    });
+}
+
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, 2500);
+}
+
+// Initialise
+rebuildStateDropdown('');
+rebuildCityDropdown('');
+onFilterChange();
+</script>
+{% endblock %}

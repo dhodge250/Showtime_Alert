@@ -9,27 +9,27 @@
 
 <!-- Stats row -->
 <div class="stats-grid">
-  <div class="stat-card">
+  <a href="{{ url_for('main.theaters') }}" class="stat-card stat-card-link">
     <div class="stat-value">{{ theaters|length }}</div>
     <div class="stat-label">Theaters Monitored</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-value">{{ movies|length }}</div>
+  </a>
+  <a href="{{ url_for('main.alerts') }}" class="stat-card stat-card-link">
+    <div class="stat-value">{{ tracked_movie_count }}</div>
     <div class="stat-label">Movies Tracked</div>
-  </div>
-  <div class="stat-card">
+  </a>
+  <a href="#showtimes-section" class="stat-card stat-card-link">
     <div class="stat-value">{{ recent_showtimes|length }}</div>
-    <div class="stat-label">Active Showtimes</div>
-  </div>
-  <div class="stat-card">
+    <div class="stat-label">Available Showtimes</div>
+  </a>
+  <a href="{{ url_for('main.alerts') }}" class="stat-card stat-card-link">
     <div class="stat-value">{{ alerts|selectattr('alert_sent','equalto',False)|list|length }}</div>
     <div class="stat-label">Pending Alerts</div>
-  </div>
+  </a>
 </div>
 
 <div class="two-col">
   <!-- Recent Showtimes -->
-  <section class="card">
+  <section class="card" id="showtimes-section">
     <div class="card-header">
       <h2>🕐 Available Showtimes</h2>
       <button class="btn-sm btn-primary" id="refresh-btn" onclick="triggerScrape()">
@@ -37,14 +37,38 @@
       </button>
     </div>
     {% if recent_showtimes %}
+    <div class="showtime-filters" id="showtime-filters">
+      <input type="text"   id="st-filter-movie"   placeholder="Filter by movie…"   oninput="applyShowtimeFilters()">
+      <input type="text"   id="st-filter-theater" placeholder="Filter by theater…" oninput="applyShowtimeFilters()">
+      <select id="st-filter-format" onchange="applyShowtimeFilters()">
+        <option value="">All Formats</option>
+        {% set formats = recent_showtimes | map(attribute='format_type') | select | unique | sort %}
+        {% for f in formats %}
+        <option value="{{ f }}">{{ f }}</option>
+        {% endfor %}
+      </select>
+      <input type="date" id="st-filter-date" title="Show on or after this date" onchange="applyShowtimeFilters()">
+      <button class="btn-sm btn-ghost" id="st-clear-btn" onclick="clearShowtimeFilters()" disabled>Clear</button>
+      <span id="st-count" class="text-muted" style="font-size:13px;white-space:nowrap">{{ recent_showtimes|length }} showtimes</span>
+    </div>
     <div class="table-wrap">
-      <table class="data-table">
+      <table class="data-table" id="showtimes-table">
         <thead>
-          <tr><th>Movie</th><th>Theater</th><th>Format</th><th>Date/Time</th><th>Tickets</th></tr>
-        </thead>
-        <tbody>
-          {% for st in recent_showtimes %}
           <tr>
+            <th class="sortable" data-col="movie" onclick="sortShowtimes('movie')">Movie <span class="sort-indicator"></span></th>
+            <th class="sortable" data-col="theater" onclick="sortShowtimes('theater')">Theater <span class="sort-indicator"></span></th>
+            <th class="sortable" data-col="format" onclick="sortShowtimes('format')">Format <span class="sort-indicator"></span></th>
+            <th class="sortable" data-col="date" onclick="sortShowtimes('date')">Date/Time <span class="sort-indicator"></span></th>
+            <th>Tickets</th>
+          </tr>
+        </thead>
+        <tbody id="showtimes-tbody">
+          {% for st in recent_showtimes %}
+          <tr data-movie="{{ (st.movie.title if st.movie else '') | lower }}"
+              data-theater="{{ (st.theater.name if st.theater else '') | lower }}"
+              data-format="{{ (st.format_type or 'IMAX') | lower }}"
+              data-date="{{ st.show_datetime.strftime('%Y-%m-%d') }}"
+              data-datetime="{{ st.show_datetime.isoformat() }}">
             <td><strong>{{ st.movie.title if st.movie else '–' }}</strong></td>
             <td>{{ st.theater.name if st.theater else '–' }}</td>
             <td><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
@@ -83,12 +107,15 @@
     <ul class="alert-list">
       {% for a in alerts %}
       <li class="alert-item {% if a.alert_sent %}sent{% endif %}">
-        <div class="alert-icon">{% if a.alert_sent %}✅{% else %}🔔{% endif %}</div>
-        <div class="alert-info">
-          <strong>{{ a.movie.title if a.movie else 'Any Movie' }}</strong>
-          <span>@ {{ a.theater.name if a.theater else 'Any Theater' }}</span>
-          {% if a.alert_sent %}<span class="chip chip-green">Sent</span>{% endif %}
-        </div>
+        <a href="{{ url_for('main.alert_detail', pref_id=a.id) }}" class="alert-item-link">
+          <div class="alert-icon">{% if a.alert_sent %}✅{% else %}🔔{% endif %}</div>
+          <div class="alert-info">
+            {% set am_titles = a.alert_movies.all() | map(attribute='movie') | selectattr('title') | map(attribute='title') | list %}
+            <strong>{{ am_titles | join(', ') if am_titles else 'Any Movie' }}</strong>
+            <span>@ {{ a.theater.name if a.theater else 'Any Theater' }}</span>
+            {% if a.alert_sent %}<span class="chip chip-green">Sent</span>{% endif %}
+          </div>
+        </a>
       </li>
       {% endfor %}
     </ul>
@@ -144,8 +171,9 @@
       const data = await resp.json();
       const el = document.getElementById('scheduler-status');
       if (data.running) {
-        const job = data.jobs[0];
-        const next = job ? new Date(job.next_run).toLocaleString() : 'unknown';
+        const scrapeJob = data.jobs.find(j => j.id === 'imax_scrape');
+        const iso = scrapeJob?.next_run_iso;
+        const next = iso ? new Date(iso).toLocaleString([], {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown';
         el.innerHTML = `<span class="chip chip-green">Running</span> &mdash; Next scrape: <strong>${next}</strong>`;
       } else {
         el.innerHTML = `<span class="chip chip-red">Stopped</span>`;
@@ -161,5 +189,62 @@
   }
 
   loadSchedulerStatus();
+
+  // ── Showtime filter + sort ──────────────────────────────────────────
+  let _stSortCol = null;
+  let _stSortAsc = true;
+
+  function applyShowtimeFilters() {
+    const movie   = document.getElementById('st-filter-movie').value.toLowerCase();
+    const theater = document.getElementById('st-filter-theater').value.toLowerCase();
+    const format  = document.getElementById('st-filter-format').value.toLowerCase();
+    const date    = document.getElementById('st-filter-date').value;   // 'YYYY-MM-DD' or ''
+
+    const rows = Array.from(document.querySelectorAll('#showtimes-tbody tr'));
+    let visible = 0;
+    rows.forEach(row => {
+      const show =
+        (!movie   || row.dataset.movie.includes(movie)) &&
+        (!theater || row.dataset.theater.includes(theater)) &&
+        (!format  || row.dataset.format === format) &&
+        (!date    || row.dataset.date >= date);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+
+    const anyActive = movie || theater || format || date;
+    document.getElementById('st-clear-btn').disabled = !anyActive;
+    document.getElementById('st-count').textContent = `${visible} of ${rows.length} showtimes`;
+  }
+
+  function clearShowtimeFilters() {
+    document.getElementById('st-filter-movie').value = '';
+    document.getElementById('st-filter-theater').value = '';
+    document.getElementById('st-filter-format').value = '';
+    document.getElementById('st-filter-date').value = '';
+    _stSortCol = null; _stSortAsc = true;
+    document.querySelectorAll('#showtimes-table .sort-indicator').forEach(el => el.textContent = '');
+    applyShowtimeFilters();
+  }
+
+  function sortShowtimes(col) {
+    if (_stSortCol === col) { _stSortAsc = !_stSortAsc; } else { _stSortCol = col; _stSortAsc = true; }
+
+    document.querySelectorAll('#showtimes-table th[data-col]').forEach(th => {
+      th.querySelector('.sort-indicator').textContent =
+        th.dataset.col === col ? (_stSortAsc ? ' ▲' : ' ▼') : '';
+    });
+
+    const tbody = document.getElementById('showtimes-tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const key = col === 'date' ? 'datetime' : col;
+    rows.sort((a, b) => {
+      const av = a.dataset[key] || '';
+      const bv = b.dataset[key] || '';
+      return _stSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    applyShowtimeFilters();
+  }
 </script>
 {% endblock %}

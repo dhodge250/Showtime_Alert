@@ -3,16 +3,22 @@ IMAX theater web scraper.
 
 Crawls IMAX theater chain websites to discover movies and showtimes.
 Each chain has its own scraper class. Results are persisted to the database.
+
+Scraping is demand-driven: only theaters and movies that have at least one
+active, unsent AlertPreference are scraped.  Once an alert fires (alert_sent=True)
+the corresponding movie/theater combination stops being scraped until a new
+alert is created.
 """
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
 
 from app import db
-from app.models import Movie, Showtime, Theater
+from app.models import AlertMovie, AlertPreference, Movie, Showtime, Theater
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +31,40 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 REQUEST_TIMEOUT = 15
+
+
+# ---------------------------------------------------------------------------
+# Alert-driven target resolution
+# ---------------------------------------------------------------------------
+
+def _get_active_targets() -> tuple[set[int], set[int]]:
+    """
+    Return (theater_id_set, movie_id_set) for all active, unsent alerts.
+
+    movie_id_set is built from AlertMovie rows (new model) for prefs that still
+    have unsent movies.  A None sentinel in movie_id_set means "any movie" —
+    present when at least one active pref has zero AlertMovie rows.
+
+    theater_id_set: None sentinel = "any theater" (alert has theater_id=None).
+    """
+    active_prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
+
+    theater_ids: set = set()
+    movie_ids: set = set()
+
+    for pref in active_prefs:
+        theater_ids.add(pref.theater_id)  # None = any theater
+
+        am_count = pref.alert_movies.count()
+        if am_count == 0:
+            # "Any movie" alert — sentinel: scrape everything at this theater
+            movie_ids.add(None)
+        else:
+            # Add only unsent movie IDs
+            for am in pref.alert_movies.filter_by(alert_sent=False).all():
+                movie_ids.add(am.movie_id)
+
+    return theater_ids, movie_ids
 
 
 class BaseScraper:
@@ -43,12 +83,21 @@ class BaseScraper:
             return None
 
     def get_or_create_movie(self, title: str, **kwargs) -> Movie:
-        """Return existing movie or create a new one."""
+        """
+        Return existing movie by title (case-insensitive) or create a new one.
+
+        When a brand-new row is created and TMDB is configured, the movie is
+        immediately enriched with TMDB metadata (tmdb_id, poster_url,
+        release_date, runtime).  This prevents duplicate Movie rows: if the
+        user later creates an alert via the TMDB search UI the app will find
+        this row via tmdb_id rather than creating a second bare row.
+        """
         movie = Movie.query.filter(Movie.title.ilike(title)).first()
         if not movie:
             movie = Movie(title=title, **kwargs)
             db.session.add(movie)
             db.session.flush()
+            _enrich_movie_from_tmdb(movie)
         return movie
 
     def upsert_showtime(
@@ -83,17 +132,52 @@ class BaseScraper:
         db.session.add(showtime)
         return showtime, True
 
-    def scrape_theater(self, theater: Theater) -> list[Showtime]:
+    def _movie_wanted(self, movie: Movie, movie_ids: set) -> bool:
+        """
+        Return True if this movie should have its showtimes persisted.
+
+        None in movie_ids is the "any movie" sentinel — always True.
+        Otherwise the movie's DB id must be in the set.
+        """
+        if None in movie_ids:
+            return True
+        return movie.id in movie_ids
+
+    def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
         """Scrape a single theater. Override in subclasses."""
         raise NotImplementedError
 
     def scrape_all(self) -> list[Showtime]:
-        """Scrape all active theaters belonging to this chain."""
-        theaters = Theater.query.filter_by(chain=self.chain_name, is_active=True).all()
+        """
+        Scrape theaters for this chain that have at least one active, unsent alert.
+
+        If no active alerts exist at all, no scraping is performed.  This keeps
+        the scraper idle when no users are waiting for notifications, and stops
+        scraping a movie/theater once its alert has been dispatched.
+        """
+        theater_ids, movie_ids = _get_active_targets()
+
+        if not theater_ids and not movie_ids:
+            logger.debug("%s: no active alerts — skipping scrape", self.chain_name)
+            return []
+
+        # Build theater query for this chain
+        query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
+
+        # If None is NOT in theater_ids, we have an explicit list to filter by
+        if None not in theater_ids:
+            query = query.filter(Theater.id.in_(theater_ids))
+        # If None IS in theater_ids, at least one alert has no theater filter
+        # meaning any theater might be relevant — scrape all active theaters.
+
+        theaters = query.all()
+        if not theaters:
+            return []
+
         new_showtimes: list[Showtime] = []
         for theater in theaters:
             try:
-                results = self.scrape_theater(theater)
+                results = self.scrape_theater(theater, movie_ids)
                 new_showtimes.extend(results)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error scraping %s: %s", theater.name, exc)
@@ -106,7 +190,8 @@ class AMCScraper(BaseScraper):
 
     chain_name = "AMC"
 
-    def scrape_theater(self, theater: Theater) -> list[Showtime]:
+    def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
+        """Scrape showtimes for one AMC theater and return newly inserted rows."""
         new_showtimes: list[Showtime] = []
         if not theater.website:
             return new_showtimes
@@ -134,6 +219,8 @@ class AMCScraper(BaseScraper):
             image_url = img_tag["src"] if img_tag and img_tag.get("src") else ""
 
             movie = self.get_or_create_movie(title, image_url=image_url)
+            if not self._movie_wanted(movie, movie_ids):
+                continue
 
             time_links = section.select("a[class*='showtime'], a[class*='Showtime']")
             for link in time_links:
@@ -158,7 +245,8 @@ class RegalScraper(BaseScraper):
 
     chain_name = "Regal"
 
-    def scrape_theater(self, theater: Theater) -> list[Showtime]:
+    def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
+        """Scrape showtimes for one Regal theater and return newly inserted rows."""
         new_showtimes: list[Showtime] = []
         if not theater.website:
             return new_showtimes
@@ -177,6 +265,8 @@ class RegalScraper(BaseScraper):
             image_url = img_tag["src"] if img_tag and img_tag.get("src") else ""
 
             movie = self.get_or_create_movie(title, image_url=image_url)
+            if not self._movie_wanted(movie, movie_ids):
+                continue
 
             for time_tag in film.select("a.showtime-anchor, .showtime-link"):
                 time_text = time_tag.get_text(strip=True)
@@ -198,7 +288,8 @@ class CinemarkScraper(BaseScraper):
 
     chain_name = "Cinemark"
 
-    def scrape_theater(self, theater: Theater) -> list[Showtime]:
+    def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
+        """Scrape showtimes for one Cinemark theater and return newly inserted rows."""
         new_showtimes: list[Showtime] = []
         if not theater.website:
             return new_showtimes
@@ -217,6 +308,8 @@ class CinemarkScraper(BaseScraper):
             image_url = img_tag["src"] if img_tag and img_tag.get("src") else ""
 
             movie = self.get_or_create_movie(title, image_url=image_url)
+            if not self._movie_wanted(movie, movie_ids):
+                continue
 
             for time_tag in film.select("button.showtime-btn, a[class*='showtime']"):
                 time_text = time_tag.get_text(strip=True)
@@ -238,7 +331,8 @@ class TCLScraper(BaseScraper):
 
     chain_name = "TCL"
 
-    def scrape_theater(self, theater: Theater) -> list[Showtime]:
+    def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
+        """Scrape showtimes for the TCL Chinese Theatre and return newly inserted rows."""
         new_showtimes: list[Showtime] = []
         if not theater.website:
             return new_showtimes
@@ -257,6 +351,8 @@ class TCLScraper(BaseScraper):
             image_url = img_tag["src"] if img_tag and img_tag.get("src") else ""
 
             movie = self.get_or_create_movie(title, image_url=image_url)
+            if not self._movie_wanted(movie, movie_ids):
+                continue
 
             for time_tag in film.select("a[class*='time'], button[class*='time']"):
                 time_text = time_tag.get_text(strip=True)
@@ -271,6 +367,194 @@ class TCLScraper(BaseScraper):
                     new_showtimes.append(showtime)
 
         return new_showtimes
+
+
+class RoyalBCMuseumScraper(BaseScraper):
+    """
+    Scraper for IMAX Victoria at the Royal BC Museum.
+
+    The ticketing site runs on the ATMS (Vantix) platform.  Each film on the
+    listing page either exposes its showtimes inline (1–3 dates) or links to a
+    separate calendar page (/DateSelection.aspx?item=NNN) when many dates exist.
+
+    Theater record requirements
+    ---------------------------
+    chain   : "Royal BC Museum"   (must match chain_name below)
+    website : https://sales.royalbcmuseum.bc.ca/Default.aspx?tagid=3
+    """
+
+    chain_name = "Royal BC Museum"
+    BASE_URL = "https://sales.royalbcmuseum.bc.ca"
+
+    # ------------------------------------------------------------------ #
+    # Internal datetime parser for ATMS-specific formats                  #
+    # ------------------------------------------------------------------ #
+
+    def _parse_atms_dt(self, text: str) -> Optional[datetime]:
+        """
+        Parse ATMS date+time strings into a UTC-aware datetime.
+
+        Two formats are encountered:
+        - Calendar page  data-scheduleDate : "Friday June 5, 2026 - 7:15 PM"
+        - Listing page   link text         : "7:15 PM - May 28, 2026"
+        """
+        text = text.strip()
+        for fmt in (
+            "%A %B %d, %Y - %I:%M %p",   # calendar: "Friday June 5, 2026 - 7:15 PM"
+            "%I:%M %p - %b %d, %Y",       # listing:  "7:15 PM - May 28, 2026"
+            "%I:%M %p - %B %d, %Y",       # listing:  "7:15 PM - May 28, 2026" (full month)
+        ):
+            try:
+                return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Showtime helpers                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _showtimes_from_calendar(self, item_href: str, theater, movie) -> list:
+        """Fetch the ?v=All calendar page for an item and return new Showtime objects."""
+        new = []
+        cal_url = self.BASE_URL + item_href
+        cal_url += "&v=All" if "?" in cal_url else "?v=All"
+
+        cal_soup = self.fetch(cal_url)
+        if not cal_soup:
+            return new
+
+        for ev in cal_soup.select("div#CalendarContainer div.EventListing"):
+            ticket_a = ev.select_one("a.PrimaryAction.js-select-date")
+            if not ticket_a:
+                continue
+            date_str = ticket_a.get("data-scheduledate", "")
+            show_dt = self._parse_atms_dt(date_str)
+            if not show_dt:
+                logger.debug("RoyalBCMuseum: could not parse calendar date %r", date_str)
+                continue
+            tickets_url = self.BASE_URL + ticket_a["href"]
+            st, is_new = self.upsert_showtime(
+                theater, movie, show_dt,
+                tickets_url=tickets_url, format_type="IMAX",
+            )
+            if is_new:
+                new.append(st)
+        return new
+
+    def _showtimes_from_inline(self, button_links, theater, movie) -> list:
+        """Parse inline listing-page show links (e.g. '7:15 PM - May 28, 2026')."""
+        new = []
+        for link in button_links:
+            href = link.get("href", "")
+            link_text = link.get_text(strip=True)
+            show_dt = self._parse_atms_dt(link_text)
+            if not show_dt:
+                logger.debug("RoyalBCMuseum: could not parse inline date %r", link_text)
+                continue
+            tickets_url = (self.BASE_URL + href) if href.startswith("/") else href
+            st, is_new = self.upsert_showtime(
+                theater, movie, show_dt,
+                tickets_url=tickets_url, format_type="IMAX",
+            )
+            if is_new:
+                new.append(st)
+        return new
+
+    # ------------------------------------------------------------------ #
+    # Main entry point                                                     #
+    # ------------------------------------------------------------------ #
+
+    def scrape_theater(self, theater: Theater, movie_ids: set) -> list:
+        new_showtimes: list = []
+        if not theater.website:
+            return new_showtimes
+
+        soup = self.fetch(theater.website)
+        if not soup:
+            return new_showtimes
+
+        # Only process listings inside #LeftSide to avoid sidebar noise
+        for listing in soup.select("div#LeftSide div.EventListing"):
+            h2 = listing.select_one("h2")
+            if not h2:
+                continue
+
+            raw_title = h2.get_text(strip=True)
+            # Strip "IMAX: " prefix so TMDB matching works cleanly
+            title = re.sub(r"^IMAX:\s*", "", raw_title, flags=re.IGNORECASE).strip()
+            if not title:
+                continue
+
+            img_tag = listing.select_one("img")
+            image_url = ""
+            if img_tag and img_tag.get("src"):
+                src = img_tag["src"]
+                image_url = src if src.startswith("http") else self.BASE_URL + src
+
+            movie = self.get_or_create_movie(title, image_url=image_url)
+            if not self._movie_wanted(movie, movie_ids):
+                continue
+
+            button_links = listing.select("div.ButtonArea a.PrimaryAction")
+            # Partition links: calendar links vs inline showtime links
+            calendar_links = [a for a in button_links if "DateSelection.aspx" in a.get("href", "")]
+            inline_links   = [a for a in button_links if "DateSelection.aspx" not in a.get("href", "")]
+
+            for cal_link in calendar_links:
+                new_showtimes.extend(
+                    self._showtimes_from_calendar(cal_link["href"], theater, movie)
+                )
+
+            if inline_links:
+                new_showtimes.extend(
+                    self._showtimes_from_inline(inline_links, theater, movie)
+                )
+
+        return new_showtimes
+
+
+def _enrich_movie_from_tmdb(movie: Movie) -> None:
+    """
+    Attempt to populate a freshly-created Movie row with TMDB metadata.
+
+    Silently does nothing if TMDB is not configured, the title yields no
+    results, or the row already has a tmdb_id.
+    """
+    if movie.tmdb_id:
+        return  # already enriched
+
+    try:
+        from app.tmdb import find_movie_by_title, is_configured
+        if not is_configured():
+            return
+
+        result = find_movie_by_title(movie.title)
+        if not result:
+            return
+
+        # Guard: don't create a duplicate via tmdb_id unique constraint
+        existing = Movie.query.filter_by(tmdb_id=result["tmdb_id"]).first()
+        if existing and existing.id != movie.id:
+            logger.debug(
+                "TMDB id=%s already belongs to Movie id=%s; skipping enrichment of id=%s",
+                result["tmdb_id"], existing.id, movie.id,
+            )
+            return
+
+        movie.tmdb_id    = result["tmdb_id"]
+        movie.poster_url = result.get("poster_url") or movie.image_url or ""
+        release_date_raw = result.get("release_date")
+        if release_date_raw:
+            try:
+                movie.release_date = date.fromisoformat(release_date_raw)
+            except (ValueError, TypeError):
+                movie.release_date = None
+        else:
+            movie.release_date = None
+        logger.debug("Enriched Movie id=%s '%s' with TMDB id=%s", movie.id, movie.title, movie.tmdb_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TMDB enrichment failed for '%s': %s", movie.title, exc)
 
 
 def _parse_time_text(text: str) -> Optional[datetime]:
@@ -317,11 +601,53 @@ def _parse_time_text(text: str) -> Optional[datetime]:
     return None
 
 
+def cleanup_expired_showtimes() -> int:
+    """
+    Delete Showtime rows whose show_datetime is in the past.
+
+    Called by the nightly maintenance scheduler job.
+    Returns the count of rows deleted.
+    """
+    cutoff = datetime.now(timezone.utc)
+    expired = Showtime.query.filter(Showtime.show_datetime < cutoff).all()
+    count = len(expired)
+    for st in expired:
+        db.session.delete(st)
+    if count:
+        db.session.commit()
+        logger.info("Cleaned up %d expired showtime(s).", count)
+    return count
+
+
+def cleanup_orphaned_movies() -> int:
+    """
+    Delete Movie rows that have no showtimes and no active AlertMovie references.
+
+    Movies added via the scraper become orphaned once their showtimes are deleted.
+    Movies added for alerts are protected by their AlertMovie FK and are not touched.
+    Returns the count of rows deleted.
+    """
+    orphaned = (
+        Movie.query
+        .filter(~Movie.showtimes.any())
+        .filter(~Movie.alert_movies.any())
+        .all()
+    )
+    count = len(orphaned)
+    for m in orphaned:
+        db.session.delete(m)
+    if count:
+        db.session.commit()
+        logger.info("Cleaned up %d orphaned movie(s).", count)
+    return count
+
+
 ALL_SCRAPERS: list[BaseScraper] = [
     AMCScraper(),
     RegalScraper(),
     CinemarkScraper(),
     TCLScraper(),
+    RoyalBCMuseumScraper(),
 ]
 
 

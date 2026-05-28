@@ -4,11 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}IMAX Alert{% endblock %}</title>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV/XN/WLaA=" crossorigin=""></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet.css') }}" />
+  <script src="{{ url_for('static', filename='vendor/leaflet.js') }}"></script>
 </head>
 <body>
   <nav class="navbar">
@@ -21,10 +20,38 @@
       <li><a href="{{ url_for('main.theaters') }}" {% if request.endpoint in ['main.theaters','main.theater_detail'] %}class="active"{% endif %}>Theaters</a></li>
       <li><a href="{{ url_for('main.alerts') }}" {% if request.endpoint == 'main.alerts' %}class="active"{% endif %}>Alerts</a></li>
       <li><a href="{{ url_for('main.profile') }}" {% if request.endpoint == 'main.profile' %}class="active"{% endif %}>Profile</a></li>
+      {% if current_user.is_authenticated and current_user.role_name in ['admin', 'editor'] %}
+      <li><a href="{{ url_for('main.admin_theaters') }}" {% if request.endpoint and request.endpoint.startswith('main.admin') %}class="active"{% endif %}>Admin</a></li>
+      {% endif %}
     </ul>
+    {% if current_user.is_authenticated %}
+    <div class="nav-user">
+      <span class="nav-user-name">{{ current_user.name }}</span>
+      <span class="role-badge role-{{ current_user.role_name }}">{{ current_user.role_name }}</span>
+      <form method="POST" action="{{ url_for('auth.logout') }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-ghost btn-sm">Logout</button>
+      </form>
+    </div>
+    {% endif %}
   </nav>
 
   <main class="main-content">
+    {% if current_user.is_authenticated and current_user.role_name == 'admin' and request.endpoint and request.endpoint.startswith('main.admin') %}
+    <nav class="admin-subnav">
+      <a href="{{ url_for('main.admin_theaters') }}"   {% if request.endpoint == 'main.admin_theaters' or request.endpoint == 'main.admin_theater_edit' %}class="active"{% endif %}>Theaters</a>
+      <a href="{{ url_for('main.admin_users') }}"      {% if request.endpoint in ['main.admin_users','main.admin_user_edit'] %}class="active"{% endif %}>Users</a>
+      <a href="{{ url_for('main.admin_lookup') }}"     {% if request.endpoint and 'lookup' in request.endpoint %}class="active"{% endif %}>Lookup Tables</a>
+      <a href="{{ url_for('main.admin_settings') }}"   {% if request.endpoint == 'main.admin_settings' %}class="active"{% endif %}>Settings</a>
+    </nav>
+    {% endif %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash-message flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
     {% block content %}{% endblock %}
   </main>
 

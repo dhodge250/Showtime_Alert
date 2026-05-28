@@ -1,0 +1,550 @@
+{% extends "base.html" %}
+{% block title %}{% if is_new %}Add Theater{% else %}Edit: {{ theater.name }}{% endif %} – Admin{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-header-row">
+    <div>
+      <a href="{{ url_for('main.admin_theaters') }}" class="back-link">&larr; Theater Admin</a>
+      <h1>{% if is_new %}Add New Theater{% else %}Edit Theater{% endif %}</h1>
+      {% if not is_new %}
+      <p class="subtitle">
+        ID {{ theater.id }} &mdash; source: {{ theater.crawl_source or 'unknown' }}
+        {% if theater.last_crawled_at %}&mdash; last crawled {{ theater.last_crawled_at.strftime('%Y-%m-%d') }}{% endif %}
+      </p>
+      {% endif %}
+    </div>
+    <div class="page-header-actions">
+      {% if not is_new %}
+      <a href="{{ url_for('main.theater_detail', theater_id=theater.id) }}" class="btn btn-ghost">View Page</a>
+      {% if theater.is_active %}
+      <form method="post" action="{{ url_for('main.admin_theater_delete', theater_id=theater.id) }}"
+            style="display:inline"
+            onsubmit="return confirm('Deactivate {{ theater.name }}? It will no longer appear in searches.')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-danger">Deactivate</button>
+      </form>
+      {% else %}
+      <form method="post" action="{{ url_for('main.admin_theater_reactivate', theater_id=theater.id) }}"
+            style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-outline" style="border-color:var(--success);color:var(--success)">Reactivate</button>
+      </form>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<form method="post" class="admin-edit-form" id="theater-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="form-grid">
+
+    <!-- Basic info -->
+    <div class="form-section">
+      <h2 class="form-section-title">Basic Info</h2>
+
+      <div class="form-group">
+        <label for="name">Name <span class="required">*</span></label>
+        <input type="text" id="name" name="name" required
+               value="{{ theater.name or '' if theater else '' }}" />
+      </div>
+
+      <div class="form-row">
+        <!-- Chain dropdown with inline-add -->
+        <div class="form-group">
+          <label for="chain_id">Chain</label>
+          <div class="select-with-add">
+            <select id="chain_id" name="chain_id"
+                    onchange="handleAddNew(this, 'chain_id'); this.classList.toggle('placeholder-active', !this.value || this.value === '__new__')">
+              <option value="">Chain</option>
+              {% for c in chains %}
+              <option value="{{ c.id }}" {% if theater and theater.chain_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+              {% endfor %}
+              <option value="__new__">+ Add new…</option>
+            </select>
+            <input type="hidden" name="__new__chain_id" id="__new__chain_id" value="" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="website">Website</label>
+          <input type="url" id="website" name="website"
+                 value="{{ theater.website or '' if theater else '' }}" />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="phone">Phone</label>
+        <input type="text" id="phone" name="phone"
+               value="{{ theater.phone or '' if theater else '' }}"
+               placeholder="(555) 123-4567"
+               oninput="formatPhone(this)" />
+      </div>
+
+    </div>
+
+    <!-- Location -->
+    <div class="form-section">
+      <h2 class="form-section-title">Location</h2>
+
+      <!-- Country dropdown -->
+      <div class="form-group">
+        <label for="country_id">Country</label>
+        <div class="select-with-add">
+          <select id="country_id" name="country_id"
+                  onchange="handleAddNew(this, 'country_id'); loadRegions(); loadCities()">
+            <option value="">— None —</option>
+            {% for c in countries %}
+            <option value="{{ c.id }}"
+              {% if theater and theater.country_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+            <option value="__new__">+ Add new…</option>
+          </select>
+          <input type="hidden" name="__new__country_id" id="__new__country_id" value="" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <!-- Region dropdown (cascades from country) -->
+        <div class="form-group">
+          <label for="region_id">State / Region</label>
+          <div class="select-with-add">
+            <select id="region_id" name="region_id"
+                    onchange="handleAddNew(this, 'region_id'); loadCities()">
+              <option value="">— None —</option>
+              {# Populated via JS on page load, seeded from server-side value #}
+              <option value="__new__">+ Add new…</option>
+            </select>
+            <input type="hidden" name="__new__region_id" id="__new__region_id" value="" />
+          </div>
+        </div>
+        <!-- City dropdown (cascades from country+region) -->
+        <div class="form-group">
+          <label for="city_id">City</label>
+          <div class="select-with-add">
+            <select id="city_id" name="city_id"
+                    onchange="handleAddNew(this, 'city_id')">
+              <option value="">— None —</option>
+              <option value="__new__">+ Add new…</option>
+            </select>
+            <input type="hidden" name="__new__city_id" id="__new__city_id" value="" />
+          </div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="address">Address</label>
+          <input type="text" id="address" name="address"
+                 value="{{ theater.address or '' if theater else '' }}" />
+        </div>
+        <div class="form-group">
+          <label for="zip_code">ZIP / Postal Code</label>
+          <input type="text" id="zip_code" name="zip_code"
+                 value="{{ theater.zip_code or '' if theater else '' }}" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="latitude">Latitude</label>
+          <input type="number" id="latitude" name="latitude" step="any"
+                 value="{{ theater.latitude or '' if theater else '' }}" />
+        </div>
+        <div class="form-group">
+          <label for="longitude">Longitude</label>
+          <input type="number" id="longitude" name="longitude" step="any"
+                 value="{{ theater.longitude or '' if theater else '' }}" />
+        </div>
+      </div>
+
+      <button type="button" class="btn btn-outline btn-sm" onclick="geocodeAddress()" style="margin-bottom:8px">
+        Geocode Address
+      </button>
+      <div id="geocode-status" class="text-muted" style="font-size:12px;margin-bottom:4px"></div>
+
+      <div id="edit-map"></div>
+    </div>
+
+    <!-- Screen / Projection -->
+    <div class="form-section">
+      <h2 class="form-section-title">Screen &amp; Projection</h2>
+
+      <!-- Aspect Ratio dropdown -->
+      <div class="form-group">
+        <label for="aspect_ratio_id">Screen Aspect Ratio</label>
+        <div class="select-with-add">
+          <select id="aspect_ratio_id" name="aspect_ratio_id"
+                  onchange="handleAddNew(this, 'aspect_ratio_id')">
+            <option value="">— None —</option>
+            {% for ar in aspect_ratios %}
+            <option value="{{ ar.id }}"
+              {% if theater and theater.aspect_ratio_id == ar.id %}selected{% endif %}>{{ ar.label }}</option>
+            {% endfor %}
+            <option value="__new__">+ Add new…</option>
+          </select>
+          <input type="hidden" name="__new__aspect_ratio_id" id="__new__aspect_ratio_id" value="" />
+        </div>
+      </div>
+
+      <!-- Screen dimensions with unit toggle -->
+      <div class="form-group">
+        <label>Screen Dimensions
+          <span class="dim-unit-toggle">
+            <label style="font-weight:normal;cursor:pointer">
+              <input type="radio" name="dim_unit" value="metric"
+                     {% if unit == 'metric' %}checked{% endif %}
+                     onchange="convertDims('metric')" /> m
+            </label>
+            <label style="font-weight:normal;cursor:pointer">
+              <input type="radio" name="dim_unit" value="imperial"
+                     {% if unit == 'imperial' %}checked{% endif %}
+                     onchange="convertDims('imperial')" /> ft
+            </label>
+          </span>
+        </label>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="screen_width">Width</label>
+            <input type="number" id="screen_width" name="screen_width" step="0.01" min="0"
+                   value="{% if theater and theater.screen_width_m %}{% if unit == 'imperial' %}{{ '%.2f'|format(theater.screen_width_m * 3.28084) }}{% else %}{{ '%.2f'|format(theater.screen_width_m) }}{% endif %}{% endif %}"
+                   placeholder="e.g. 26.00" />
+          </div>
+          <div class="form-group">
+            <label for="screen_height">Height</label>
+            <input type="number" id="screen_height" name="screen_height" step="0.01" min="0"
+                   value="{% if theater and theater.screen_height_m %}{% if unit == 'imperial' %}{{ '%.2f'|format(theater.screen_height_m * 3.28084) }}{% else %}{{ '%.2f'|format(theater.screen_height_m) }}{% endif %}{% endif %}"
+                   placeholder="e.g. 19.60" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Projector Type dropdown -->
+      <div class="form-group">
+        <label for="projector_type_id">Projector Type</label>
+        <div class="select-with-add">
+          <select id="projector_type_id" name="projector_type_id"
+                  onchange="handleAddNew(this, 'projector_type_id')">
+            <option value="">— None —</option>
+            {% for pt in projector_types %}
+            <option value="{{ pt.id }}"
+              {% if theater and theater.projector_type_id == pt.id %}selected{% endif %}>{{ pt.name }}</option>
+            {% endfor %}
+            <option value="__new__">+ Add new…</option>
+          </select>
+          <input type="hidden" name="__new__projector_type_id" id="__new__projector_type_id" value="" />
+        </div>
+      </div>
+
+      <!-- Audio System dropdown -->
+      <div class="form-group">
+        <label for="audio_system_id">Audio System</label>
+        <div class="select-with-add">
+          <select id="audio_system_id" name="audio_system_id"
+                  onchange="handleAddNew(this, 'audio_system_id'); this.classList.toggle('placeholder-active', !this.value || this.value === '__new__')">
+            <option value="">Audio System</option>
+            {% for as_ in audio_systems %}
+            <option value="{{ as_.id }}"
+              {% if theater and theater.audio_system_id == as_.id %}selected{% endif %}>{{ as_.name }}</option>
+            {% endfor %}
+            <option value="__new__">+ Add new…</option>
+          </select>
+          <input type="hidden" name="__new__audio_system_id" id="__new__audio_system_id" value="" />
+        </div>
+      </div>
+    </div>
+
+  </div><!-- .form-grid -->
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">
+      {% if is_new %}Create Theater{% else %}Save Changes{% endif %}
+    </button>
+    <a href="{{ url_for('main.admin_theaters') }}" class="btn btn-ghost">Cancel</a>
+  </div>
+</form>
+
+<div id="toast" class="toast" style="display:none"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ── Initial server-side values for cascading selects ──────────────────
+  const initCountryId = {{ (theater.country_id or 'null') if theater else 'null' }};
+  const initRegionId  = {{ (theater.region_id  or 'null') if theater else 'null' }};
+  const initCityId    = {{ (theater.city_id     or 'null') if theater else 'null' }};
+
+  // ── Map setup ─────────────────────────────────────────────────────────
+  {% if not is_new and theater and theater.latitude and theater.longitude %}
+  const initLat = {{ theater.latitude }};
+  const initLon = {{ theater.longitude }};
+  const initZoom = 14;
+  {% else %}
+  const initLat = 20;
+  const initLon = 0;
+  const initZoom = 2;
+  {% endif %}
+
+  const miniMap = L.map('edit-map').setView([initLat, initLon], initZoom);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap', maxZoom: 18,
+  }).addTo(miniMap);
+
+  const marker = L.marker([initLat, initLon], { draggable: true }).addTo(miniMap);
+  marker.on('dragend', e => {
+    const pos = e.target.getLatLng();
+    document.getElementById('latitude').value  = pos.lat.toFixed(6);
+    document.getElementById('longitude').value = pos.lng.toFixed(6);
+  });
+  miniMap.on('click', e => {
+    marker.setLatLng(e.latlng);
+    document.getElementById('latitude').value  = e.latlng.lat.toFixed(6);
+    document.getElementById('longitude').value = e.latlng.lng.toFixed(6);
+  });
+  ['latitude','longitude'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => {
+      const lat = parseFloat(document.getElementById('latitude').value);
+      const lon = parseFloat(document.getElementById('longitude').value);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        marker.setLatLng([lat, lon]);
+        miniMap.setView([lat, lon], 14);
+      }
+    });
+  });
+
+  // ── Phone formatter ───────────────────────────────────────────────────
+  function formatPhone(input) {
+    let digits = input.value.replace(/\D/g, '');
+    if (digits.length <= 3) {
+      input.value = digits;
+    } else if (digits.length <= 6) {
+      input.value = '(' + digits.slice(0,3) + ') ' + digits.slice(3);
+    } else if (digits.length <= 10) {
+      input.value = '(' + digits.slice(0,3) + ') ' + digits.slice(3,6) + '-' + digits.slice(6);
+    } else {
+      // Keep extra digits for international numbers
+      input.value = '+' + digits.slice(0, digits.length - 10) + ' (' + digits.slice(-10,-7) + ') ' + digits.slice(-7,-4) + '-' + digits.slice(-4);
+    }
+  }
+
+  // ── Add-new dropdown handler ──────────────────────────────────────────
+  function handleAddNew(select, field) {
+    if (select.value === '__new__') {
+      const label = select.options[1] ? select.options[1].text : 'value';
+      const newVal = prompt(`Enter new ${field.replace(/_id$/,'').replace(/_/g,' ')}:`);
+      const hiddenInput = document.getElementById('__new__' + field);
+      if (newVal && newVal.trim()) {
+        hiddenInput.value = newVal.trim();
+        // Add a temporary option so the form submits with __new__ still selected
+        const opt = document.createElement('option');
+        opt.value = '__new__';
+        opt.text = '+ ' + newVal.trim();
+        opt.selected = true;
+        select.insertBefore(opt, select.querySelector('option[value="__new__"]'));
+        select.value = '__new__';
+      } else {
+        select.value = '';
+        hiddenInput.value = '';
+      }
+    } else {
+      document.getElementById('__new__' + field).value = '';
+    }
+  }
+
+  // ── Cascading region/city selects ─────────────────────────────────────
+  function loadRegions(selectedId, afterLoad) {
+    const countryId = getCountryId();
+    if (!countryId) {
+      setOptions('region_id', []);
+      setOptions('city_id', []);
+      return Promise.resolve();
+    }
+    return fetch(`/api/lookup/regions?country_id=${countryId}`)
+      .then(r => r.json())
+      .then(data => {
+        setOptions('region_id', data.map(r => ({id: r.id, label: r.name})), selectedId || null);
+        if (afterLoad) afterLoad(data);
+      });
+  }
+
+  function loadCities(selectedId, afterLoad) {
+    const countryId = getCountryId();
+    const regionId  = getRegionId();
+    if (!countryId) { setOptions('city_id', []); return Promise.resolve(); }
+    let url = `/api/lookup/cities?country_id=${countryId}`;
+    if (regionId) url += `&region_id=${regionId}`;
+    return fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        setOptions('city_id', data.map(c => ({id: c.id, label: c.name})), selectedId || null);
+        if (afterLoad) afterLoad(data);
+      });
+  }
+
+  // Select a <select> option by its visible text (case-insensitive, trimmed)
+  function selectByText(selectId, text) {
+    if (!text) return false;
+    const sel = document.getElementById(selectId);
+    if (!sel) return false;
+    const lower = text.trim().toLowerCase();
+    for (const opt of sel.options) {
+      if (opt.text.trim().toLowerCase() === lower && opt.value && opt.value !== '__new__') {
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event('change'));
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function getCountryId() {
+    const sel = document.getElementById('country_id');
+    const v = sel ? sel.value : '';
+    return (v && v !== '__new__') ? parseInt(v) : null;
+  }
+  function getRegionId() {
+    const sel = document.getElementById('region_id');
+    const v = sel ? sel.value : '';
+    return (v && v !== '__new__') ? parseInt(v) : null;
+  }
+
+  function setOptions(selectId, items, selectedId) {
+    const sel = document.getElementById(selectId);
+    // Preserve the hidden input state
+    const hiddenKey = '__new__' + selectId;
+    const hidden = document.getElementById(hiddenKey);
+    if (hidden) hidden.value = '';
+    sel.innerHTML = '<option value="">— None —</option>';
+    items.forEach(item => {
+      const opt = document.createElement('option');
+      opt.value = item.id;
+      opt.text  = item.label;
+      if (selectedId && item.id == selectedId) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    const addOpt = document.createElement('option');
+    addOpt.value = '__new__';
+    addOpt.text  = '+ Add new…';
+    sel.appendChild(addOpt);
+  }
+
+  // ── Screen dimensions unit converter ──────────────────────────────────
+  const M_TO_FT = 3.28084;
+  let currentDimUnit = document.querySelector('input[name="dim_unit"]:checked').value;
+
+  function convertDims(newUnit) {
+    if (newUnit === currentDimUnit) return;
+    ['screen_width','screen_height'].forEach(id => {
+      const input = document.getElementById(id);
+      const val = parseFloat(input.value);
+      if (!isNaN(val) && val > 0) {
+        if (newUnit === 'imperial') {
+          input.value = (val * M_TO_FT).toFixed(2);
+        } else {
+          input.value = (val / M_TO_FT).toFixed(2);
+        }
+      }
+    });
+    currentDimUnit = newUnit;
+  }
+
+  // ── Geocode button ────────────────────────────────────────────────────
+  function geocodeAddress() {
+    const statusEl = document.getElementById('geocode-status');
+    statusEl.textContent = 'Geocoding…';
+    const name    = document.getElementById('name').value;
+    const address = document.getElementById('address').value;
+    const zip     = document.getElementById('zip_code').value;
+
+    // Try to get city/state/country from current dropdown text
+    const countryId = getCountryId();
+    const regionId  = getRegionId();
+    const cityId    = getCountryId() ? document.getElementById('city_id').value : null;
+
+    const countryEl = document.querySelector('#country_id option:checked');
+    const regionEl  = document.querySelector('#region_id option:checked');
+    const cityEl    = document.querySelector('#city_id option:checked');
+
+    fetch('/api/geocode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        name:     name,
+        address:  address,
+        zip_code: zip,
+        city:    cityEl    && cityEl.value && cityEl.value !== '__new__'    ? cityEl.text    : '',
+        state:   regionEl  && regionEl.value && regionEl.value !== '__new__'  ? regionEl.text  : '',
+        country: countryEl && countryEl.value && countryEl.value !== '__new__' ? countryEl.text : '',
+      })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        statusEl.textContent = 'Could not geocode: ' + data.error;
+        return;
+      }
+      // Populate address / zip / lat / lng
+      if (data.address)   document.getElementById('address').value   = data.address;
+      if (data.zip_code)  document.getElementById('zip_code').value  = data.zip_code;
+      document.getElementById('latitude').value  = data.latitude  != null ? parseFloat(data.latitude).toFixed(6)  : '';
+      document.getElementById('longitude').value = data.longitude != null ? parseFloat(data.longitude).toFixed(6) : '';
+      if (data.latitude != null && data.longitude != null) {
+        marker.setLatLng([data.latitude, data.longitude]);
+        miniMap.setView([data.latitude, data.longitude], 14);
+      }
+      statusEl.textContent = data.formatted_address ? ('Found: ' + data.formatted_address) : 'Geocoded successfully';
+
+      // Auto-select country → region → city by Nominatim-returned names
+      const geoCountry = data.country_name || '';
+      const geoState   = data.state_name   || '';
+      const geoCity    = data.city_name    || '';
+
+      if (geoCountry) {
+        const matched = selectByText('country_id', geoCountry);
+        if (matched) {
+          // Country changed — cascade-load regions then cities
+          loadRegions(null, () => {
+            if (geoState) {
+              selectByText('region_id', geoState);
+            }
+            loadCities(null, () => {
+              if (geoCity) selectByText('city_id', geoCity);
+            });
+          });
+        }
+      }
+    })
+    .catch(() => { statusEl.textContent = 'Geocoding failed — check console'; });
+  }
+
+  // ── Init cascading selects on page load ───────────────────────────────
+  window.addEventListener('DOMContentLoaded', () => {
+    if (initCountryId) {
+      loadRegions(initRegionId);
+      loadCities(initCityId);
+    }
+    // Init placeholder-active class for selects that start with no value
+    ['chain_id', 'audio_system_id'].forEach(id => {
+      const sel = document.getElementById(id);
+      if (sel) sel.classList.toggle('placeholder-active', !sel.value || sel.value === '__new__');
+    });
+    // Show success toast if redirected back after save
+    if (new URLSearchParams(window.location.search).get('saved') === '1') {
+      showToast('Changes saved successfully.');
+      // Clean the query param from the URL without reloading
+      history.replaceState(null, '', window.location.pathname);
+    }
+    // Prevent Enter key from submitting the form (except on submit button)
+    document.getElementById('theater-form').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.target.type !== 'submit') e.preventDefault();
+    });
+  });
+
+  function showToast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.display = '';
+    setTimeout(() => { el.style.display = 'none'; }, 3000);
+  }
+</script>
+{% endblock %}

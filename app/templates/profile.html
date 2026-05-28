@@ -3,128 +3,139 @@
 
 {% block content %}
 <div class="page-header">
-  <h1>👤 User Profile</h1>
-  <p class="subtitle">Manage your notification preferences and location</p>
+  <h1>Profile</h1>
+  <p class="subtitle">Your account info and notification preferences</p>
 </div>
 
-<div class="single-col">
-  <section class="card">
-    {% if saved %}
-    <div class="alert-banner success">✅ Profile saved successfully!</div>
-    {% endif %}
+{% if saved %}
+<div class="flash-message flash-success">Preferences saved.</div>
+{% endif %}
 
-    <form method="POST" action="{{ url_for('main.profile') }}" class="form">
-      {% if user %}
-      <input type="hidden" name="user_id" value="{{ user.id }}">
+<div class="form-grid" style="max-width:860px">
+
+  <!-- Identity (view-only) -->
+  <div class="form-section">
+    <h2 class="form-section-title">Account Info</h2>
+    <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+      To update your name, email, or password ask an admin or contact support.
+    </p>
+
+    <div class="form-group">
+      <label class="info-label">Name</label>
+      <span class="info-value">{{ user.name }}</span>
+    </div>
+    <div class="form-group">
+      <label class="info-label">Email / Username</label>
+      <span class="info-value">{{ user.email or '—' }}</span>
+    </div>
+    <div class="form-group">
+      <label class="info-label">Phone</label>
+      <span class="info-value">{{ user.phone or '—' }}</span>
+    </div>
+    <div class="form-group">
+      <label class="info-label">Role</label>
+      {% if user.role_name %}
+      <span class="role-badge role-{{ user.role_name }}">{{ user.role_name }}</span>
+      {% else %}
+      <span class="info-value">—</span>
       {% endif %}
+    </div>
+  </div>
 
-      <div class="form-row">
-        <div class="form-group">
-          <label>Full Name *</label>
-          <input type="text" name="name" class="form-control" required
-                 value="{{ user.name if user else '' }}" placeholder="Your name">
-        </div>
-        <div class="form-group">
-          <label>Email Address</label>
-          <input type="email" name="email" class="form-control"
-                 value="{{ user.email if user else '' }}" placeholder="you@example.com">
-        </div>
-      </div>
+  <!-- Notification prefs + unit (editable) -->
+  <div class="form-section">
+    <h2 class="form-section-title">Preferences</h2>
 
-      <div class="form-row">
-        <div class="form-group">
-          <label>Phone Number <span class="hint">(for SMS alerts)</span></label>
-          <input type="tel" name="phone" class="form-control"
-                 value="{{ user.phone if user else '' }}" placeholder="+1 555 000 0000">
-        </div>
-      </div>
+    <form method="post" action="{{ url_for('main.profile') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-      <h3 style="margin-top:24px">Notification Preferences</h3>
-      <div class="form-row checkbox-row">
-        <label class="checkbox-label">
+      <div class="form-group form-group-checkbox">
+        <label>
           <input type="checkbox" name="notify_email"
-                 {% if not user or user.notify_email %}checked{% endif %}>
-          Email Notifications
+                 {% if user.notify_email %}checked{% endif %} />
+          Notify by Email
         </label>
-        <label class="checkbox-label">
+      </div>
+      <div class="form-group form-group-checkbox">
+        <label>
           <input type="checkbox" name="notify_sms"
-                 {% if user and user.notify_sms %}checked{% endif %}>
-          SMS Notifications
+                 {% if user.notify_sms %}checked{% endif %} />
+          Notify by SMS
         </label>
       </div>
 
-      <h3 style="margin-top:24px">Your Location <span class="hint">(for distance to theaters)</span></h3>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Location Name</label>
-          <input type="text" name="location_name" class="form-control"
-                 value="{{ user.location_name if user else '' }}"
-                 placeholder="e.g. My Home" id="location_name">
+      <div class="form-group" style="margin-top:16px">
+        <label>Measurement Unit</label>
+        <div style="display:flex;gap:16px;margin-top:4px">
+          <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
+            <input type="radio" name="measurement_unit" value="metric"
+                   {% if unit == 'metric' %}checked{% endif %} />
+            Metric (m)
+          </label>
+          <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
+            <input type="radio" name="measurement_unit" value="imperial"
+                   {% if unit == 'imperial' %}checked{% endif %} />
+            Imperial (ft)
+          </label>
         </div>
-        <div class="form-group">
-          <button type="button" class="btn btn-outline" onclick="detectLocation()" style="margin-top:24px">
-            📍 Detect My Location
-          </button>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Latitude</label>
-          <input type="number" step="any" name="location_lat" class="form-control"
-                 value="{{ user.location_lat if user else '' }}" id="location_lat" placeholder="e.g. 40.7128">
-        </div>
-        <div class="form-group">
-          <label>Longitude</label>
-          <input type="number" step="any" name="location_lon" class="form-control"
-                 value="{{ user.location_lon if user else '' }}" id="location_lon" placeholder="e.g. -74.0060">
-        </div>
+        <small class="text-muted" style="font-size:11px;margin-top:4px">
+          Affects how screen dimensions are displayed across the app.
+        </small>
       </div>
 
-      <!-- Location preview map -->
-      {% if user and user.location_lat and user.location_lon %}
-      <div id="profile-map" style="height:250px; border-radius:8px; margin:16px 0;"></div>
-      {% endif %}
-
-      <button type="submit" class="btn btn-primary">Save Profile</button>
+      <div class="form-actions" style="margin-top:16px">
+        <button type="submit" class="btn btn-primary">Save Preferences</button>
+      </div>
     </form>
-  </section>
+  </div>
+
+  <!-- Location (view-only — edit via admin if needed) -->
+  <div class="form-section">
+    <h2 class="form-section-title">Your Location</h2>
+    <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+      Used for distance calculations on the Theaters map.
+      {% if current_user.role_name == 'admin' %}
+      <a href="{{ url_for('main.admin_user_edit', user_id=user.id) }}">Edit in Admin &rarr;</a>
+      {% endif %}
+    </p>
+
+    {% if user.location_lat and user.location_lon %}
+    <div class="form-group">
+      <label class="info-label">Label</label>
+      <span class="info-value">{{ user.location_name or 'My Location' }}</span>
+    </div>
+    <div class="form-group">
+      <label class="info-label">Address</label>
+      <span class="info-value">{{ user.location_address or '—' }}</span>
+    </div>
+    <div class="form-group">
+      <label class="info-label">Coordinates</label>
+      <span class="info-value">{{ '%.5f'|format(user.location_lat) }}, {{ '%.5f'|format(user.location_lon) }}</span>
+    </div>
+    <div id="profile-map" style="height:200px;border-radius:var(--radius);border:1px solid var(--border);margin-top:8px"></div>
+    {% else %}
+    <p class="text-muted" style="font-size:13px">No location set.</p>
+    {% endif %}
+  </div>
+
 </div>
 {% endblock %}
 
 {% block scripts %}
+{% if user.location_lat and user.location_lon %}
 <script>
-  function detectLocation() {
-    if (!navigator.geolocation) {
-      alert('Geolocation not supported by your browser.');
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(pos => {
-      document.getElementById('location_lat').value = pos.coords.latitude.toFixed(6);
-      document.getElementById('location_lon').value = pos.coords.longitude.toFixed(6);
-      if (!document.getElementById('location_name').value) {
-        document.getElementById('location_name').value = 'My Location';
-      }
-    }, err => {
-      alert('Could not detect location: ' + err.message);
-    });
-  }
-
-  {% if user and user.location_lat and user.location_lon %}
-  const map = L.map('profile-map');
+  const map = L.map('profile-map').setView([{{ user.location_lat }}, {{ user.location_lon }}], 13);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap', maxZoom: 18,
+    attribution: '&copy; OpenStreetMap', maxZoom: 18,
   }).addTo(map);
   const userIcon = L.divIcon({
-    html: '<div class="map-marker map-marker-user">📍</div>',
-    className: '', iconSize: [36, 36], iconAnchor: [18, 36],
+    html: '<div class="map-dot map-dot-user"></div>',
+    className: '', iconSize: [14,14], iconAnchor: [7,7],
   });
-  const lat = {{ user.location_lat }};
-  const lng = {{ user.location_lon }};
-  map.setView([lat, lng], 13);
-  L.marker([lat, lng], { icon: userIcon })
+  L.marker([{{ user.location_lat }}, {{ user.location_lon }}], { icon: userIcon })
     .addTo(map)
     .bindPopup('<strong>{{ user.location_name or "Your Location" }}</strong>')
     .openPopup();
-  {% endif %}
 </script>
+{% endif %}
 {% endblock %}

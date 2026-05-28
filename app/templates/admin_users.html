@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Admin – Users{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-header-row">
+    <div>
+      <h1>User Admin</h1>
+      <p class="subtitle">{{ users|length }} total user(s)</p>
+    </div>
+    <div class="page-header-actions">
+      <a href="{{ url_for('main.admin_user_new') }}" class="btn btn-primary">+ Add User</a>
+    </div>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<div class="admin-filter-bar">
+  <input type="text" id="admin-search" placeholder="Search name or email…"
+         oninput="filterTable()" class="admin-search-input" />
+  <select id="admin-filter-role" onchange="filterTable()">
+    <option value="">All Roles</option>
+    {% for r in roles %}
+    <option value="{{ r.name }}">{{ r.name }}</option>
+    {% endfor %}
+  </select>
+  <label class="admin-toggle">
+    <input type="checkbox" id="show-inactive" onchange="filterTable()" />
+    Show inactive
+  </label>
+</div>
+
+<div class="admin-table-wrap">
+  <table class="admin-table" id="admin-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Email / Username</th>
+        <th>Phone</th>
+        <th>Role</th>
+        <th>Notify Email</th>
+        <th>Notify SMS</th>
+        <th>Unit</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr class="admin-row{% if not u.is_active %} admin-row-inactive{% endif %}"
+          data-name="{{ u.name|lower }}"
+          data-email="{{ (u.email or '')|lower }}"
+          data-role="{{ u.role_name or '' }}"
+          data-active="{{ '1' if u.is_active else '0' }}">
+        <td class="admin-cell-name">{{ u.name }}</td>
+        <td>{{ u.email or '—' }}</td>
+        <td>{{ u.phone or '—' }}</td>
+        <td>
+          {% if u.role_name %}
+          <span class="role-badge role-{{ u.role_name }}">{{ u.role_name }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>{{ 'Yes' if u.notify_email else 'No' }}</td>
+        <td>{{ 'Yes' if u.notify_sms else 'No' }}</td>
+        <td>{{ u.measurement_unit or 'metric' }}</td>
+        <td>
+          <span class="status-badge {% if u.is_active %}status-active{% else %}status-inactive{% endif %}">
+            {{ 'Active' if u.is_active else 'Inactive' }}
+          </span>
+        </td>
+        <td class="admin-actions">
+          <a href="{{ url_for('main.admin_user_edit', user_id=u.id) }}" class="btn-sm btn-outline">Edit</a>
+          {% if u.is_active and u.id != current_user.id %}
+          <form method="post" action="{{ url_for('main.admin_user_delete', user_id=u.id) }}"
+                style="display:inline"
+                onsubmit="return confirm('Deactivate {{ u.name }}?')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-sm btn-danger">Deactivate</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterTable() {
+  const q          = document.getElementById('admin-search').value.toLowerCase();
+  const role       = document.getElementById('admin-filter-role').value.toLowerCase();
+  const showInactive = document.getElementById('show-inactive').checked;
+
+  document.querySelectorAll('#admin-table tbody .admin-row').forEach(row => {
+    const matchSearch = !q || row.dataset.name.includes(q) || row.dataset.email.includes(q);
+    const matchRole   = !role || row.dataset.role === role;
+    const matchActive = showInactive || row.dataset.active === '1';
+    row.style.display = (matchSearch && matchRole && matchActive) ? '' : 'none';
+  });
+}
+filterTable();
+</script>
+{% endblock %}
