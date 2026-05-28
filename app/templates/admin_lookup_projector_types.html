@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Admin – Projector Types{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-header-row">
+    <div>
+      <h1>Lookup: Projector Types</h1>
+      <p class="subtitle">{{ rows|length }} entries — click a value to edit it inline</p>
+    </div>
+  </div>
+</div>
+
+<div class="lookup-subnav">
+  <a href="{{ url_for('main.admin_lookup_aspect_ratios') }}">Aspect Ratios</a>
+  <a href="{{ url_for('main.admin_lookup_projector_types') }}" class="active">Projector Types</a>
+  <a href="{{ url_for('main.admin_lookup_audio_systems') }}">Audio Systems</a>
+  <a href="{{ url_for('main.admin_lookup_chains') }}">Chains</a>
+  <a href="{{ url_for('main.admin_lookup_countries') }}">Countries</a>
+  <a href="{{ url_for('main.admin_lookup_regions') }}">Regions</a>
+  <a href="{{ url_for('main.admin_lookup_cities') }}">Cities</a>
+  <a href="{{ url_for('main.admin_lookup_continents') }}">Continents</a>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <table class="admin-lookup-table" id="lookup-table">
+    <thead>
+      <tr><th>#</th><th>Name</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr id="row-{{ row.id }}">
+        <td class="muted">{{ row.id }}</td>
+        <td class="editable-cell" data-id="{{ row.id }}" data-field="name">
+          <span class="cell-val">{{ row.name }}</span><span class="edit-hint">✎</span>
+        </td>
+        <td>
+          <button class="btn-sm btn-danger" onclick="deleteRow('/api/lookup/projector-types/{{ row.id }}', 'row-{{ row.id }}')">Delete</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <form class="lookup-add-form" onsubmit="addRow(event)">
+    <input type="text" id="new-name" placeholder="Name (e.g. Laser GT)" required />
+    <button type="submit" class="btn btn-primary btn-sm">Add</button>
+    <span id="add-msg" style="font-size:13px;margin-left:8px"></span>
+  </form>
+</div>
+
+<div id="toast" class="toast" style="display:none"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const API_BASE = '/api/lookup/projector-types';
+let activeCancel = null;
+
+document.querySelectorAll('.editable-cell').forEach(cell => {
+  cell.addEventListener('click', e => startEdit(cell, e));
+});
+
+function startEdit(cell, e) {
+  e?.stopPropagation();
+  if (cell.dataset.editing) return;
+  activeCancel?.();
+  const valSpan  = cell.querySelector('.cell-val');
+  const hint     = cell.querySelector('.edit-hint');
+  const original = valSpan.textContent.trim();
+  const id       = cell.dataset.id;
+  const field    = cell.dataset.field;
+
+  hint.style.display = 'none';
+  valSpan.style.display = 'none';
+  cell.dataset.editing = '1';
+
+  const wrap  = document.createElement('div');
+  wrap.className = 'inline-edit-wrap';
+  wrap.addEventListener('click', e => e.stopPropagation());
+  const input = document.createElement('input');
+  input.type  = 'text';
+  input.value = original;
+  const saveBtn   = document.createElement('button');
+  saveBtn.className = 'btn-sm btn-primary';
+  saveBtn.textContent = 'Save';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-sm btn-ghost';
+  cancelBtn.textContent = 'Cancel';
+  const errSpan = document.createElement('span');
+  errSpan.className = 'inline-edit-error';
+
+  wrap.appendChild(input); wrap.appendChild(saveBtn); wrap.appendChild(cancelBtn);
+  cell.appendChild(wrap); cell.appendChild(errSpan);
+  input.focus(); input.select();
+
+  function cancel() {
+    wrap.remove(); errSpan.remove();
+    valSpan.style.display = ''; hint.style.display = '';
+    delete cell.dataset.editing;
+    activeCancel = null;
+  }
+  activeCancel = cancel;
+
+  async function save() {
+    const newVal = input.value.trim();
+    if (newVal === original) { cancel(); return; }
+    saveBtn.disabled = cancelBtn.disabled = true;
+    const resp = await fetch(`${API_BASE}/${id}`, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({[field]: newVal}),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      valSpan.textContent = data[field] ?? newVal;
+      cancel(); showToast('Saved.');
+    } else {
+      errSpan.textContent = data.error || 'Error saving.';
+      saveBtn.disabled = cancelBtn.disabled = false;
+    }
+  }
+
+  saveBtn.addEventListener('click', save);
+  cancelBtn.addEventListener('click', cancel);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); save(); }
+    if (e.key === 'Escape') { cancel(); }
+  });
+}
+
+async function addRow(e) {
+  e.preventDefault();
+  const name = document.getElementById('new-name').value.trim();
+  const msg  = document.getElementById('add-msg');
+  if (!name) return;
+  const resp = await fetch(API_BASE, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name}),
+  });
+  const data = await resp.json();
+  if (resp.ok) {
+    msg.style.color = 'var(--success)'; msg.textContent = 'Added.';
+    const tbody = document.querySelector('#lookup-table tbody');
+    const tr = document.createElement('tr');
+    tr.id = 'row-' + data.id;
+    tr.innerHTML = `
+      <td class="muted">${data.id}</td>
+      <td class="editable-cell" data-id="${data.id}" data-field="name">
+        <span class="cell-val">${data.name}</span><span class="edit-hint">✎</span>
+      </td>
+      <td><button class="btn-sm btn-danger" onclick="deleteRow('${API_BASE}/${data.id}','row-${data.id}')">Delete</button></td>`;
+    tbody.appendChild(tr);
+    tr.querySelectorAll('.editable-cell').forEach(c => c.addEventListener('click', () => startEdit(c)));
+    document.getElementById('new-name').value = '';
+  } else {
+    msg.style.color = 'var(--danger)'; msg.textContent = data.error || 'Error.';
+  }
+}
+
+async function deleteRow(url, rowId) {
+  if (!confirm('Delete this entry?')) return;
+  const resp = await fetch(url, {method:'DELETE'});
+  const data = await resp.json();
+  if (resp.ok) { document.getElementById(rowId)?.remove(); showToast('Deleted.'); }
+  else { showToast(data.error || 'Cannot delete.'); }
+}
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, 2500);
+}
+</script>
+{% endblock %}

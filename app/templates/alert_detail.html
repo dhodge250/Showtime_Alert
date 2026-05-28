@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+{% block title %}Alert Detail – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
+    <h1>Alert Detail</h1>
+    <p class="subtitle">
+      {%- set am_list = alert_movies -%}
+      {% if am_list %}
+        {{ am_list | map(attribute='movie') | map(attribute='title') | join(' + ') }}
+      {% else %}
+        Any Movie
+      {% endif %}
+      &nbsp;@&nbsp;
+      {% if pref.theater %}{{ pref.theater.name }}{% else %}Any Theater{% endif %}
+    </p>
+  </div>
+  <a href="{{ url_for('main.alerts') }}" class="btn btn-ghost btn-sm">&larr; Back to Alerts</a>
+</div>
+
+<div class="two-col" style="align-items:start">
+  <!-- ── Summary card ──────────────────────────────────────────────── -->
+  <section class="card">
+    <h2>Alert Information</h2>
+    <dl class="detail-list">
+
+      <dt>Status</dt>
+      <dd>
+        {% if not pref.is_active %}
+          <span class="status-badge status-inactive">Inactive</span>
+        {% elif am_list %}
+          {%- set unsent = am_list | selectattr('alert_sent', 'equalto', false) | list -%}
+          {% if unsent %}
+            <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">
+              Watching ({{ unsent | length }} of {{ am_list | length }} remaining)
+            </span>
+          {% else %}
+            <span class="status-badge status-active">All Sent</span>
+          {% endif %}
+        {% elif pref.alert_sent %}
+          <span class="status-badge status-active">
+            Sent {% if pref.alert_sent_at %}{{ pref.alert_sent_at.strftime('%b %d, %Y at %I:%M %p') }}{% endif %}
+          </span>
+        {% else %}
+          <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">Watching</span>
+        {% endif %}
+      </dd>
+
+      <dt>Theater</dt>
+      <dd>
+        {% if pref.theater %}
+          <div style="font-weight:600">{{ pref.theater.name }}</div>
+          {% if pref.theater.city or pref.theater.state %}
+          <div class="text-muted" style="font-size:12px">
+            {{ [pref.theater.city, pref.theater.state, pref.theater.country] | select | join(', ') }}
+          </div>
+          {% endif %}
+        {% else %}
+          <span class="text-muted">Any Theater</span>
+        {% endif %}
+      </dd>
+
+      <dt>Created by</dt>
+      <dd>{{ pref.user.name if pref.user else '–' }}</dd>
+
+      <dt>Created at</dt>
+      <dd>{{ pref.created_at.strftime('%B %d, %Y at %I:%M %p') }}</dd>
+
+    </dl>
+
+    <div class="form-actions" style="margin-top:20px;gap:8px;display:flex;flex-wrap:wrap">
+      {% if pref.alert_sent or (am_list and am_list | selectattr('alert_sent', 'equalto', true) | list) %}
+      <button class="btn btn-outline" id="reset-btn" onclick="resetAlert()">Reset All</button>
+      {% endif %}
+      {% if pref.is_active %}
+      <button class="btn btn-danger" id="remove-btn" onclick="removeAlert()">Remove Alert</button>
+      {% endif %}
+    </div>
+    <div id="action-msg" style="margin-top:8px;font-size:13px"></div>
+  </section>
+
+  <!-- ── Notification history ─────────────────────────────────────── -->
+  <section class="card">
+    <h2>Notification History</h2>
+    {% if notifs %}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Sent At</th>
+            <th>Method</th>
+            <th>Result</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for n in notifs %}
+          <tr>
+            <td style="white-space:nowrap">
+              {{ n.sent_at.strftime('%b %d, %Y %I:%M %p') if n.sent_at else '–' }}
+            </td>
+            <td>
+              <span class="status-badge {% if n.method == 'email' %}status-active{% else %}status-inactive{% endif %}">
+                {{ n.method | upper }}
+              </span>
+            </td>
+            <td>
+              {% if n.success %}
+                <span style="color:var(--success);font-weight:600">&#10003; Sent</span>
+              {% else %}
+                <span style="color:var(--danger);font-weight:600">&#10007; Failed</span>
+              {% endif %}
+            </td>
+            <td style="font-size:12px;color:var(--text-muted)">
+              {{ n.error_message if n.error_message else '–' }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted">No notifications sent yet for this alert.</p>
+    {% endif %}
+  </section>
+</div>
+
+<!-- ── Movies being watched ──────────────────────────────────────────── -->
+{% if am_list %}
+<section class="card" style="margin-top:24px">
+  <h2>Movies Being Watched</h2>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Poster</th>
+          <th>Title</th>
+          <th>Release Date</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for am in am_list %}
+        <tr>
+          <td style="width:48px">
+            {% set poster = am.movie.poster_url or am.movie.image_url if am.movie else '' %}
+            {% if poster %}
+            <img src="{{ poster }}" alt="" style="height:48px;border-radius:4px" />
+            {% else %}
+            <span class="text-muted">–</span>
+            {% endif %}
+          </td>
+          <td style="font-weight:600">{{ am.movie.title if am.movie else 'Unknown' }}</td>
+          <td style="font-size:12px;color:var(--text-muted)">
+            {% if am.movie and am.movie.release_date %}
+              {{ am.movie.release_date.strftime('%b %d, %Y') }}
+            {% else %}–{% endif %}
+          </td>
+          <td>
+            {% if am.alert_sent %}
+              <span class="status-badge status-active">
+                Sent {% if am.alert_sent_at %}{{ am.alert_sent_at.strftime('%b %d') }}{% endif %}
+              </span>
+            {% else %}
+              <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">Watching</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if am.alert_sent %}
+            <button class="btn-sm btn-outline"
+                    onclick="resetMovieAlert({{ pref.id }}, {{ am.movie_id }})">
+              Reset
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<!-- ── Matching showtimes ────────────────────────────────────────────── -->
+<section class="card" style="margin-top:24px">
+  <h2>Matching Showtimes
+    <span class="text-muted" style="font-size:13px;font-weight:400;margin-left:8px">
+      ({{ showtimes | length }} found)
+    </span>
+  </h2>
+
+  {% if showtimes %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Date &amp; Time</th>
+          <th>Movie</th>
+          <th>Theater</th>
+          <th>Format</th>
+          <th>Tickets</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for st in showtimes %}
+        <tr>
+          <td style="white-space:nowrap">{{ st.show_datetime.strftime('%a, %b %d, %Y &ndash; %I:%M %p') }}</td>
+          <td>{{ st.movie.title if st.movie else '–' }}</td>
+          <td>
+            {{ st.theater.name if st.theater else '–' }}
+            {% if st.theater and (st.theater.city or st.theater.state) %}
+            <small class="text-muted" style="display:block;font-size:11px">
+              {{ [st.theater.city, st.theater.state] | select | join(', ') }}
+            </small>
+            {% endif %}
+          </td>
+          <td>{{ st.format_type or 'IMAX' }}</td>
+          <td>
+            {% if st.tickets_url %}
+            <a href="{{ st.tickets_url }}" target="_blank" rel="noopener" class="btn-sm btn-outline">Buy</a>
+            {% else %}
+            <span class="text-muted">–</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted">No matching showtimes found in the database yet.</p>
+  {% endif %}
+</section>
+
+<div id="toast" class="toast" style="display:none"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PREF_ID = {{ pref.id }};
+
+async function resetAlert() {
+  if (!confirm('Reset this entire alert so all movies can trigger again?')) return;
+  const resp = await fetch(`/api/alerts/${PREF_ID}/reset`, { method: 'PATCH' });
+  if (resp.ok) {
+    showToast('Alert reset — watching again.');
+    setTimeout(() => location.reload(), 800);
+  } else {
+    showMsg('Reset failed.', 'error');
+  }
+}
+
+async function resetMovieAlert(prefId, movieId) {
+  if (!confirm('Reset this movie so it can trigger an alert again?')) return;
+  const resp = await fetch(`/api/alerts/${prefId}/movies/${movieId}/reset`, { method: 'PATCH' });
+  if (resp.ok) {
+    showToast('Movie reset — watching again.');
+    setTimeout(() => location.reload(), 800);
+  } else {
+    showMsg('Reset failed.', 'error');
+  }
+}
+
+async function removeAlert() {
+  if (!confirm('Remove this alert? This cannot be undone.')) return;
+  const resp = await fetch(`/api/alerts/${PREF_ID}`, { method: 'DELETE' });
+  if (resp.ok) {
+    showToast('Alert removed.');
+    setTimeout(() => { window.location.href = '{{ url_for("main.alerts") }}'; }, 800);
+  } else {
+    showMsg('Remove failed.', 'error');
+  }
+}
+
+function showMsg(msg, type) {
+  const el = document.getElementById('action-msg');
+  el.textContent = msg;
+  el.style.color = type === 'error' ? '#ef5350' : '#22c55e';
+}
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, 2500);
+}
+</script>
+{% endblock %}

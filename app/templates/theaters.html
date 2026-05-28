@@ -3,53 +3,163 @@
 
 {% block content %}
 <div class="page-header">
-  <h1>🗺️ IMAX Theaters</h1>
-  <p class="subtitle">Browse IMAX locations, specs, and showtimes</p>
+  <h1>IMAX Theaters</h1>
+  <p class="subtitle">Browse IMAX locations, specs, and showtimes worldwide</p>
 </div>
 
 <div class="two-col-map">
   <!-- Theater List -->
-  <section class="theater-list" id="theater-list">
-    {% for theater in theaters %}
-    <div class="theater-card" id="tc-{{ theater.id }}"
-         onclick="selectTheater({{ theater.id }}, {{ theater.latitude }}, {{ theater.longitude }})">
-      <div class="theater-card-header">
-        <span class="chain-badge chain-{{ theater.chain|lower }}">{{ theater.chain }}</span>
-        <h3>{{ theater.name }}</h3>
-      </div>
-      <div class="theater-card-body">
-        <p class="theater-address">📍 {{ theater.address }}, {{ theater.city }}, {{ theater.state }}</p>
-        {% if theater.screen_size %}
-        <p>🖥️ <strong>Screen:</strong> {{ theater.screen_size }}</p>
-        {% endif %}
-        {% if theater.projector_type %}
-        <p>📽️ <strong>Projector:</strong> {{ theater.projector_type }}</p>
-        {% endif %}
-        {% if theater.audio_system %}
-        <p>🔊 <strong>Audio:</strong> {{ theater.audio_system }}</p>
-        {% endif %}
-        {% if theater.phone %}
-        <p>📞 {{ theater.phone }}</p>
-        {% endif %}
-      </div>
-      <div class="theater-card-footer">
-        <a href="{{ url_for('main.theater_detail', theater_id=theater.id) }}" class="btn-sm btn-outline">
-          View Showtimes →
-        </a>
-        {% if theater.website %}
-        <a href="{{ theater.website }}" target="_blank" class="btn-sm btn-ghost">Website ↗</a>
-        {% endif %}
-      </div>
+  <div class="theater-list-wrap">
+
+    <!-- Filter bar -->
+    <div class="theater-filters">
+      <input type="text" id="filter-search" placeholder="Search theaters…" oninput="applyFilters()" autocomplete="off">
+      <select id="filter-country" onchange="onCountryChange()">
+        <option value="">All Countries</option>
+        {% set countries = theaters | map(attribute='country_name') | map('default', 'United States') | unique | sort %}
+        {% for c in countries %}
+        <option value="{{ c }}">{{ c }}</option>
+        {% endfor %}
+      </select>
+      <select id="filter-state" onchange="onStateChange()">
+        <option value="">All States/Regions</option>
+      </select>
+      <select id="filter-city" onchange="applyFilters()">
+        <option value="">All Cities</option>
+      </select>
+      <select id="filter-aspect" onchange="applyFilters()">
+        <option value="">All Aspect Ratios</option>
+        {% for ar in aspect_ratios %}
+        <option value="{{ ar.label }}">{{ ar.label }}</option>
+        {% endfor %}
+      </select>
+      <select id="filter-projector" onchange="applyFilters()">
+        <option value="">All Projectors</option>
+        {% for pt in projector_types %}
+        <option value="{{ pt.name }}">{{ pt.name }}</option>
+        {% endfor %}
+      </select>
+      <select id="filter-continent" onchange="applyFilters()">
+        <option value="">All Regions</option>
+        {% for ct in continents %}
+        <option value="{{ ct.name }}">{{ ct.name }}</option>
+        {% endfor %}
+      </select>
+      <select id="filter-commercial" onchange="applyFilters()">
+        <option value="">All Commercial Films</option>
+        <option value="Yes">Yes</option>
+        <option value="Limited">Limited</option>
+        <option value="No">No</option>
+      </select>
+      <select id="filter-sort" onchange="applyFilters()">
+        <option value="country">Sort: Country</option>
+        <option value="state">Sort: State</option>
+        <option value="city">Sort: City</option>
+        <option value="name">Sort: Name</option>
+        <option value="chain">Sort: Chain</option>
+      </select>
+      <button id="btn-clear" class="btn-sm btn-ghost" onclick="clearFilters()" disabled>Clear</button>
     </div>
-    {% endfor %}
-  </section>
+
+    <div class="theater-list-header">
+      <span id="theater-count">{{ theaters|length }} IMAX theaters</span>
+    </div>
+
+    <section class="theater-list" id="theater-list">
+      {% for theater in theaters %}
+      {% set t_country = theater.country_name if theater.country_name else 'United States' %}
+      {% set t_state = theater.region_name if theater.region_name else '' %}
+      <div class="theater-card"
+           id="tc-{{ theater.id }}"
+           data-country="{{ t_country }}"
+           data-state="{{ t_state }}"
+           data-city="{{ theater.city_name or '' }}"
+           data-name="{{ theater.name }}"
+           data-chain="{{ theater.chain_name or '' }}"
+           data-aspect-ratio="{{ theater.aspect_ratio_label or '' }}"
+           data-projector="{{ theater.projector_type_name or '' }}"
+           data-continent="{{ theater.continent_name or '' }}"
+           data-commercial="{{ theater.commercial_films or '' }}"
+           onclick="selectTheater({{ theater.id }}, {{ theater.latitude or 'null' }}, {{ theater.longitude or 'null' }})">
+        <div class="theater-card-header">
+          {% if theater.chain_name %}
+          <span class="chain-badge chain-{{ theater.chain_name|lower|replace(' ','-') }}">{{ theater.chain_name }}</span>
+          {% endif %}
+          <h3>{{ theater.name }}</h3>
+        </div>
+        <div class="theater-card-body">
+          <p class="theater-address">
+            {{ theater.city_name }}{% if t_state %}, {{ t_state }}{% endif %} &mdash; {{ t_country }}
+          </p>
+          {% if theater.aspect_ratio_label or theater.screen_dims %}
+          <p class="theater-spec">
+            <span class="spec-label">Screen</span>
+            <span class="spec-value">
+              {% if theater.aspect_ratio_label %}
+                {{ theater.aspect_ratio_label }}
+                {% if theater.aspect_ratio_label == '1.43:1' %}
+                  <span class="screen-tag screen-tag-gt">IMAX GT</span>
+                {% elif theater.aspect_ratio_label == '1.90:1' %}
+                  <span class="screen-tag screen-tag-std">Standard</span>
+                {% endif %}
+              {% endif %}
+              {% if theater.screen_dims %}
+                <span class="screen-dims">{{ theater.screen_dims }}</span>
+              {% endif %}
+            </span>
+          </p>
+          {% endif %}
+          {% if theater.projector_type_name %}
+          <p class="theater-spec">
+            <span class="spec-label">Projector</span>
+            <span class="spec-value">{{ theater.projector_type_name }}</span>
+          </p>
+          {% endif %}
+          {% if theater.digital_projector_ar_label and theater.digital_projector_ar_label != theater.aspect_ratio_label %}
+          <p class="theater-spec">
+            <span class="spec-label">Digital AR</span>
+            <span class="spec-value">{{ theater.digital_projector_ar_label }}</span>
+          </p>
+          {% endif %}
+          {% if theater.film_projector_type_name %}
+          <p class="theater-spec">
+            <span class="spec-label">Film Proj.</span>
+            <span class="spec-value">{{ theater.film_projector_type_name }}</span>
+          </p>
+          {% endif %}
+          {% if theater.commercial_films %}
+          <p class="theater-spec">
+            <span class="spec-label">Commercial</span>
+            <span class="spec-value">
+              <span class="status-badge {% if theater.commercial_films == 'Yes' %}status-active{% elif theater.commercial_films == 'Limited' %}status-warning{% else %}status-inactive{% endif %}">{{ theater.commercial_films }}</span>
+            </span>
+          </p>
+          {% endif %}
+        </div>
+        <div class="theater-card-footer">
+          <a href="{{ url_for('main.theater_detail', theater_id=theater.id) }}" class="btn-sm btn-outline">
+            Showtimes
+          </a>
+          {% if current_user.is_authenticated and current_user.role_name in ['admin', 'editor'] %}
+          <a href="{{ url_for('main.admin_theater_edit', theater_id=theater.id) }}" class="btn-sm btn-outline">
+            Edit
+          </a>
+          {% endif %}
+          {% if theater.website %}
+          <a href="{{ theater.website }}" target="_blank" class="btn-sm btn-ghost">Website</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </section>
+  </div>
 
   <!-- Map -->
   <section class="map-section">
     <div id="theater-map"></div>
     <div class="map-legend">
-      <span>🔵 IMAX Theater</span>
-      <span>🟢 Your Location</span>
+      <span><span class="legend-dot legend-dot-theater"></span> IMAX Theater</span>
+      <span><span class="legend-dot legend-dot-user"></span> Your Location</span>
     </div>
   </section>
 </div>
@@ -57,84 +167,197 @@
 
 {% block scripts %}
 <script>
-  // Theater data for map
+  // ── Data ─────────────────────────────────────────────────────────────
   const theatersData = {{ theaters_json | tojson }};
 
-  // Init map
-  const map = L.map('theater-map', { zoomControl: true });
+  // Build nested lookup tables from the server-rendered card attributes
+  // (avoids any mismatch between JS data and what's on the DOM)
+  const statesByCountry = {};
+  const citiesByCountryState = {};
 
+  document.querySelectorAll('.theater-card').forEach(card => {
+    const co = card.dataset.country || 'United States';
+    const st = card.dataset.state  || '';
+    const ci = card.dataset.city   || '';
+    if (!statesByCountry[co]) statesByCountry[co] = new Set();
+    if (st) statesByCountry[co].add(st);
+    const key = co + '||' + st;
+    if (!citiesByCountryState[key]) citiesByCountryState[key] = new Set();
+    if (ci) citiesByCountryState[key].add(ci);
+  });
+
+  // ── Leaflet map ───────────────────────────────────────────────────────
+  const map = L.map('theater-map', { zoomControl: true });
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 18,
   }).addTo(map);
 
-  // Theater markers
   const theaterIcon = L.divIcon({
-    html: '<div class="map-marker map-marker-theater">🎬</div>',
-    className: '',
-    iconSize: [36, 36],
-    iconAnchor: [18, 36],
+    html: '<div class="map-dot map-dot-theater"></div>',
+    className: '', iconSize: [14,14], iconAnchor: [7,7], popupAnchor: [0,-10],
   });
-
   const userIcon = L.divIcon({
-    html: '<div class="map-marker map-marker-user">📍</div>',
-    className: '',
-    iconSize: [36, 36],
-    iconAnchor: [18, 36],
+    html: '<div class="map-dot map-dot-user"></div>',
+    className: '', iconSize: [14,14], iconAnchor: [7,7],
   });
 
   const markers = {};
-  const bounds = [];
+  const allBounds = [];
 
   theatersData.forEach(t => {
     if (!t.latitude || !t.longitude) return;
     const lat = parseFloat(t.latitude);
     const lng = parseFloat(t.longitude);
-    bounds.push([lat, lng]);
-
+    allBounds.push([lat, lng]);
+    const screenLabel = t.screen_size === '1.43:1' ? 'IMAX GT (1.43:1)' :
+                        t.screen_size === '1.90:1' ? 'Standard (1.90:1)' : (t.screen_size || '');
+    const locationLine = [t.city, t.state, t.country].filter(Boolean).join(', ');
+    const dimsLine = t.screen_dims ? `<br>${t.screen_dims}` : '';
     const marker = L.marker([lat, lng], { icon: theaterIcon })
       .addTo(map)
-      .bindPopup(`
-        <div class="popup-content">
-          <strong>${t.name}</strong><br>
-          ${t.address}, ${t.city}, ${t.state}<br>
-          <em>${t.projector_type || ''}</em><br>
-          <a href="/theaters/${t.id}">View Showtimes →</a>
-        </div>
-      `);
+      .bindPopup(`<div class="popup-content">
+        <strong>${t.name}</strong><br>
+        ${locationLine}<br>
+        ${t.projector_type ? '<em>' + t.projector_type + '</em><br>' : ''}
+        ${screenLabel}${dimsLine}<br>
+        <a href="/theaters/${t.id}">View Showtimes &rarr;</a>
+      </div>`);
     markers[t.id] = marker;
   });
 
-  if (bounds.length > 0) {
-    map.fitBounds(bounds, { padding: [40, 40] });
+  if (allBounds.length > 0) {
+    map.fitBounds(allBounds, { padding: [30, 30] });
   } else {
-    map.setView([39.5, -98.35], 4); // Center of US
+    map.setView([20, 0], 2);
   }
+  setTimeout(() => map.invalidateSize(), 200);
 
-  // User location
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(pos => {
-      const { latitude: lat, longitude: lng } = pos.coords;
-      L.marker([lat, lng], { icon: userIcon })
-        .addTo(map)
-        .bindPopup('<strong>Your Location</strong>')
-        .openPopup();
+      L.marker([pos.coords.latitude, pos.coords.longitude], { icon: userIcon })
+        .addTo(map).bindPopup('<strong>Your Location</strong>');
     });
   }
 
+  // ── Select a theater ─────────────────────────────────────────────────
   function selectTheater(id, lat, lng) {
-    // Highlight card
     document.querySelectorAll('.theater-card').forEach(c => c.classList.remove('selected'));
-    const card = document.getElementById(`tc-${id}`);
-    if (card) {
-      card.classList.add('selected');
-      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-    // Fly to marker
-    if (lat && lng) {
-      map.flyTo([lat, lng], 14, { animate: true, duration: 0.8 });
+    const card = document.getElementById('tc-' + id);
+    if (card) { card.classList.add('selected'); card.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+    if (lat != null && lng != null) {
+      map.flyTo([lat, lng], 14, {animate:true, duration:0.6});
       if (markers[id]) markers[id].openPopup();
     }
   }
+
+  // ── Dropdown rebuilders ───────────────────────────────────────────────
+  function populateSelect(selectEl, values, placeholder) {
+    const prev = selectEl.value;
+    selectEl.innerHTML = `<option value="">${placeholder}</option>`;
+    [...values].sort().forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      if (v === prev) opt.selected = true;
+      selectEl.appendChild(opt);
+    });
+  }
+
+  function onCountryChange() {
+    const co = document.getElementById('filter-country').value;
+    // Rebuild state dropdown scoped to country
+    const states = co && statesByCountry[co]
+      ? statesByCountry[co]
+      : new Set(Object.values(statesByCountry).flatMap(s => [...s]));
+    populateSelect(document.getElementById('filter-state'), states, 'All States/Regions');
+    // Rebuild city dropdown scoped to country (ignore state for now)
+    const cities = new Set();
+    Object.entries(citiesByCountryState).forEach(([key, set]) => {
+      if (!co || key.startsWith(co + '||')) set.forEach(c => cities.add(c));
+    });
+    populateSelect(document.getElementById('filter-city'), cities, 'All Cities');
+    applyFilters();
+  }
+
+  function onStateChange() {
+    const co = document.getElementById('filter-country').value;
+    const st = document.getElementById('filter-state').value;
+    // Rebuild city dropdown scoped to country+state
+    const cities = new Set();
+    Object.entries(citiesByCountryState).forEach(([key, set]) => {
+      const matchCo = !co || key.startsWith(co + '||');
+      const matchSt = !st || key === co + '||' + st || (!co && key.endsWith('||' + st));
+      if (matchCo && matchSt) set.forEach(c => cities.add(c));
+    });
+    populateSelect(document.getElementById('filter-city'), cities, 'All Cities');
+    applyFilters();
+  }
+
+  // ── Filter / sort (pure — no dropdown rebuilding) ─────────────────────
+  function applyFilters() {
+    const search = document.getElementById('filter-search').value.toLowerCase();
+    const co     = document.getElementById('filter-country').value;
+    const st     = document.getElementById('filter-state').value;
+    const ci     = document.getElementById('filter-city').value;
+    const ar     = document.getElementById('filter-aspect').value;
+    const pt     = document.getElementById('filter-projector').value;
+    const cont   = document.getElementById('filter-continent').value;
+    const comm   = document.getElementById('filter-commercial').value;
+    const sortBy = document.getElementById('filter-sort').value;
+
+    const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm);
+    document.getElementById('btn-clear').disabled = !filtersActive;
+
+    const cards = [...document.querySelectorAll('.theater-card')];
+    let visible = cards.filter(card =>
+      (!search || card.dataset.name.toLowerCase().includes(search) ||
+                  card.dataset.city.toLowerCase().includes(search)) &&
+      (!co   || card.dataset.country      === co) &&
+      (!st   || card.dataset.state        === st) &&
+      (!ci   || card.dataset.city         === ci) &&
+      (!ar   || card.dataset.aspectRatio  === ar) &&
+      (!pt   || card.dataset.projector    === pt) &&
+      (!cont || card.dataset.continent    === cont) &&
+      (!comm || card.dataset.commercial   === comm)
+    );
+
+    visible.sort((a, b) => (a.dataset[sortBy] || '').localeCompare(b.dataset[sortBy] || ''));
+
+    const list = document.getElementById('theater-list');
+    const visibleIds = new Set(visible.map(c => parseInt(c.id.replace('tc-',''))));
+
+    cards.forEach(c => c.style.display = 'none');
+    visible.forEach(c => { c.style.display = ''; list.appendChild(c); });
+
+    // Show/hide map markers to match visible cards
+    Object.entries(markers).forEach(([id, marker]) => {
+      if (visibleIds.has(parseInt(id))) {
+        if (!map.hasLayer(marker)) map.addLayer(marker);
+      } else {
+        if (map.hasLayer(marker)) map.removeLayer(marker);
+      }
+    });
+
+    document.getElementById('theater-count').textContent =
+      `${visible.length} of ${cards.length} IMAX theaters`;
+
+    const bounds = visible
+      .map(c => markers[parseInt(c.id.replace('tc-',''))])
+      .filter(Boolean)
+      .map(m => m.getLatLng());
+    if (bounds.length > 0) map.fitBounds(bounds.map(ll => [ll.lat, ll.lng]), {padding:[30,30]});
+  }
+
+  function clearFilters() {
+    document.getElementById('filter-search').value = '';
+    ['filter-country','filter-state','filter-city','filter-aspect','filter-projector','filter-continent','filter-commercial'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('filter-sort').value = 'country';
+    onCountryChange();  // resets state + city dropdowns then calls applyFilters
+  }
+
+  // Initial render
+  applyFilters();
 </script>
 {% endblock %}

@@ -29,8 +29,19 @@ class Config:
     TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
     TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")
 
-    # Scheduler settings
+    # Showtime scraper schedule
     SCRAPER_INTERVAL_MINUTES = int(os.environ.get("SCRAPER_INTERVAL_MINUTES", 30))
+
+    # Independent alert processor schedule
+    ALERT_INTERVAL_MINUTES = int(os.environ.get("ALERT_INTERVAL_MINUTES", 15))
+
+    # Venue crawler schedule — runs much less frequently than the showtime scraper
+    # because the list of IMAX theaters changes rarely (new openings, closures).
+    VENUE_CRAWL_INTERVAL_DAYS = int(os.environ.get("VENUE_CRAWL_INTERVAL_DAYS", 7))
+
+    # Run the venue crawler once on startup if the theaters table is empty.
+    # Set to "false" to disable the startup crawl (e.g. if seeding manually).
+    VENUE_CRAWL_ON_EMPTY = os.environ.get("VENUE_CRAWL_ON_EMPTY", "true").lower() == "true"
 
     # Google Maps / Leaflet (no API key needed for Leaflet + OpenStreetMap)
     MAPS_ENABLED = True
@@ -54,6 +65,7 @@ class TestingConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     WTF_CSRF_ENABLED = False
+    VENUE_CRAWL_ON_EMPTY = False
 
 
 config = {

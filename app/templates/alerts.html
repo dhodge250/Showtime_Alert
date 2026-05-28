@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="page-header">
-  <h1>🔔 Alert Management</h1>
+  <h1>Alert Management</h1>
   <p class="subtitle">Configure which movies and theaters to watch for new showtimes</p>
 </div>
 
@@ -12,51 +12,102 @@
   <section class="card">
     <h2>Create New Alert</h2>
     <form id="alert-form" class="form">
+
+      <!-- User selector: admins see a dropdown; non-admins get a hidden field -->
+      {% if current_user.role_name == 'admin' %}
       <div class="form-group">
         <label>User</label>
         {% if users %}
-        <select name="user_id" id="user_id" required class="form-control">
+        <select name="user_id" id="user_id" required>
           <option value="">— Select User —</option>
-          {% for user in users %}
-          <option value="{{ user.id }}">{{ user.name }} ({{ user.email or 'no email' }})</option>
+          {% for u in users %}
+          <option value="{{ u.id }}" {% if u.id == current_user.id %}selected{% endif %}>
+            {{ u.name }} ({{ u.email or 'no email' }})
+          </option>
           {% endfor %}
         </select>
         {% else %}
-        <p class="hint">No users found. <a href="{{ url_for('main.profile') }}">Create a profile</a> first.</p>
+        <p class="text-muted">No users found.</p>
         {% endif %}
       </div>
+      {% else %}
+      <input type="hidden" name="user_id" id="user_id" value="{{ current_user.id }}">
+      {% endif %}
 
+      <!-- Movie: multi-movie picker -->
       <div class="form-group">
-        <label>Movie <span class="hint">(leave blank = any movie)</span></label>
-        <select name="movie_id" id="movie_id" class="form-control">
-          <option value="">Any Movie</option>
-          {% for movie in movies %}
-          <option value="{{ movie.id }}" {% if request.args.get('movie_id')|int == movie.id %}selected{% endif %}>
-            {{ movie.title }}
-          </option>
-          {% endfor %}
-        </select>
+        <label>Movies <span class="text-muted" style="font-size:11px">(leave empty = any movie at the theater)</span></label>
+
+        <!-- Search box -->
+        <div id="movie-search-wrap" style="position:relative;display:none">
+          <input type="text" id="movie-search-input"
+                 placeholder="Search and add movies…"
+                 autocomplete="off"
+                 oninput="onMovieSearch(this.value)"
+                 onfocus="onMovieSearch(this.value)" />
+          <div id="movie-search-results" class="search-dropdown" style="display:none"></div>
+        </div>
+
+        <!-- Fallback: static dropdown when TMDB not configured -->
+        <div id="movie-static-wrap" style="display:none">
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="movie_id_static" style="flex:1">
+              <option value="">— Select Movie —</option>
+              {% for movie in movies %}
+              <option value="{{ movie.id }}">{{ movie.title }}</option>
+              {% endfor %}
+            </select>
+            <button type="button" class="btn-sm btn-outline" onclick="addStaticMovie()">Add</button>
+          </div>
+        </div>
+
+        <!-- Selected movies list -->
+        <ul id="selected-movies-list" style="list-style:none;padding:0;margin:8px 0 0"></ul>
+        <p id="any-movie-note" class="text-muted" style="font-size:12px;margin:4px 0 0">
+          No movies selected — alert will watch for <em>any</em> new movie at the chosen theater.
+        </p>
       </div>
 
+      <!-- Theater combo box -->
       <div class="form-group">
-        <label>Theater <span class="hint">(leave blank = any theater)</span></label>
-        <select name="theater_id" id="theater_id" class="form-control">
-          <option value="">Any Theater</option>
-          {% for theater in theaters %}
-          <option value="{{ theater.id }}" {% if request.args.get('theater_id')|int == theater.id %}selected{% endif %}>
-            {{ theater.name }} ({{ theater.city }}, {{ theater.state }})
-          </option>
-          {% endfor %}
-        </select>
+        <label>Theater <span class="text-muted" style="font-size:11px">(leave blank = any theater)</span></label>
+        <input type="hidden" id="theater_id" name="theater_id" value="" />
+        <div id="theater-search-wrap" style="position:relative">
+          <input type="text" id="theater-search-input"
+                 placeholder="Search theaters…"
+                 autocomplete="off"
+                 oninput="onTheaterSearch(this.value)" />
+          <div id="theater-search-results" class="search-dropdown" style="display:none"></div>
+        </div>
+        <div id="theater-selected" class="selected-movie-pill" style="display:none">
+          <span id="theater-label"></span>
+          <button type="button" class="btn-sm btn-ghost" onclick="clearTheaterSelection()" style="margin-left:8px">✕</button>
+        </div>
       </div>
 
-      <div class="form-help">
-        <p>📌 You'll receive a notification as soon as a new showtime matching your selection is detected.</p>
-        <p>✅ Once an alert is sent, it won't fire again for the same movie.</p>
+      <!-- Max notifications cap -->
+      <div class="form-group">
+        <label for="max_notifications">
+          Notification limit
+          <span class="text-muted" style="font-size:11px;font-weight:normal">(optional)</span>
+        </label>
+        <input type="number" id="max_notifications" name="max_notifications"
+               min="1" placeholder="Unlimited"
+               style="width:120px" />
+        <small class="text-muted" style="font-size:11px;margin-top:2px">
+          Auto-close this alert after sending this many notifications. Leave blank for unlimited.
+        </small>
       </div>
 
-      <button type="submit" class="btn btn-primary" id="create-btn">Create Alert</button>
-      <div id="form-msg" class="form-msg hidden"></div>
+      <p class="text-muted" style="font-size:12px;margin-bottom:8px">
+        You will be notified as soon as a showtime matching your selection is detected.
+        Each movie in an alert fires independently — the alert stays active until all movies have been detected.
+      </p>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" id="create-btn">Create Alert</button>
+      </div>
+      <div id="form-msg" style="margin-top:8px;font-size:13px"></div>
     </form>
   </section>
 
@@ -67,102 +118,323 @@
     <ul class="alert-preference-list">
       {% for pref in preferences %}
       <li class="pref-item {% if not pref.is_active %}inactive{% endif %}">
-        <div class="pref-info">
-          <div class="pref-title">
-            {{ pref.movie.title if pref.movie else '🎬 Any Movie' }}
-            <span class="at">@</span>
-            {{ pref.theater.name if pref.theater else '🏛️ Any Theater' }}
+        <a href="{{ url_for('main.alert_detail', pref_id=pref.id) }}" class="pref-link">
+          <div class="pref-info">
+            <div class="pref-title">
+              {%- set am_list = pref.alert_movies.all() -%}
+              {% if am_list %}
+                {%- set first = am_list[0] -%}
+                {% if first.movie and first.movie.poster_url %}
+                <img src="{{ first.movie.poster_url }}" alt="" style="height:32px;border-radius:3px;vertical-align:middle;margin-right:6px" />
+                {% endif %}
+                {{ first.movie.title if first.movie else 'Unknown' }}
+                {% if am_list|length > 1 %}
+                  <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent);margin-left:4px;font-size:11px">+{{ am_list|length - 1 }} more</span>
+                {% endif %}
+              {% else %}
+                Any Movie
+              {% endif %}
+              <span style="color:var(--text-muted)">&nbsp;@&nbsp;</span>
+              {{ pref.theater.name if pref.theater else 'Any Theater' }}
+            </div>
+            <div class="pref-meta" style="font-size:12px;color:var(--text-muted);margin-top:2px">
+              {{ pref.user.name if pref.user else '–' }}
+              &bull; {{ pref.created_at.strftime('%b %d, %Y') }}
+            </div>
+            <div style="margin-top:4px">
+              {% if not pref.is_active %}
+                <span class="status-badge status-inactive">Inactive</span>
+              {% elif am_list %}
+                {%- set unsent = am_list | selectattr('alert_sent', 'equalto', false) | list -%}
+                {%- set sent_count = am_list|length - unsent|length -%}
+                {% if unsent %}
+                  <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">Watching ({{ unsent|length }} remaining)</span>
+                {% else %}
+                  <span class="status-badge status-active">All Sent</span>
+                {% endif %}
+              {% elif pref.alert_sent %}
+                <span class="status-badge status-active">Sent {{ pref.alert_sent_at.strftime('%b %d') if pref.alert_sent_at else '' }}</span>
+              {% else %}
+                <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">Watching</span>
+              {% endif %}
+            </div>
           </div>
-          <div class="pref-meta">
-            👤 {{ pref.user.name if pref.user else '–' }}
-            &bull; {{ pref.created_at.strftime('%b %d, %Y') }}
-          </div>
-          <div class="pref-status">
-            {% if not pref.is_active %}
-              <span class="chip chip-gray">Inactive</span>
-            {% elif pref.alert_sent %}
-              <span class="chip chip-green">✅ Alert sent {{ pref.alert_sent_at.strftime('%b %d') if pref.alert_sent_at else '' }}</span>
-            {% else %}
-              <span class="chip chip-blue">🔔 Watching</span>
-            {% endif %}
-          </div>
+        </a>
+        <div class="pref-actions" style="display:flex;gap:6px;flex-shrink:0">
+          {% if pref.alert_sent or (pref.alert_movies.all() and pref.alert_movies.filter_by(alert_sent=True).count() > 0) %}
+          <button class="btn-sm btn-outline" onclick="resetAlert(event, {{ pref.id }})">Reset</button>
+          {% endif %}
+          {% if pref.is_active %}
+          <button class="btn-sm btn-danger" onclick="deleteAlert(event, {{ pref.id }})">Remove</button>
+          {% endif %}
         </div>
-        {% if pref.is_active and not pref.alert_sent %}
-        <button class="btn-sm btn-danger" onclick="deleteAlert({{ pref.id }})">✕ Remove</button>
-        {% endif %}
       </li>
       {% endfor %}
     </ul>
     {% else %}
-    <div class="empty-state">
-      <p>No alerts configured yet.</p>
-    </div>
+    <p class="text-muted">No alerts configured yet.</p>
     {% endif %}
   </section>
 </div>
 
-<div id="toast" class="toast hidden"></div>
+<div id="toast" class="toast" style="display:none"></div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-  document.getElementById('alert-form').addEventListener('submit', async e => {
-    e.preventDefault();
-    const btn = document.getElementById('create-btn');
-    btn.disabled = true;
+// ── Theater combo box ───────────────────────────────────────────────────
+const theatersData = {{ theaters_json | tojson }};
 
-    const body = {
-      user_id: parseInt(document.getElementById('user_id').value) || null,
-      movie_id: parseInt(document.getElementById('movie_id').value) || null,
-      theater_id: parseInt(document.getElementById('theater_id').value) || null,
-    };
+function onTheaterSearch(q) {
+  const results = document.getElementById('theater-search-results');
+  const lower = q.toLowerCase();
+  const matches = q.length === 0
+    ? theatersData.slice(0, 50)
+    : theatersData.filter(t =>
+        t.name.toLowerCase().includes(lower) ||
+        t.city.toLowerCase().includes(lower) ||
+        t.state.toLowerCase().includes(lower)
+      ).slice(0, 50);
 
-    if (!body.user_id) {
-      showMsg('Please select a user.', 'error');
-      btn.disabled = false;
-      return;
+  if (!matches.length) {
+    results.innerHTML = '<div class="search-dropdown-item text-muted">No results</div>';
+  } else {
+    results.innerHTML = matches.map(t => {
+      const loc = [t.city, t.state].filter(Boolean).join(', ');
+      return `<div class="search-dropdown-item" onclick='selectTheater(${t.id}, ${JSON.stringify(t.name)}, ${JSON.stringify(loc)})'>
+        <span>${t.name}</span>
+        ${loc ? `<small class="text-muted" style="margin-left:6px">${loc}</small>` : ''}
+      </div>`;
+    }).join('');
+  }
+  results.style.display = '';
+}
+
+function selectTheater(id, name, loc) {
+  document.getElementById('theater_id').value = id;
+  document.getElementById('theater-search-input').value = '';
+  document.getElementById('theater-search-results').style.display = 'none';
+  document.getElementById('theater-label').textContent = name + (loc ? ' (' + loc + ')' : '');
+  document.getElementById('theater-selected').style.display = '';
+}
+
+function clearTheaterSelection() {
+  document.getElementById('theater_id').value = '';
+  document.getElementById('theater-label').textContent = '';
+  document.getElementById('theater-selected').style.display = 'none';
+  document.getElementById('theater-search-input').value = '';
+}
+
+document.addEventListener('pointerdown', e => {
+  const wrap = document.getElementById('theater-search-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    document.getElementById('theater-search-results').style.display = 'none';
+  }
+});
+
+(function() {
+  const preId = {{ request.args.get('theater_id', 0) | int }};
+  if (preId) {
+    const t = theatersData.find(x => x.id === preId);
+    if (t) {
+      const loc = [t.city, t.state].filter(Boolean).join(', ');
+      selectTheater(t.id, t.name, loc);
     }
+  }
+})();
 
-    try {
-      const resp = await fetch('/api/alerts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await resp.json();
-      if (resp.ok) {
-        showMsg('✅ Alert created!', 'success');
-        setTimeout(() => location.reload(), 1000);
-      } else {
-        showMsg(`❌ ${data.error}`, 'error');
-      }
-    } catch (err) {
-      showMsg('❌ Request failed', 'error');
-    } finally {
-      btn.disabled = false;
-    }
-  });
+// ── Multi-movie picker ──────────────────────────────────────────────────
+// selectedMovies: array of {id, tmdb_id, title, poster_url}
+let selectedMovies = [];
+let searchTimeout = null;
 
-  async function deleteAlert(id) {
-    if (!confirm('Remove this alert?')) return;
-    const resp = await fetch(`/api/alerts/${id}`, { method: 'DELETE' });
+// Detect TMDB availability on page load
+(function detectTmdb() {
+  fetch('/api/movies/search?q=__probe__')
+    .then(r => r.json())
+    .then(() => {
+      document.getElementById('movie-search-wrap').style.display = '';
+      document.getElementById('movie-static-wrap').style.display = 'none';
+    })
+    .catch(() => {
+      document.getElementById('movie-search-wrap').style.display = 'none';
+      document.getElementById('movie-static-wrap').style.display = '';
+    });
+})();
+
+function onMovieSearch(q) {
+  clearTimeout(searchTimeout);
+  if (!q || q.length < 2) {
+    document.getElementById('movie-search-results').style.display = 'none';
+    return;
+  }
+  searchTimeout = setTimeout(() => {
+    fetch(`/api/movies/search?q=${encodeURIComponent(q)}`)
+      .then(r => r.json())
+      .then(results => renderMovieResults(results))
+      .catch(() => {});
+  }, 300);
+}
+
+function renderMovieResults(results) {
+  const dropdown = document.getElementById('movie-search-results');
+  if (!results.length) {
+    dropdown.innerHTML = '<div class="search-dropdown-item text-muted">No results</div>';
+    dropdown.style.display = '';
+    return;
+  }
+  dropdown.innerHTML = results.map(r => `
+    <div class="search-dropdown-item" onclick='addMovie(${JSON.stringify(r)})'>
+      ${r.poster_url ? `<img src="${r.poster_url}" style="height:32px;border-radius:3px;margin-right:8px;vertical-align:middle" />` : ''}
+      <span>${r.title}</span>
+      ${r.release_date ? `<small class="text-muted" style="margin-left:6px">${r.release_date.slice(0,4)}</small>` : ''}
+    </div>
+  `).join('');
+  dropdown.style.display = '';
+}
+
+function addMovie(movie) {
+  // Avoid duplicates
+  const key = movie.tmdb_id || movie.id;
+  if (selectedMovies.some(m => (m.tmdb_id || m.id) === key)) {
+    document.getElementById('movie-search-input').value = '';
+    document.getElementById('movie-search-results').style.display = 'none';
+    return;
+  }
+  selectedMovies.push(movie);
+  renderSelectedMovies();
+  document.getElementById('movie-search-input').value = '';
+  document.getElementById('movie-search-results').style.display = 'none';
+}
+
+function addStaticMovie() {
+  const sel = document.getElementById('movie_id_static');
+  const id = parseInt(sel.value);
+  if (!id) return;
+  const title = sel.options[sel.selectedIndex].text;
+  if (selectedMovies.some(m => m.id === id)) return;
+  selectedMovies.push({ id, title, poster_url: '', tmdb_id: null });
+  renderSelectedMovies();
+  sel.value = '';
+}
+
+function removeMovie(key) {
+  selectedMovies = selectedMovies.filter(m => (m.tmdb_id || m.id) !== key);
+  renderSelectedMovies();
+}
+
+function renderSelectedMovies() {
+  const list = document.getElementById('selected-movies-list');
+  const note = document.getElementById('any-movie-note');
+  if (!selectedMovies.length) {
+    list.innerHTML = '';
+    note.style.display = '';
+    return;
+  }
+  note.style.display = 'none';
+  list.innerHTML = selectedMovies.map(m => {
+    const key = m.tmdb_id || m.id;
+    return `<li class="selected-movie-pill" style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      ${m.poster_url ? `<img src="${m.poster_url}" style="height:28px;border-radius:3px" />` : ''}
+      <span style="flex:1">${m.title}</span>
+      <button type="button" class="btn-sm btn-ghost" onclick="removeMovie(${JSON.stringify(key)})">✕</button>
+    </li>`;
+  }).join('');
+}
+
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('movie-search-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    document.getElementById('movie-search-results').style.display = 'none';
+  }
+});
+
+// ── Alert form submit ───────────────────────────────────────────────────
+document.getElementById('alert-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('create-btn');
+  btn.disabled = true;
+
+  const userId    = parseInt(document.getElementById('user_id').value) || null;
+  const theaterId = parseInt(document.getElementById('theater_id').value) || null;
+
+  if (!userId) {
+    showMsg('Please select a user.', 'error');
+    btn.disabled = false;
+    return;
+  }
+
+  // Build movie_ids / tmdb_ids arrays from selectedMovies
+  const movie_ids  = selectedMovies.filter(m => m.id && !m.tmdb_id).map(m => m.id);
+  const tmdb_ids   = selectedMovies.filter(m => m.tmdb_id).map(m => m.tmdb_id);
+
+  const maxNotifRaw = document.getElementById('max_notifications').value.trim();
+  const maxNotif = maxNotifRaw !== '' ? parseInt(maxNotifRaw, 10) : null;
+
+  const body = {
+    user_id: userId,
+    theater_id: theaterId,
+    movie_ids,
+    tmdb_ids,
+    max_notifications: maxNotif,
+  };
+
+  try {
+    const resp = await fetch('/api/alerts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
     if (resp.ok) {
-      showToast('Alert removed.', 'success');
-      setTimeout(() => location.reload(), 700);
+      showMsg('Alert created!', 'success');
+      if (data.warning) {
+        setTimeout(() => showMsg(data.warning, 'warning'), 1200);
+        setTimeout(() => location.reload(), 5000);
+      } else {
+        setTimeout(() => location.reload(), 900);
+      }
+    } else {
+      const msg = data.message || data.error || 'Failed to create alert.';
+      showMsg(msg, 'error');
     }
+  } catch {
+    showMsg('Request failed.', 'error');
+  } finally {
+    btn.disabled = false;
   }
+});
 
-  function showMsg(msg, type) {
-    const el = document.getElementById('form-msg');
-    el.textContent = msg;
-    el.className = `form-msg ${type}`;
+async function deleteAlert(evt, id) {
+  evt.preventDefault();
+  if (!confirm('Remove this alert?')) return;
+  const resp = await fetch(`/api/alerts/${id}`, { method: 'DELETE' });
+  if (resp.ok) {
+    showToast('Alert removed.');
+    setTimeout(() => location.reload(), 700);
   }
+}
 
-  function showToast(msg, type) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.className = `toast ${type}`;
-    setTimeout(() => el.className = 'toast hidden', 3000);
+async function resetAlert(evt, id) {
+  evt.preventDefault();
+  if (!confirm('Reset this alert so it can fire again?')) return;
+  const resp = await fetch(`/api/alerts/${id}/reset`, { method: 'PATCH' });
+  if (resp.ok) {
+    showToast('Alert reset — watching again.');
+    setTimeout(() => location.reload(), 700);
   }
+}
+
+function showMsg(msg, type) {
+  const el = document.getElementById('form-msg');
+  el.textContent = msg;
+  el.style.color = type === 'error' ? '#ef5350' : type === 'warning' ? '#f59e0b' : '#22c55e';
+}
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, 2500);
+}
 </script>
 {% endblock %}
