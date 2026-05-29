@@ -555,3 +555,8 @@ def _record_notification(
         success=success,
         error_message=error or None,
     ))
+    from app.log_utils import write_log
+    log_level = "INFO" if success else "ERROR"
+    log_msg = f"Notification {'sent' if success else 'failed'} via {method} to {user.email} (alert #{pref.id})"
+    write_log("notification", log_msg, level=log_level, user_id=user.id,
+              details={"pref_id": pref.id, "method": method, "error": error or None})

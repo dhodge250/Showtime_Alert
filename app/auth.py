@@ -79,6 +79,8 @@ def login():
         if user and user.is_active and user.check_password(password):
             login_user(user, remember=remember)
             logger.info("User %s logged in.", user.email)
+            from app.log_utils import write_log
+            write_log("auth", f"Login: {user.email}", user_id=user.id)
             if user.force_password_change:
                 return redirect(url_for("auth.change_password"))
             next_page = request.args.get("next")
@@ -89,6 +91,8 @@ def login():
         else:
             error = "Invalid credentials or account is disabled."
             logger.warning("Failed login attempt for email=%r", email)
+            from app.log_utils import write_log
+            write_log("auth", f"Failed login attempt: {email}", level="WARNING")
 
     return render_template("login.html", error=error)
 
@@ -98,6 +102,8 @@ def login():
 def logout():
     """Log out the current user."""
     logger.info("User %s logged out.", current_user.email)
+    from app.log_utils import write_log
+    write_log("auth", f"Logout: {current_user.email}", user_id=current_user.id)
     logout_user()
     return redirect(url_for("auth.login"))
 
