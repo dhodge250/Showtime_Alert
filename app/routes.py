@@ -135,6 +135,8 @@ def theaters():
     aspect_ratios = AspectRatio.query.order_by(AspectRatio.label).all()
     projector_types = ProjectorType.query.order_by(ProjectorType.name).all()
     continents = Continent.query.order_by(Continent.name).all()
+    user_lat = current_user.location_lat if current_user.is_authenticated else None
+    user_lon = current_user.location_lon if current_user.is_authenticated else None
     return render_template(
         "theaters.html",
         theaters=theaters_list,
@@ -143,6 +145,8 @@ def theaters():
         projector_types=projector_types,
         continents=continents,
         unit=_current_unit(),
+        user_lat=user_lat,
+        user_lon=user_lon,
     )
 
 
@@ -172,15 +176,22 @@ def alerts():
     theaters_list = Theater.query.filter_by(is_active=True).all()
     movies_list = Movie.query.order_by(Movie.title).all()
 
+    from sqlalchemy import desc, case
     if current_user.role_name == "admin":
         users_list = User.query.all()
-        prefs = AlertPreference.query.order_by(AlertPreference.created_at.desc()).all()
+        prefs = AlertPreference.query.order_by(
+            case((AlertPreference.is_active == True, 0), else_=1),
+            desc(AlertPreference.created_at),
+        ).all()
     else:
         users_list = [current_user]
-        prefs = AlertPreference.query.filter_by(
-            user_id=current_user.id
-        ).order_by(AlertPreference.created_at.desc()).all()
+        prefs = AlertPreference.query.filter_by(user_id=current_user.id).order_by(
+            case((AlertPreference.is_active == True, 0), else_=1),
+            desc(AlertPreference.created_at),
+        ).all()
 
+    rows_per_page = _get_setting_int("rows_per_page", 15)
+    default_max_notifications = _get_setting_int("default_max_notifications", 0) or None
     return render_template(
         "alerts.html",
         theaters=theaters_list,
@@ -188,6 +199,8 @@ def alerts():
         movies=movies_list,
         users=users_list,
         preferences=prefs,
+        rows_per_page=rows_per_page,
+        default_max_notifications=default_max_notifications,
     )
 
 
@@ -518,6 +531,24 @@ def admin_settings():
             new_rows_per_page = max(5, min(100, int(request.form.get("rows_per_page", old_rows_per_page))))
         except (ValueError, TypeError):
             new_rows_per_page = old_rows_per_page
+
+        # default_max_notifications: optional positive int, blank = delete/clear
+        raw_def_max = request.form.get("default_max_notifications", "").strip()
+        if raw_def_max:
+            try:
+                new_def_max = str(max(1, int(raw_def_max)))
+            except (ValueError, TypeError):
+                new_def_max = ""
+        else:
+            new_def_max = ""
+        setting = Settings.query.filter_by(key="default_max_notifications").first()
+        if new_def_max:
+            if setting:
+                setting.value = new_def_max
+            else:
+                db.session.add(Settings(key="default_max_notifications", value=new_def_max))
+        elif setting:
+            db.session.delete(setting)
 
         for key, val in (
             ("scraper_interval_minutes", str(new_scraper)),

@@ -93,6 +93,7 @@
         </label>
         <input type="number" id="max_notifications" name="max_notifications"
                min="1" placeholder="Unlimited"
+               {% if default_max_notifications %}value="{{ default_max_notifications }}"{% endif %}
                style="width:120px" />
         <small class="text-muted" style="font-size:11px;margin-top:2px">
           Auto-close this alert after sending this many notifications. Leave blank for unlimited.
@@ -113,15 +114,24 @@
 
   <!-- Existing Alerts -->
   <section class="card">
-    <h2>Your Alerts</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <h2 style="margin:0">Your Alerts</h2>
+      {% if preferences %}
+      <label class="filter-label" style="font-size:13px;cursor:pointer;user-select:none">
+        <input type="checkbox" id="show-inactive-toggle" onchange="alInit()" style="accent-color:var(--accent)" />
+        Show inactive
+      </label>
+      {% endif %}
+    </div>
     {% if preferences %}
-    <ul class="alert-preference-list">
+    <ul class="alert-preference-list" id="al-list">
       {% for pref in preferences %}
-      <li class="pref-item {% if not pref.is_active %}inactive{% endif %}">
+      {%- set am_list = pref.alert_movies.all() -%}
+      <li class="pref-item {% if not pref.is_active %}inactive al-inactive{% endif %}"
+          data-active="{{ 'true' if pref.is_active else 'false' }}">
         <a href="{{ url_for('main.alert_detail', pref_id=pref.id) }}" class="pref-link">
           <div class="pref-info">
             <div class="pref-title">
-              {%- set am_list = pref.alert_movies.all() -%}
               {% if am_list %}
                 {%- set first = am_list[0] -%}
                 {% if first.movie and first.movie.poster_url %}
@@ -146,7 +156,6 @@
                 <span class="status-badge status-inactive">Inactive</span>
               {% elif am_list %}
                 {%- set unsent = am_list | selectattr('alert_sent', 'equalto', false) | list -%}
-                {%- set sent_count = am_list|length - unsent|length -%}
                 {% if unsent %}
                   <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">Watching ({{ unsent|length }} remaining)</span>
                 {% else %}
@@ -161,7 +170,7 @@
           </div>
         </a>
         <div class="pref-actions" style="display:flex;gap:6px;flex-shrink:0">
-          {% if pref.alert_sent or (pref.alert_movies.all() and pref.alert_movies.filter_by(alert_sent=True).count() > 0) %}
+          {% if pref.alert_sent or (am_list and pref.alert_movies.filter_by(alert_sent=True).count() > 0) %}
           <button class="btn-sm btn-outline" onclick="resetAlert(event, {{ pref.id }})">Reset</button>
           {% endif %}
           {% if pref.is_active %}
@@ -171,6 +180,11 @@
       </li>
       {% endfor %}
     </ul>
+    <div class="pagination-bar" id="al-pager" style="display:none">
+      <button class="btn-sm btn-ghost" id="al-prev" onclick="alPage(-1)">&#8592; Prev</button>
+      <span id="al-page-info" style="font-size:13px;color:var(--text-muted)"></span>
+      <button class="btn-sm btn-ghost" id="al-next" onclick="alPage(1)">Next &#8594;</button>
+    </div>
     {% else %}
     <p class="text-muted">No alerts configured yet.</p>
     {% endif %}
@@ -436,5 +450,50 @@ function showToast(msg) {
   el.style.display = '';
   setTimeout(() => { el.style.display = 'none'; }, 2500);
 }
+
+// ── Alert list: pagination + inactive toggle ────────────────────────────
+const _alPageSize = {{ rows_per_page }};
+let _alPage = 0;
+
+function alInit() {
+  _alPage = 0;
+  alApply();
+}
+
+function alPage(delta) {
+  const showInactive = document.getElementById('show-inactive-toggle')?.checked;
+  const items = [...document.querySelectorAll('#al-list .pref-item')]
+    .filter(li => showInactive || li.dataset.active === 'true');
+  const pages = Math.max(1, Math.ceil(items.length / _alPageSize));
+  _alPage = Math.max(0, Math.min(_alPage + delta, pages - 1));
+  alApply();
+}
+
+function alApply() {
+  const showInactive = document.getElementById('show-inactive-toggle')?.checked;
+  const allItems = [...document.querySelectorAll('#al-list .pref-item')];
+  const visible = allItems.filter(li => showInactive || li.dataset.active === 'true');
+  const pages = Math.max(1, Math.ceil(visible.length / _alPageSize));
+  _alPage = Math.min(_alPage, pages - 1);
+  const start = _alPage * _alPageSize;
+
+  allItems.forEach(li => li.style.display = 'none');
+  visible.forEach((li, i) => {
+    li.style.display = (i >= start && i < start + _alPageSize) ? '' : 'none';
+  });
+
+  const pager = document.getElementById('al-pager');
+  if (visible.length > _alPageSize) {
+    pager.style.display = '';
+    document.getElementById('al-page-info').textContent =
+      `Page ${_alPage + 1} of ${pages} (${visible.length} alerts)`;
+    document.getElementById('al-prev').disabled = _alPage === 0;
+    document.getElementById('al-next').disabled = _alPage >= pages - 1;
+  } else {
+    pager.style.display = 'none';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', alInit);
 </script>
 {% endblock %}

@@ -7,12 +7,8 @@
   <p class="subtitle">Browse IMAX locations, specs, and showtimes worldwide</p>
 </div>
 
-<div class="two-col-map">
-  <!-- Theater List -->
-  <div class="theater-list-wrap">
-
-    <!-- Filter bar -->
-    <div class="theater-filters">
+<!-- Filter bar (spans both columns) -->
+<div class="theater-filters">
       <input type="text" id="filter-search" placeholder="Search theaters…" oninput="applyFilters()" autocomplete="off">
       <select id="filter-country" onchange="onCountryChange()">
         <option value="">All Countries</option>
@@ -59,7 +55,11 @@
         <option value="chain">Sort: Chain</option>
       </select>
       <button id="btn-clear" class="btn-sm btn-ghost" onclick="clearFilters()" disabled>Clear</button>
-    </div>
+</div>
+
+<div class="two-col-map">
+  <!-- Theater List -->
+  <div class="theater-list-wrap">
 
     <div class="theater-list-header">
       <span id="theater-count">{{ theaters|length }} IMAX theaters</span>
@@ -233,7 +233,12 @@
   }
   setTimeout(() => map.invalidateSize(), 200);
 
-  if (navigator.geolocation) {
+  const _userLat = {{ user_lat | tojson }};
+  const _userLon = {{ user_lon | tojson }};
+  if (_userLat !== null && _userLon !== null) {
+    L.marker([_userLat, _userLon], { icon: userIcon })
+      .addTo(map).bindPopup('<strong>Your Location</strong>');
+  } else if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(pos => {
       L.marker([pos.coords.latitude, pos.coords.longitude], { icon: userIcon })
         .addTo(map).bindPopup('<strong>Your Location</strong>');
