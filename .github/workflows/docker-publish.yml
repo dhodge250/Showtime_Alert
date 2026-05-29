@@ -2,10 +2,10 @@ name: Docker
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     tags: ['v*.*.*']
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   test:
@@ -38,7 +38,7 @@ jobs:
           tags: imax-alert:scan
 
       - name: Trivy — scan image for OS and library CVEs
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: imax-alert:scan
           format: table
