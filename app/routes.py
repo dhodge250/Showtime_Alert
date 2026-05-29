@@ -109,6 +109,8 @@ def index():
         for am in a.alert_movies.all()
     }
 
+    rows_per_page = _get_setting_int("rows_per_page", 15)
+
     return render_template(
         "index.html",
         theaters=theaters,
@@ -118,6 +120,7 @@ def index():
         users=users,
         unit=_current_unit(),
         tracked_movie_count=len(tracked_movie_ids),
+        rows_per_page=rows_per_page,
     )
 
 
@@ -489,10 +492,11 @@ def admin_settings():
                 db.session.add(Settings(key=key, value=val))
 
         # --- Schedule keys (integers, validated with sensible bounds) ---
-        old_scraper = _get_setting_int("scraper_interval_minutes", 30)
-        old_alert   = _get_setting_int("alert_interval_minutes", 15)
-        old_crawl   = _get_setting_int("venue_crawl_interval_days", 7)
-        old_cleanup = _get_setting_int("cleanup_interval_hours", 24)
+        old_scraper       = _get_setting_int("scraper_interval_minutes", 30)
+        old_alert         = _get_setting_int("alert_interval_minutes", 15)
+        old_crawl         = _get_setting_int("venue_crawl_interval_days", 7)
+        old_cleanup       = _get_setting_int("cleanup_interval_hours", 24)
+        old_rows_per_page = _get_setting_int("rows_per_page", 15)
 
         try:
             new_scraper = max(1, min(1440, int(request.form.get("scraper_interval_minutes", old_scraper))))
@@ -510,12 +514,17 @@ def admin_settings():
             new_cleanup = max(1, min(168, int(request.form.get("cleanup_interval_hours", old_cleanup))))
         except (ValueError, TypeError):
             new_cleanup = old_cleanup
+        try:
+            new_rows_per_page = max(5, min(100, int(request.form.get("rows_per_page", old_rows_per_page))))
+        except (ValueError, TypeError):
+            new_rows_per_page = old_rows_per_page
 
         for key, val in (
             ("scraper_interval_minutes", str(new_scraper)),
             ("alert_interval_minutes",   str(new_alert)),
             ("venue_crawl_interval_days", str(new_crawl)),
             ("cleanup_interval_hours",   str(new_cleanup)),
+            ("rows_per_page",            str(new_rows_per_page)),
         ):
             setting = Settings.query.filter_by(key=key).first()
             if setting:
