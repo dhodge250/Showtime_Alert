@@ -172,15 +172,21 @@ def alerts():
     theaters_list = Theater.query.filter_by(is_active=True).all()
     movies_list = Movie.query.order_by(Movie.title).all()
 
+    from sqlalchemy import desc, case
     if current_user.role_name == "admin":
         users_list = User.query.all()
-        prefs = AlertPreference.query.order_by(AlertPreference.created_at.desc()).all()
+        prefs = AlertPreference.query.order_by(
+            case((AlertPreference.is_active == True, 0), else_=1),
+            desc(AlertPreference.created_at),
+        ).all()
     else:
         users_list = [current_user]
-        prefs = AlertPreference.query.filter_by(
-            user_id=current_user.id
-        ).order_by(AlertPreference.created_at.desc()).all()
+        prefs = AlertPreference.query.filter_by(user_id=current_user.id).order_by(
+            case((AlertPreference.is_active == True, 0), else_=1),
+            desc(AlertPreference.created_at),
+        ).all()
 
+    rows_per_page = _get_setting_int("rows_per_page", 15)
     return render_template(
         "alerts.html",
         theaters=theaters_list,
@@ -188,6 +194,7 @@ def alerts():
         movies=movies_list,
         users=users_list,
         preferences=prefs,
+        rows_per_page=rows_per_page,
     )
 
 
