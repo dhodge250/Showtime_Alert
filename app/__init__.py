@@ -436,6 +436,7 @@ def _seed_default_settings():
         ("twilio_from_number", ""),
         # Maintenance
         ("cleanup_interval_hours", "24"),
+        ("log_retention_days", "30"),
         # Alert processor
         ("alert_interval_minutes", "15"),
     ]

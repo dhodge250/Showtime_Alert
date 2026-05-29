@@ -71,17 +71,34 @@ def _alert_job(app):
 
 
 def _cleanup_job(app):
-    """Scheduled job: delete expired showtimes then orphaned movies."""
+    """Scheduled job: delete expired showtimes, orphaned movies, and old log entries."""
+    from datetime import datetime, timezone, timedelta
+
     from app.scraper import cleanup_expired_showtimes, cleanup_orphaned_movies
 
     with app.app_context():
         count = cleanup_expired_showtimes()
         orphaned = cleanup_orphaned_movies()
+
+        # Purge log entries older than log_retention_days setting
+        try:
+            from app import db
+            from app.models import LogEntry, Settings
+            s = Settings.query.filter_by(key="log_retention_days").first()
+            retention_days = int(s.value) if s and s.value else 30
+            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            deleted_logs = LogEntry.query.filter(LogEntry.created_at < cutoff).delete()
+            db.session.commit()
+        except Exception as exc:  # noqa: BLE001
+            deleted_logs = 0
+            logger.warning("Log cleanup failed: %s", exc)
+
         logger.info(
-            "Cleanup job complete. %d expired showtime(s) removed, "
-            "%d orphaned movie(s) removed.",
+            "Cleanup job complete. %d expired showtime(s), %d orphaned movie(s), "
+            "%d log entries removed.",
             count,
             orphaned,
+            deleted_logs,
         )
 
 

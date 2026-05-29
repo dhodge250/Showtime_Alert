@@ -540,6 +540,11 @@ def admin_settings():
             new_rows_per_page = max(5, min(100, int(request.form.get("rows_per_page", old_rows_per_page))))
         except (ValueError, TypeError):
             new_rows_per_page = old_rows_per_page
+        old_log_retention = _get_setting_int("log_retention_days", 30)
+        try:
+            new_log_retention = max(1, min(365, int(request.form.get("log_retention_days", old_log_retention))))
+        except (ValueError, TypeError):
+            new_log_retention = old_log_retention
 
         # default_max_notifications: optional positive int, blank = delete/clear
         raw_def_max = request.form.get("default_max_notifications", "").strip()
@@ -565,6 +570,7 @@ def admin_settings():
             ("venue_crawl_interval_days", str(new_crawl)),
             ("cleanup_interval_hours",   str(new_cleanup)),
             ("rows_per_page",            str(new_rows_per_page)),
+            ("log_retention_days",       str(new_log_retention)),
         ):
             setting = Settings.query.filter_by(key=key).first()
             if setting:
@@ -656,6 +662,31 @@ def api_test_smtp():
         "success": False,
         "message": err or "Send failed — check credentials and server settings.",
     })
+
+
+@main_bp.route("/admin/logs")
+@require_role("admin")
+def admin_logs():
+    """Admin: in-app structured log viewer."""
+    from app.models import LogEntry
+    level_filter = request.args.get("level", "")
+    category_filter = request.args.get("category", "")
+    q = LogEntry.query
+    if level_filter:
+        q = q.filter_by(level=level_filter)
+    if category_filter:
+        q = q.filter_by(category=category_filter)
+    entries = q.order_by(LogEntry.created_at.desc()).limit(500).all()
+    rows_per_page = _get_setting_int("rows_per_page", 15)
+    categories = ["auth", "alert", "scrape", "notification", "admin", "system"]
+    return render_template(
+        "admin_logs.html",
+        entries=entries,
+        rows_per_page=rows_per_page,
+        level_filter=level_filter,
+        category_filter=category_filter,
+        categories=categories,
+    )
 
 
 @main_bp.route("/admin/lookup")
@@ -1310,6 +1341,13 @@ def api_create_alert():
 
     resp_data = pref.to_dict()
 
+    movie_names = [m.title for m in resolved_movies] if resolved_movies else ["Any Movie"]
+    theater_name = Theater.query.get(theater_id).name if theater_id else "Any Theater"
+    from app.log_utils import write_log
+    write_log("alert", f"Alert created: {', '.join(movie_names)} @ {theater_name}",
+              user_id=current_user.id,
+              details={"pref_id": pref.id, "theater_id": theater_id})
+
     # Warn if the selected theater has no website
     if theater_id:
         t = Theater.query.get(theater_id)
@@ -1332,6 +1370,9 @@ def api_delete_alert(pref_id):
         abort(403)
     pref.is_active = False
     db.session.commit()
+    from app.log_utils import write_log
+    write_log("alert", f"Alert removed (id={pref_id})", user_id=current_user.id,
+              details={"pref_id": pref_id})
     return jsonify({"deleted": True, "id": pref_id})
 
 
@@ -1385,6 +1426,9 @@ def api_reset_alert(pref_id):
     pref.alert_sent_at = None
     pref.is_active = True
     db.session.commit()
+    from app.log_utils import write_log
+    write_log("alert", f"Alert reset (id={pref_id})", user_id=current_user.id,
+              details={"pref_id": pref_id})
     return jsonify(pref.to_dict())
 
 
@@ -1957,9 +2001,14 @@ def api_trigger_scrape():
     from app.notifications import process_new_showtimes
     from app.scraper import run_all_scrapers
 
+    from app.log_utils import write_log
+    write_log("scrape", "Manual scrape triggered", user_id=current_user.id)
     try:
         new_showtimes = run_all_scrapers()
         sent = process_new_showtimes(current_app._get_current_object(), new_showtimes)
+        write_log("scrape", f"Manual scrape complete: {len(new_showtimes)} new showtimes, {sent} notifications",
+                  user_id=current_user.id,
+                  details={"new_showtimes": len(new_showtimes), "notifications_sent": sent})
         return jsonify({
             "status": "ok",
             "new_showtimes": len(new_showtimes),
@@ -1967,6 +2016,7 @@ def api_trigger_scrape():
         })
     except Exception as exc:  # noqa: BLE001
         logger.error("Manual scrape failed: %s", exc)
+        write_log("scrape", f"Manual scrape failed: {exc}", level="ERROR", user_id=current_user.id)
         return jsonify({"status": "error", "message": str(exc)}), 500
 
 

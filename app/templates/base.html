@@ -43,6 +43,7 @@
       <a href="{{ url_for('main.admin_users') }}"      {% if request.endpoint in ['main.admin_users','main.admin_user_edit'] %}class="active"{% endif %}>Users</a>
       <a href="{{ url_for('main.admin_lookup') }}"     {% if request.endpoint and 'lookup' in request.endpoint %}class="active"{% endif %}>Lookup Tables</a>
       <a href="{{ url_for('main.admin_settings') }}"   {% if request.endpoint == 'main.admin_settings' %}class="active"{% endif %}>Settings</a>
+      <a href="{{ url_for('main.admin_logs') }}"       {% if request.endpoint == 'main.admin_logs' %}class="active"{% endif %}>Logs</a>
     </nav>
     {% endif %}
     {% with messages = get_flashed_messages(with_categories=true) %}
