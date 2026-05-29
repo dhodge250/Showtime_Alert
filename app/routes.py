@@ -222,8 +222,9 @@ def alert_detail(pref_id):
             q = q.filter(Showtime.movie_id.in_(movie_ids))
     showtimes = q.order_by(Showtime.show_datetime).all()
 
-    notifs = pref.notifications.all()
+    notifs = Notification.query.filter_by(alert_preference_id=pref.id).order_by(Notification.sent_at.desc()).all()
     alert_movies = pref.alert_movies.all()
+    rows_per_page = _get_setting_int("rows_per_page", 15)
 
     return render_template(
         "alert_detail.html",
@@ -231,6 +232,7 @@ def alert_detail(pref_id):
         alert_movies=alert_movies,
         showtimes=showtimes,
         notifs=notifs,
+        rows_per_page=rows_per_page,
     )
 
 
