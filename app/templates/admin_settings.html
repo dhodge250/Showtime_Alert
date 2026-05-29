@@ -272,6 +272,16 @@
           {% endif %}
         </div>
       </div>
+
+      <div class="form-group" style="margin-top:8px">
+        <label for="rows_per_page">Dashboard rows per page</label>
+        <input type="number" id="rows_per_page" name="rows_per_page"
+               min="5" max="100"
+               value="{{ settings.get('rows_per_page', '15') }}" />
+        <small class="text-muted" style="font-size:11px;margin-top:2px">
+          Number of rows shown per page in the Available Showtimes and Active Alerts lists. Min: 5, Max: 100.
+        </small>
+      </div>
     </div>
 
   </div><!-- .form-grid -->
