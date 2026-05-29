@@ -63,6 +63,8 @@ db.sqlite3-journal
 
 # IMAX Alert database
 imax_alert.db
+*.db-shm
+*.db-wal
 
 # Flask stuff:
 instance/
