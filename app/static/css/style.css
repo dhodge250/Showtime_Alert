@@ -158,6 +158,7 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 24px;
+  align-items: start;
 }
 @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
 
