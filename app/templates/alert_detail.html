@@ -67,6 +67,19 @@
       <dt>Created at</dt>
       <dd>{{ pref.created_at.strftime('%B %d, %Y at %I:%M %p') }}</dd>
 
+      <dt>Notification limit</dt>
+      <dd>
+        {% if pref.max_notifications %}
+          {{ pref.max_notifications }}
+          <span class="text-muted" style="font-size:12px">
+            ({{ pref.notifications_fired or 0 }} sent,
+            {{ [pref.max_notifications - (pref.notifications_fired or 0), 0] | max }} remaining)
+          </span>
+        {% else %}
+          <span class="text-muted">Unlimited (one-shot per movie)</span>
+        {% endif %}
+      </dd>
+
     </dl>
 
     <div class="form-actions" style="margin-top:20px;gap:8px;display:flex;flex-wrap:wrap">
@@ -206,7 +219,7 @@
       <tbody>
         {% for st in showtimes %}
         <tr>
-          <td style="white-space:nowrap">{{ st.show_datetime.strftime('%a, %b %d, %Y &ndash; %I:%M %p') }}</td>
+          <td style="white-space:nowrap">{{ st.show_datetime.strftime('%b %d, %Y %I:%M %p') }}</td>
           <td>{{ st.movie.title if st.movie else '–' }}</td>
           <td>
             {{ st.theater.name if st.theater else '–' }}
