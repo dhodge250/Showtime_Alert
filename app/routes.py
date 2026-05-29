@@ -135,6 +135,8 @@ def theaters():
     aspect_ratios = AspectRatio.query.order_by(AspectRatio.label).all()
     projector_types = ProjectorType.query.order_by(ProjectorType.name).all()
     continents = Continent.query.order_by(Continent.name).all()
+    user_lat = current_user.location_lat if current_user.is_authenticated else None
+    user_lon = current_user.location_lon if current_user.is_authenticated else None
     return render_template(
         "theaters.html",
         theaters=theaters_list,
@@ -143,6 +145,8 @@ def theaters():
         projector_types=projector_types,
         continents=continents,
         unit=_current_unit(),
+        user_lat=user_lat,
+        user_lon=user_lon,
     )
 
 

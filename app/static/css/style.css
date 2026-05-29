@@ -477,8 +477,8 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
   display: grid;
   grid-template-columns: 400px 1fr;
   gap: 24px;
-  /* Fill viewport below nav + page-header */
-  height: calc(100vh - var(--nav-height) - 120px);
+  /* Fill viewport below nav + page-header + filter bar */
+  height: calc(100vh - var(--nav-height) - 174px);
   min-height: 560px;
   align-items: stretch;
 }
@@ -496,6 +496,7 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
   padding: 8px 0 6px;
   flex-shrink: 0;
   flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 .theater-filters select,
 .theater-filters input[type="text"] {
