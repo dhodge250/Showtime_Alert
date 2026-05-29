@@ -1,5 +1,6 @@
 """IMAX Alert Flask application factory."""
 import logging
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask
 from flask_limiter import Limiter
@@ -69,6 +70,19 @@ def create_app(config_name="default"):
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
+
+    def _in_user_tz(dt, tz_name="UTC", fmt="%b %d, %Y %I:%M %p"):
+        if dt is None:
+            return "–"
+        try:
+            tz = ZoneInfo(tz_name or "UTC")
+        except (ZoneInfoNotFoundError, KeyError):
+            tz = ZoneInfo("UTC")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        return dt.astimezone(tz).strftime(fmt)
+
+    app.jinja_env.filters["in_user_tz"] = _in_user_tz
 
     # Exempt the JSON API blueprint from CSRF — fetch() calls use JSON bodies
     # which browsers cannot send cross-origin without CORS pre-flight, so the
@@ -223,6 +237,12 @@ def _run_migrations():
             "venue_key", "theaters",
             "ALTER TABLE theaters ADD COLUMN venue_key VARCHAR(100)",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_theaters_venue_key ON theaters(venue_key)",
+        ),
+        # User timezone preference (IANA string)
+        (
+            "timezone", "users",
+            "ALTER TABLE users ADD COLUMN timezone VARCHAR(100) DEFAULT 'UTC'",
+            None,
         ),
     ]
 
