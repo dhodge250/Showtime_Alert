@@ -121,13 +121,33 @@
       <a href="{{ url_for('main.alerts') }}" class="btn-sm btn-outline">Manage</a>
     </div>
     {% if alerts %}
-    <ul class="alert-list">
+    <div class="showtime-filters" id="alert-filters">
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span class="filter-label">Movie (Ctrl+click for multiple)</span>
+        <select id="al-filter-movie" multiple onchange="applyAlertFilters()"></select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span class="filter-label">Theater (Ctrl+click for multiple)</span>
+        <select id="al-filter-theater" multiple onchange="applyAlertFilters()"></select>
+      </div>
+      <select id="al-filter-status" onchange="applyAlertFilters()">
+        <option value="">All Statuses</option>
+        <option value="active">Active</option>
+        <option value="sent">Sent</option>
+      </select>
+      <button class="btn-sm btn-ghost" id="al-clear-btn" onclick="clearAlertFilters()" disabled>Clear</button>
+      <span id="al-count" class="text-muted" style="font-size:13px;white-space:nowrap">{{ alerts|length }} alerts</span>
+    </div>
+    <ul class="alert-list" id="alert-list">
       {% for a in alerts %}
-      <li class="alert-item {% if a.alert_sent %}sent{% endif %}">
+      {% set am_titles = a.alert_movies.all() | map(attribute='movie') | selectattr('title') | map(attribute='title') | list %}
+      <li class="alert-item {% if a.alert_sent %}sent{% endif %}"
+          data-movies="{{ (am_titles | join('|') | lower) if am_titles else 'any' }}"
+          data-theater="{{ (a.theater.name | lower) if a.theater else 'any' }}"
+          data-sent="{{ 'true' if a.alert_sent else 'false' }}">
         <a href="{{ url_for('main.alert_detail', pref_id=a.id) }}" class="alert-item-link">
           <div class="alert-icon">{% if a.alert_sent %}✅{% else %}🔔{% endif %}</div>
           <div class="alert-info">
-            {% set am_titles = a.alert_movies.all() | map(attribute='movie') | selectattr('title') | map(attribute='title') | list %}
             <strong>{{ am_titles | join(', ') if am_titles else 'Any Movie' }}</strong>
             <span>@ {{ a.theater.name if a.theater else 'Any Theater' }}</span>
             {% if a.alert_sent %}<span class="chip chip-green">Sent</span>{% endif %}
@@ -136,6 +156,11 @@
       </li>
       {% endfor %}
     </ul>
+    <div class="pagination-bar" id="al-pagination" style="display:none">
+      <button class="btn-sm btn-ghost" id="al-prev-btn" onclick="alChangePage(-1)" disabled>← Prev</button>
+      <span id="al-page-info" class="text-muted" style="font-size:13px"></span>
+      <button class="btn-sm btn-ghost" id="al-next-btn" onclick="alChangePage(1)">Next →</button>
+    </div>
     {% else %}
     <div class="empty-state">
       <p>No alerts configured.</p>
@@ -207,6 +232,87 @@
 
   loadSchedulerStatus();
   applyShowtimeFilters();
+
+  // ── Active Alerts filter + pagination ──────────────────────────────
+  let _alPage = 0;
+
+  function _buildAlertFilterOptions() {
+    const items      = Array.from(document.querySelectorAll('#alert-list li'));
+    const movieSet   = new Set();
+    const theaterSet = new Set();
+    items.forEach(item => {
+      item.dataset.movies.split('|').forEach(m => { if (m && m !== 'any') movieSet.add(m); });
+      const t = item.dataset.theater;
+      if (t && t !== 'any') theaterSet.add(t);
+    });
+    const movieSel   = document.getElementById('al-filter-movie');
+    const theaterSel = document.getElementById('al-filter-theater');
+    if (movieSel)   [...movieSet].sort().forEach(m => movieSel.appendChild(new Option(m, m)));
+    if (theaterSel) [...theaterSet].sort().forEach(t => theaterSel.appendChild(new Option(t, t)));
+  }
+
+  function _applyAlPagination(visibleItems) {
+    const total = visibleItems.length;
+    const pages = Math.max(1, Math.ceil(total / _stPageSize));
+    if (_alPage >= pages) _alPage = pages - 1;
+    const start = _alPage * _stPageSize;
+    const end   = start + _stPageSize;
+    visibleItems.forEach((item, i) => { item.style.display = (i >= start && i < end) ? '' : 'none'; });
+    const bar = document.getElementById('al-pagination');
+    if (bar) {
+      if (total > _stPageSize) {
+        bar.style.display = '';
+        document.getElementById('al-page-info').textContent = `Page ${_alPage + 1} of ${pages} (${total} total)`;
+        document.getElementById('al-prev-btn').disabled = (_alPage === 0);
+        document.getElementById('al-next-btn').disabled = (_alPage >= pages - 1);
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+  }
+
+  function alChangePage(delta) { _alPage += delta; applyAlertFilters(); }
+
+  function applyAlertFilters() {
+    const movies   = Array.from((document.getElementById('al-filter-movie')   || {selectedOptions:[]}).selectedOptions).map(o => o.value);
+    const theaters = Array.from((document.getElementById('al-filter-theater') || {selectedOptions:[]}).selectedOptions).map(o => o.value);
+    const status   = (document.getElementById('al-filter-status') || {value:''}).value;
+
+    const allItems = Array.from(document.querySelectorAll('#alert-list li'));
+    const matched  = allItems.filter(item => {
+      const itemMovies  = item.dataset.movies.split('|');
+      const itemTheater = item.dataset.theater;
+      const itemSent    = item.dataset.sent;
+      return (
+        (!movies.length   || movies.some(m => itemMovies.includes(m))) &&
+        (!theaters.length || theaters.includes(itemTheater)) &&
+        (!status || (status === 'sent' ? itemSent === 'true' : itemSent === 'false'))
+      );
+    });
+
+    allItems.forEach(i => i.style.display = 'none');
+    _applyAlPagination(matched);
+
+    const anyActive = movies.length || theaters.length || status;
+    const clearBtn = document.getElementById('al-clear-btn');
+    if (clearBtn) clearBtn.disabled = !anyActive;
+    const countEl = document.getElementById('al-count');
+    if (countEl) countEl.textContent = matched.length === allItems.length
+      ? `${allItems.length} alerts`
+      : `${matched.length} of ${allItems.length} alerts`;
+  }
+
+  function clearAlertFilters() {
+    Array.from((document.getElementById('al-filter-movie')   || {options:[]}).options).forEach(o => o.selected = false);
+    Array.from((document.getElementById('al-filter-theater') || {options:[]}).options).forEach(o => o.selected = false);
+    const s = document.getElementById('al-filter-status');
+    if (s) s.value = '';
+    _alPage = 0;
+    applyAlertFilters();
+  }
+
+  _buildAlertFilterOptions();
+  applyAlertFilters();
 
   // ── Showtime filter + sort + pagination ────────────────────────────
   let _stSortCol = null;
