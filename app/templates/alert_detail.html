@@ -94,10 +94,15 @@
   </section>
 
   <!-- ── Notification history ─────────────────────────────────────── -->
-  <section class="card">
-    <h2>Notification History</h2>
+  <section class="card" style="display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <h2 style="margin:0">Notification History</h2>
+      {% if notifs %}
+      <span id="nh-count-label" class="text-muted" style="font-size:13px"></span>
+      {% endif %}
+    </div>
     {% if notifs %}
-    <div class="table-wrap">
+    <div class="table-wrap" style="flex:1;overflow-y:auto;max-height:340px">
       <table class="data-table">
         <thead>
           <tr>
@@ -107,12 +112,10 @@
             <th>Details</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="nh-tbody">
           {% for n in notifs %}
-          <tr>
-            <td style="white-space:nowrap">
-              {{ n.sent_at | in_user_tz(current_user.timezone) if n.sent_at else '–' }}
-            </td>
+          <tr class="nh-row">
+            <td style="white-space:nowrap">{{ n.sent_at | in_user_tz(current_user.timezone) if n.sent_at else '–' }}</td>
             <td>
               <span class="status-badge {% if n.method == 'email' %}status-active{% else %}status-inactive{% endif %}">
                 {{ n.method | upper }}
@@ -125,13 +128,16 @@
                 <span style="color:var(--danger);font-weight:600">&#10007; Failed</span>
               {% endif %}
             </td>
-            <td style="font-size:12px;color:var(--text-muted)">
-              {{ n.error_message if n.error_message else '–' }}
-            </td>
+            <td style="font-size:12px;color:var(--text-muted)">{{ n.error_message or '–' }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
+    </div>
+    <div class="pagination-bar" id="nh-pager" style="display:none;margin-top:8px">
+      <button class="btn-sm btn-ghost" id="nh-prev" onclick="nhPage(-1)" disabled>← Prev</button>
+      <span id="nh-page-info" class="text-muted" style="font-size:13px"></span>
+      <button class="btn-sm btn-ghost" id="nh-next" onclick="nhPage(1)">Next →</button>
     </div>
     {% else %}
     <p class="text-muted">No notifications sent yet for this alert.</p>
@@ -298,5 +304,36 @@ function showToast(msg) {
   el.style.display = '';
   setTimeout(() => { el.style.display = 'none'; }, 2500);
 }
+
+// ── Notification history pagination ────────────────────────────────
+const _nhPageSize = {{ rows_per_page }};
+let _nhPage = 0;
+
+function nhPage(delta) {
+  const rows = document.querySelectorAll('#nh-tbody .nh-row');
+  const pages = Math.max(1, Math.ceil(rows.length / _nhPageSize));
+  _nhPage = Math.min(Math.max(0, _nhPage + delta), pages - 1);
+  nhApply();
+}
+
+function nhApply() {
+  const rows = [...document.querySelectorAll('#nh-tbody .nh-row')];
+  if (!rows.length) return;
+  const pages = Math.max(1, Math.ceil(rows.length / _nhPageSize));
+  const start = _nhPage * _nhPageSize;
+  rows.forEach((r, i) => { r.style.display = (i >= start && i < start + _nhPageSize) ? '' : 'none'; });
+  const pager = document.getElementById('nh-pager');
+  const label = document.getElementById('nh-count-label');
+  if (rows.length > _nhPageSize) {
+    pager.style.display = '';
+    document.getElementById('nh-prev').disabled = _nhPage === 0;
+    document.getElementById('nh-next').disabled = _nhPage >= pages - 1;
+    document.getElementById('nh-page-info').textContent =
+      `Page ${_nhPage + 1} of ${pages} (${rows.length} total)`;
+  }
+  if (label) label.textContent = `${rows.length} notification${rows.length !== 1 ? 's' : ''}`;
+}
+
+document.addEventListener('DOMContentLoaded', nhApply);
 </script>
 {% endblock %}
