@@ -75,6 +75,20 @@ def create_app(config_name="default"):
     # risk CSRF tokens protect against doesn't apply to these endpoints.
     csrf.exempt(api_bp)
 
+    # Inject a cache-busting fingerprint into every template context.
+    # Uses style.css mtime so any CSS change immediately invalidates the
+    # browser cache without a manual version bump.
+    import os as _os
+    _css_path = _os.path.join(app.static_folder, "css", "style.css")
+
+    @app.context_processor
+    def _static_fingerprint():
+        try:
+            v = int(_os.path.getmtime(_css_path))
+        except OSError:
+            v = 0
+        return {"static_v": v}
+
     return app
 
 

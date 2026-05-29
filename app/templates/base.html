@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}IMAX Alert{% endblock %}</title>
   <meta name="csrf-token" content="{{ csrf_token() }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ static_v }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet.css') }}" />
   <script src="{{ url_for('static', filename='vendor/leaflet.js') }}"></script>
 </head>
