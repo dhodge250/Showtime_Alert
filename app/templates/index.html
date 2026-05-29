@@ -37,29 +37,33 @@
       </button>
     </div>
     {% if recent_showtimes %}
+    {% set st_movies   = recent_showtimes | map(attribute='movie')   | select | map(attribute='title') | select | unique | sort | list %}
+    {% set st_theaters = recent_showtimes | map(attribute='theater') | select | map(attribute='name')  | select | unique | sort | list %}
     <div class="showtime-filters" id="showtime-filters">
-      {% set st_movies   = recent_showtimes | map(attribute='movie')   | select | map(attribute='title') | select | unique | sort | list %}
-      {% set st_theaters = recent_showtimes | map(attribute='theater') | select | map(attribute='name')  | select | unique | sort | list %}
-      <div style="display:flex;flex-direction:column;gap:2px">
-        <span class="filter-label">Movie (Ctrl+click for multiple)</span>
-        <select id="st-filter-movie" multiple onchange="applyShowtimeFilters()">
-          {% for m in st_movies %}<option value="{{ m | lower }}">{{ m }}</option>{% endfor %}
-        </select>
+      <div class="ms" id="ms-st-movie">
+        <button class="ms-btn" type="button"><span class="ms-lbl">All Movies</span> ▾</button>
+        <div class="ms-panel">
+          {% for m in st_movies %}
+          <label class="ms-item"><input type="checkbox" value="{{ m | lower }}" onchange="stFilterChange()"> {{ m }}</label>
+          {% endfor %}
+        </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:2px">
-        <span class="filter-label">Theater (Ctrl+click for multiple)</span>
-        <select id="st-filter-theater" multiple onchange="applyShowtimeFilters()">
-          {% for t in st_theaters %}<option value="{{ t | lower }}">{{ t }}</option>{% endfor %}
-        </select>
+      <div class="ms" id="ms-st-theater">
+        <button class="ms-btn" type="button"><span class="ms-lbl">All Theaters</span> ▾</button>
+        <div class="ms-panel">
+          {% for t in st_theaters %}
+          <label class="ms-item"><input type="checkbox" value="{{ t | lower }}" onchange="stFilterChange()"> {{ t }}</label>
+          {% endfor %}
+        </div>
       </div>
-      <select id="st-filter-format" onchange="applyShowtimeFilters()">
+      <select id="st-filter-format" onchange="stFilterChange()">
         <option value="">All Formats</option>
         {% set formats = recent_showtimes | map(attribute='format_type') | select | unique | sort %}
         {% for f in formats %}
         <option value="{{ f }}">{{ f }}</option>
         {% endfor %}
       </select>
-      <input type="date" id="st-filter-date" title="Show on or after this date" onchange="applyShowtimeFilters()">
+      <input type="date" id="st-filter-date" title="Show on or after this date" onchange="stFilterChange()">
       <button class="btn-sm btn-ghost" id="st-clear-btn" onclick="clearShowtimeFilters()" disabled>Clear</button>
       <span id="st-count" class="text-muted" style="font-size:13px;white-space:nowrap">{{ recent_showtimes|length }} showtimes</span>
     </div>
@@ -122,15 +126,15 @@
     </div>
     {% if alerts %}
     <div class="showtime-filters" id="alert-filters">
-      <div style="display:flex;flex-direction:column;gap:2px">
-        <span class="filter-label">Movie (Ctrl+click for multiple)</span>
-        <select id="al-filter-movie" multiple onchange="applyAlertFilters()"></select>
+      <div class="ms" id="ms-al-movie">
+        <button class="ms-btn" type="button"><span class="ms-lbl">All Movies</span> ▾</button>
+        <div class="ms-panel" id="ms-al-movie-panel"></div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:2px">
-        <span class="filter-label">Theater (Ctrl+click for multiple)</span>
-        <select id="al-filter-theater" multiple onchange="applyAlertFilters()"></select>
+      <div class="ms" id="ms-al-theater">
+        <button class="ms-btn" type="button"><span class="ms-lbl">All Theaters</span> ▾</button>
+        <div class="ms-panel" id="ms-al-theater-panel"></div>
       </div>
-      <select id="al-filter-status" onchange="applyAlertFilters()">
+      <select id="al-filter-status" onchange="alFilterChange()">
         <option value="">All Statuses</option>
         <option value="active">Active</option>
         <option value="sent">Sent</option>
@@ -183,111 +187,198 @@
 
 {% block scripts %}
 <script>
-  async function triggerScrape() {
-    const btn = document.getElementById('refresh-btn');
-    btn.disabled = true;
-    btn.textContent = '↻ Scraping…';
-    try {
-      const resp = await fetch('/api/scheduler/trigger', { method: 'POST' });
-      const data = await resp.json();
-      showToast(
-        resp.ok
-          ? `✅ Scrape complete: ${data.new_showtimes} new showtimes, ${data.notifications_sent} notifications sent.`
-          : `❌ Error: ${data.message}`,
-        resp.ok ? 'success' : 'error'
-      );
-      if (resp.ok && data.new_showtimes > 0) {
-        setTimeout(() => location.reload(), 1500);
-      }
-    } catch (e) {
-      showToast('❌ Request failed', 'error');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '↻ Refresh Now';
+  // ── Multi-select dropdown component ──────────────────────────────────
+  function msVals(id) {
+    return Array.from(document.querySelectorAll('#' + id + ' .ms-panel input:checked')).map(i => i.value);
+  }
+  function msUpdateLabel(id, allLabel) {
+    const v = msVals(id);
+    const lbl = document.querySelector('#' + id + ' .ms-lbl');
+    if (lbl) lbl.textContent = v.length ? v.length + ' selected' : allLabel;
+    const btn = document.querySelector('#' + id + ' .ms-btn');
+    if (btn) btn.classList.toggle('active', v.length > 0);
+  }
+  function msClear(id, allLabel) {
+    document.querySelectorAll('#' + id + ' .ms-panel input').forEach(i => i.checked = false);
+    msUpdateLabel(id, allLabel);
+  }
+  document.addEventListener('click', e => {
+    if (e.target.closest('.ms-panel')) return;
+    if (e.target.closest('.ms-btn')) {
+      const panel = e.target.closest('.ms').querySelector('.ms-panel');
+      const opening = panel.style.display !== 'block';
+      document.querySelectorAll('.ms-panel').forEach(p => p.style.display = 'none');
+      if (opening) panel.style.display = 'block';
+    } else {
+      document.querySelectorAll('.ms-panel').forEach(p => p.style.display = 'none');
+    }
+  });
+
+  // ── Shared page size (declared before any function that uses it) ──────
+  const _pageSize = {{ rows_per_page }};
+
+  // ── Showtime filter + sort + pagination ──────────────────────────────
+  let _stSortCol = null, _stSortAsc = true, _stPage = 0;
+
+  function _applyStPagination(matched) {
+    const total = matched.length;
+    const pages = Math.max(1, Math.ceil(total / _pageSize));
+    if (_stPage >= pages) _stPage = pages - 1;
+    const start = _stPage * _pageSize, end = start + _pageSize;
+    matched.forEach((r, i) => { r.style.display = (i >= start && i < end) ? '' : 'none'; });
+    const bar = document.getElementById('st-pagination');
+    if (!bar) return;
+    if (total > _pageSize) {
+      bar.style.display = '';
+      document.getElementById('st-page-info').textContent =
+        'Page ' + (_stPage + 1) + ' of ' + pages + ' (' + total + ' total)';
+      document.getElementById('st-prev-btn').disabled = !_stPage;
+      document.getElementById('st-next-btn').disabled = _stPage >= pages - 1;
+    } else {
+      bar.style.display = 'none';
     }
   }
 
-  async function loadSchedulerStatus() {
-    try {
-      const resp = await fetch('/api/scheduler/status');
-      const data = await resp.json();
-      const el = document.getElementById('scheduler-status');
-      if (data.running) {
-        const scrapeJob = data.jobs.find(j => j.id === 'imax_scrape');
-        const iso = scrapeJob?.next_run_iso;
-        const next = iso ? new Date(iso).toLocaleString([], {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'unknown';
-        el.innerHTML = `<span class="chip chip-green">Running</span> &mdash; Next scrape: <strong>${next}</strong>`;
-      } else {
-        el.innerHTML = `<span class="chip chip-red">Stopped</span>`;
-      }
-    } catch {}
+  function stInit() {
+    const allRows = Array.from(document.querySelectorAll('#showtimes-tbody tr'));
+    if (!allRows.length) return;
+    _applyStPagination(allRows);
+    const cnt = document.getElementById('st-count');
+    if (cnt) cnt.textContent = allRows.length + ' showtimes';
   }
 
-  function showToast(msg, type) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.className = `toast ${type}`;
-    setTimeout(() => el.className = 'toast hidden', 4000);
+  function stFilterChange() {
+    msUpdateLabel('ms-st-movie', 'All Movies');
+    msUpdateLabel('ms-st-theater', 'All Theaters');
+    _stPage = 0;
+    applyShowtimeFilters();
   }
 
-  loadSchedulerStatus();
-  applyShowtimeFilters();
+  function applyShowtimeFilters() {
+    const movies   = msVals('ms-st-movie');
+    const theaters = msVals('ms-st-theater');
+    const format   = document.getElementById('st-filter-format').value.toLowerCase();
+    const date     = document.getElementById('st-filter-date').value;
 
-  // ── Active Alerts filter + pagination ──────────────────────────────
+    const allRows = Array.from(document.querySelectorAll('#showtimes-tbody tr'));
+    const matched = allRows.filter(row =>
+      (!movies.length   || movies.includes(row.dataset.movie)) &&
+      (!theaters.length || theaters.includes(row.dataset.theater)) &&
+      (!format || row.dataset.format === format) &&
+      (!date   || row.dataset.date >= date)
+    );
+
+    allRows.forEach(r => r.style.display = 'none');
+    _applyStPagination(matched);
+
+    const anyActive = movies.length || theaters.length || format || date;
+    document.getElementById('st-clear-btn').disabled = !anyActive;
+    document.getElementById('st-count').textContent =
+      matched.length === allRows.length
+        ? allRows.length + ' showtimes'
+        : matched.length + ' of ' + allRows.length + ' showtimes';
+  }
+
+  function clearShowtimeFilters() {
+    msClear('ms-st-movie', 'All Movies');
+    msClear('ms-st-theater', 'All Theaters');
+    document.getElementById('st-filter-format').value = '';
+    document.getElementById('st-filter-date').value = '';
+    _stSortCol = null; _stSortAsc = true; _stPage = 0;
+    document.querySelectorAll('#showtimes-table .sort-indicator').forEach(el => el.textContent = '');
+    stInit();
+  }
+
+  function stChangePage(delta) { _stPage += delta; applyShowtimeFilters(); }
+
+  function sortShowtimes(col) {
+    if (_stSortCol === col) { _stSortAsc = !_stSortAsc; } else { _stSortCol = col; _stSortAsc = true; }
+    document.querySelectorAll('#showtimes-table th[data-col]').forEach(th => {
+      th.querySelector('.sort-indicator').textContent =
+        th.dataset.col === col ? (_stSortAsc ? ' ▲' : ' ▼') : '';
+    });
+    const tbody = document.getElementById('showtimes-tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const key = col === 'date' ? 'datetime' : col;
+    rows.sort((a, b) => {
+      const av = a.dataset[key] || '', bv = b.dataset[key] || '';
+      return _stSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    applyShowtimeFilters();
+  }
+
+  // ── Active Alerts filter + pagination ────────────────────────────────
   let _alPage = 0;
 
-  function _buildAlertFilterOptions() {
-    const items      = Array.from(document.querySelectorAll('#alert-list li'));
-    const movieSet   = new Set();
-    const theaterSet = new Set();
+  function _applyAlPagination(matched) {
+    const total = matched.length;
+    const pages = Math.max(1, Math.ceil(total / _pageSize));
+    if (_alPage >= pages) _alPage = pages - 1;
+    const start = _alPage * _pageSize, end = start + _pageSize;
+    matched.forEach((item, i) => { item.style.display = (i >= start && i < end) ? '' : 'none'; });
+    const bar = document.getElementById('al-pagination');
+    if (!bar) return;
+    if (total > _pageSize) {
+      bar.style.display = '';
+      document.getElementById('al-page-info').textContent =
+        'Page ' + (_alPage + 1) + ' of ' + pages + ' (' + total + ' total)';
+      document.getElementById('al-prev-btn').disabled = !_alPage;
+      document.getElementById('al-next-btn').disabled = _alPage >= pages - 1;
+    } else {
+      bar.style.display = 'none';
+    }
+  }
+
+  function alInit() {
+    const items = Array.from(document.querySelectorAll('#alert-list li'));
+    if (!items.length) return;
+
+    const movieSet = new Set(), theaterSet = new Set();
     items.forEach(item => {
       item.dataset.movies.split('|').forEach(m => { if (m && m !== 'any') movieSet.add(m); });
       const t = item.dataset.theater;
       if (t && t !== 'any') theaterSet.add(t);
     });
-    const movieSel   = document.getElementById('al-filter-movie');
-    const theaterSel = document.getElementById('al-filter-theater');
-    if (movieSel)   [...movieSet].sort().forEach(m => movieSel.appendChild(new Option(m, m)));
-    if (theaterSel) [...theaterSet].sort().forEach(t => theaterSel.appendChild(new Option(t, t)));
+
+    const mPanel = document.getElementById('ms-al-movie-panel');
+    const tPanel = document.getElementById('ms-al-theater-panel');
+    if (mPanel) [...movieSet].sort().forEach(m => {
+      const safe = m.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+      mPanel.insertAdjacentHTML('beforeend',
+        '<label class="ms-item"><input type="checkbox" value="' + safe + '" onchange="alFilterChange()"> ' + safe + '</label>');
+    });
+    if (tPanel) [...theaterSet].sort().forEach(t => {
+      const safe = t.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+      tPanel.insertAdjacentHTML('beforeend',
+        '<label class="ms-item"><input type="checkbox" value="' + safe + '" onchange="alFilterChange()"> ' + safe + '</label>');
+    });
+
+    _applyAlPagination(items);
+    const cnt = document.getElementById('al-count');
+    if (cnt) cnt.textContent = items.length + ' alerts';
   }
 
-  function _applyAlPagination(visibleItems) {
-    const total = visibleItems.length;
-    const pages = Math.max(1, Math.ceil(total / _stPageSize));
-    if (_alPage >= pages) _alPage = pages - 1;
-    const start = _alPage * _stPageSize;
-    const end   = start + _stPageSize;
-    visibleItems.forEach((item, i) => { item.style.display = (i >= start && i < end) ? '' : 'none'; });
-    const bar = document.getElementById('al-pagination');
-    if (bar) {
-      if (total > _stPageSize) {
-        bar.style.display = '';
-        document.getElementById('al-page-info').textContent = `Page ${_alPage + 1} of ${pages} (${total} total)`;
-        document.getElementById('al-prev-btn').disabled = (_alPage === 0);
-        document.getElementById('al-next-btn').disabled = (_alPage >= pages - 1);
-      } else {
-        bar.style.display = 'none';
-      }
-    }
+  function alFilterChange() {
+    msUpdateLabel('ms-al-movie', 'All Movies');
+    msUpdateLabel('ms-al-theater', 'All Theaters');
+    _alPage = 0;
+    applyAlertFilters();
   }
-
-  function alChangePage(delta) { _alPage += delta; applyAlertFilters(); }
 
   function applyAlertFilters() {
-    const movies   = Array.from((document.getElementById('al-filter-movie')   || {selectedOptions:[]}).selectedOptions).map(o => o.value);
-    const theaters = Array.from((document.getElementById('al-filter-theater') || {selectedOptions:[]}).selectedOptions).map(o => o.value);
-    const status   = (document.getElementById('al-filter-status') || {value:''}).value;
+    const movies   = msVals('ms-al-movie');
+    const theaters = msVals('ms-al-theater');
+    const status   = (document.getElementById('al-filter-status') || {value: ''}).value;
 
     const allItems = Array.from(document.querySelectorAll('#alert-list li'));
     const matched  = allItems.filter(item => {
-      const itemMovies  = item.dataset.movies.split('|');
-      const itemTheater = item.dataset.theater;
-      const itemSent    = item.dataset.sent;
-      return (
-        (!movies.length   || movies.some(m => itemMovies.includes(m))) &&
-        (!theaters.length || theaters.includes(itemTheater)) &&
-        (!status || (status === 'sent' ? itemSent === 'true' : itemSent === 'false'))
-      );
+      const im = item.dataset.movies.split('|');
+      const it = item.dataset.theater;
+      const is = item.dataset.sent;
+      return (!movies.length   || movies.some(m => im.includes(m))) &&
+             (!theaters.length || theaters.includes(it)) &&
+             (!status || (status === 'sent' ? is === 'true' : is === 'false'));
     });
 
     allItems.forEach(i => i.style.display = 'none');
@@ -298,104 +389,74 @@
     if (clearBtn) clearBtn.disabled = !anyActive;
     const countEl = document.getElementById('al-count');
     if (countEl) countEl.textContent = matched.length === allItems.length
-      ? `${allItems.length} alerts`
-      : `${matched.length} of ${allItems.length} alerts`;
+      ? allItems.length + ' alerts'
+      : matched.length + ' of ' + allItems.length + ' alerts';
   }
 
   function clearAlertFilters() {
-    Array.from((document.getElementById('al-filter-movie')   || {options:[]}).options).forEach(o => o.selected = false);
-    Array.from((document.getElementById('al-filter-theater') || {options:[]}).options).forEach(o => o.selected = false);
+    msClear('ms-al-movie', 'All Movies');
+    msClear('ms-al-theater', 'All Theaters');
     const s = document.getElementById('al-filter-status');
     if (s) s.value = '';
     _alPage = 0;
-    applyAlertFilters();
+    alInit();
   }
 
-  _buildAlertFilterOptions();
-  applyAlertFilters();
+  function alChangePage(delta) { _alPage += delta; applyAlertFilters(); }
 
-  // ── Showtime filter + sort + pagination ────────────────────────────
-  let _stSortCol = null;
-  let _stSortAsc = true;
-  let _stPage    = 0;
-  const _stPageSize = {{ rows_per_page }};
+  // ── Toast ─────────────────────────────────────────────────────────────
+  function showToast(msg, type) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast ' + type;
+    setTimeout(() => el.className = 'toast hidden', 4000);
+  }
 
-  function _applyStPagination(visibleRows) {
-    const total = visibleRows.length;
-    const pages = Math.max(1, Math.ceil(total / _stPageSize));
-    if (_stPage >= pages) _stPage = pages - 1;
-    const start = _stPage * _stPageSize;
-    const end   = start + _stPageSize;
-
-    visibleRows.forEach((row, i) => { row.style.display = (i >= start && i < end) ? '' : 'none'; });
-
-    const bar = document.getElementById('st-pagination');
-    if (total > _stPageSize) {
-      bar.style.display = '';
-      document.getElementById('st-page-info').textContent = `Page ${_stPage + 1} of ${pages} (${total} total)`;
-      document.getElementById('st-prev-btn').disabled = (_stPage === 0);
-      document.getElementById('st-next-btn').disabled = (_stPage >= pages - 1);
-    } else {
-      bar.style.display = 'none';
+  // ── Scrape trigger ────────────────────────────────────────────────────
+  async function triggerScrape() {
+    const btn = document.getElementById('refresh-btn');
+    btn.disabled = true;
+    btn.textContent = '↻ Scraping…';
+    try {
+      const resp = await fetch('/api/scheduler/trigger', { method: 'POST' });
+      const data = await resp.json();
+      showToast(
+        resp.ok
+          ? '✅ Scrape complete: ' + data.new_showtimes + ' new showtimes, ' + data.notifications_sent + ' notifications sent.'
+          : '❌ Error: ' + data.message,
+        resp.ok ? 'success' : 'error'
+      );
+      if (resp.ok && data.new_showtimes > 0) setTimeout(() => location.reload(), 1500);
+    } catch (e) {
+      showToast('❌ Request failed', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '↻ Refresh Now';
     }
   }
 
-  function stChangePage(delta) { _stPage += delta; applyShowtimeFilters(); }
-
-  function applyShowtimeFilters() {
-    const movies   = Array.from(document.getElementById('st-filter-movie').selectedOptions).map(o => o.value);
-    const theaters = Array.from(document.getElementById('st-filter-theater').selectedOptions).map(o => o.value);
-    const format   = document.getElementById('st-filter-format').value.toLowerCase();
-    const date     = document.getElementById('st-filter-date').value;
-
-    const allRows = Array.from(document.querySelectorAll('#showtimes-tbody tr'));
-    const matched = allRows.filter(row =>
-      (!movies.length   || movies.includes(row.dataset.movie)) &&
-      (!theaters.length || theaters.includes(row.dataset.theater)) &&
-      (!format  || row.dataset.format === format) &&
-      (!date    || row.dataset.date >= date)
-    );
-
-    // Hide all, then pagination will reveal the current page slice
-    allRows.forEach(r => r.style.display = 'none');
-    _applyStPagination(matched);
-
-    const anyActive = movies.length || theaters.length || format || date;
-    document.getElementById('st-clear-btn').disabled = !anyActive;
-    document.getElementById('st-count').textContent =
-      matched.length === allRows.length
-        ? `${allRows.length} showtimes`
-        : `${matched.length} of ${allRows.length} showtimes`;
+  // ── Scheduler status ──────────────────────────────────────────────────
+  async function loadSchedulerStatus() {
+    try {
+      const resp = await fetch('/api/scheduler/status');
+      const data = await resp.json();
+      const el = document.getElementById('scheduler-status');
+      if (data.running) {
+        const scrapeJob = data.jobs.find(j => j.id === 'imax_scrape');
+        const iso = scrapeJob?.next_run_iso;
+        const next = iso
+          ? new Date(iso).toLocaleString([], {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})
+          : 'unknown';
+        el.innerHTML = '<span class="chip chip-green">Running</span> &mdash; Next scrape: <strong>' + next + '</strong>';
+      } else {
+        el.innerHTML = '<span class="chip chip-red">Stopped</span>';
+      }
+    } catch {}
   }
 
-  function clearShowtimeFilters() {
-    Array.from(document.getElementById('st-filter-movie').options).forEach(o => o.selected = false);
-    Array.from(document.getElementById('st-filter-theater').options).forEach(o => o.selected = false);
-    document.getElementById('st-filter-format').value = '';
-    document.getElementById('st-filter-date').value = '';
-    _stSortCol = null; _stSortAsc = true; _stPage = 0;
-    document.querySelectorAll('#showtimes-table .sort-indicator').forEach(el => el.textContent = '');
-    applyShowtimeFilters();
-  }
-
-  function sortShowtimes(col) {
-    if (_stSortCol === col) { _stSortAsc = !_stSortAsc; } else { _stSortCol = col; _stSortAsc = true; }
-
-    document.querySelectorAll('#showtimes-table th[data-col]').forEach(th => {
-      th.querySelector('.sort-indicator').textContent =
-        th.dataset.col === col ? (_stSortAsc ? ' ▲' : ' ▼') : '';
-    });
-
-    const tbody = document.getElementById('showtimes-tbody');
-    const rows = Array.from(tbody.querySelectorAll('tr'));
-    const key = col === 'date' ? 'datetime' : col;
-    rows.sort((a, b) => {
-      const av = a.dataset[key] || '';
-      const bv = b.dataset[key] || '';
-      return _stSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
-    });
-    rows.forEach(r => tbody.appendChild(r));
-    applyShowtimeFilters();
-  }
+  // ── Page load ─────────────────────────────────────────────────────────
+  loadSchedulerStatus();
+  stInit();
+  alInit();
 </script>
 {% endblock %}
