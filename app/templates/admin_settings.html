@@ -11,7 +11,7 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="form-grid">
 
-    <!-- TMDB Integration -->
+    <!-- TMDB Integration (own card) -->
     <div class="form-section">
       <h2 class="form-section-title">TMDB Integration</h2>
       <p class="text-muted" style="font-size:12px;margin-bottom:12px">
@@ -49,6 +49,43 @@
         Status: <span style="color:var(--warning)">Not configured — using local DB only</span>
       </p>
       {% endif %}
+    </div>
+
+    <!-- Global Defaults -->
+    <div class="form-section">
+      <h2 class="form-section-title">Global Defaults</h2>
+      <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+        Defaults applied to new users and new alerts. Users can override their
+        own unit preference on the Profile page.
+      </p>
+
+      <div class="form-group">
+        <label>Default Measurement Unit</label>
+        <div style="display:flex;gap:16px;margin-top:4px">
+          <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
+            <input type="radio" name="app_measurement_unit" value="metric"
+                   {% if settings.get('app_measurement_unit', 'metric') == 'metric' %}checked{% endif %} />
+            Metric (m)
+          </label>
+          <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
+            <input type="radio" name="app_measurement_unit" value="imperial"
+                   {% if settings.get('app_measurement_unit') == 'imperial' %}checked{% endif %} />
+            Imperial (ft)
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:16px">
+        <label for="default_max_notifications">Default notification limit (per alert)</label>
+        <input type="number" id="default_max_notifications" name="default_max_notifications"
+               min="1"
+               value="{{ settings.get('default_max_notifications', '') }}"
+               placeholder="Unlimited"
+               style="width:120px" />
+        <small class="text-muted" style="font-size:11px;margin-top:2px">
+          Pre-fills the notification limit when creating a new alert. Leave blank for unlimited.
+        </small>
+      </div>
     </div>
 
     <!-- Email (SMTP) -->
@@ -178,32 +215,7 @@
       </p>
     </div>
 
-    <!-- Global Defaults -->
-    <div class="form-section">
-      <h2 class="form-section-title">Global Defaults</h2>
-      <p class="text-muted" style="font-size:12px;margin-bottom:12px">
-        These are informational defaults shown to new users. Each user can override
-        their own unit preference on the Profile page.
-      </p>
-
-      <div class="form-group">
-        <label>Default Measurement Unit</label>
-        <div style="display:flex;gap:16px;margin-top:4px">
-          <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
-            <input type="radio" name="app_measurement_unit" value="metric"
-                   {% if settings.get('app_measurement_unit', 'metric') == 'metric' %}checked{% endif %} />
-            Metric (m)
-          </label>
-          <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
-            <input type="radio" name="app_measurement_unit" value="imperial"
-                   {% if settings.get('app_measurement_unit') == 'imperial' %}checked{% endif %} />
-            Imperial (ft)
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <!-- Schedule -->
+    <!-- Scheduler -->
     <div class="form-section" style="grid-column: 1 / -1">
       <h2 class="form-section-title">Scheduler</h2>
       <p class="text-muted" style="font-size:12px;margin-bottom:12px">
@@ -220,7 +232,7 @@
         {% set crawl_job  = None %}
       {% endif %}
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
         <div class="form-group">
           <label for="scraper_interval_minutes">Showtime scrape interval (minutes)</label>
           <input type="number" id="scraper_interval_minutes" name="scraper_interval_minutes"
@@ -244,7 +256,7 @@
                  min="1" max="1440"
                  value="{{ settings.get('alert_interval_minutes', '15') }}" />
           <small class="text-muted" style="font-size:11px;margin-top:2px">
-            How often to check active alerts against existing showtimes. Fires even when the scraper finds nothing new. Min: 1 min, Max: 1440 min.
+            How often to check active alerts against existing showtimes. Min: 1 min, Max: 1440 min.
           </small>
           {% if alert_job and alert_job.next_run_iso %}
           <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
@@ -271,16 +283,16 @@
           <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>
           {% endif %}
         </div>
-      </div>
 
-      <div class="form-group" style="margin-top:8px">
-        <label for="rows_per_page">Dashboard rows per page</label>
-        <input type="number" id="rows_per_page" name="rows_per_page"
-               min="5" max="100"
-               value="{{ settings.get('rows_per_page', '15') }}" />
-        <small class="text-muted" style="font-size:11px;margin-top:2px">
-          Number of rows shown per page in the Available Showtimes and Active Alerts lists. Min: 5, Max: 100.
-        </small>
+        <div class="form-group">
+          <label for="rows_per_page">Dashboard rows per page</label>
+          <input type="number" id="rows_per_page" name="rows_per_page"
+                 min="5" max="100"
+                 value="{{ settings.get('rows_per_page', '15') }}" />
+          <small class="text-muted" style="font-size:11px;margin-top:2px">
+            Rows shown per page in Available Showtimes and Active Alerts lists. Min: 5, Max: 100.
+          </small>
+        </div>
       </div>
     </div>
 
@@ -294,7 +306,6 @@
 
 {% block scripts %}
 <script>
-// Convert all data-iso timestamps to the browser's local timezone on page load
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.local-time[data-iso]').forEach(el => {
     try {
@@ -344,7 +355,7 @@ function testSmtp() {
   }
 
   const controller = new AbortController();
-  const clientTimeout = setTimeout(() => controller.abort(), 20000); // 20s client-side guard
+  const clientTimeout = setTimeout(() => controller.abort(), 20000);
 
   fetch('/api/admin/smtp/test', {
     method: 'POST',

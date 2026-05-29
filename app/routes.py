@@ -191,6 +191,7 @@ def alerts():
         ).all()
 
     rows_per_page = _get_setting_int("rows_per_page", 15)
+    default_max_notifications = _get_setting_int("default_max_notifications", 0) or None
     return render_template(
         "alerts.html",
         theaters=theaters_list,
@@ -199,6 +200,7 @@ def alerts():
         users=users_list,
         preferences=prefs,
         rows_per_page=rows_per_page,
+        default_max_notifications=default_max_notifications,
     )
 
 
@@ -529,6 +531,24 @@ def admin_settings():
             new_rows_per_page = max(5, min(100, int(request.form.get("rows_per_page", old_rows_per_page))))
         except (ValueError, TypeError):
             new_rows_per_page = old_rows_per_page
+
+        # default_max_notifications: optional positive int, blank = delete/clear
+        raw_def_max = request.form.get("default_max_notifications", "").strip()
+        if raw_def_max:
+            try:
+                new_def_max = str(max(1, int(raw_def_max)))
+            except (ValueError, TypeError):
+                new_def_max = ""
+        else:
+            new_def_max = ""
+        setting = Settings.query.filter_by(key="default_max_notifications").first()
+        if new_def_max:
+            if setting:
+                setting.value = new_def_max
+            else:
+                db.session.add(Settings(key="default_max_notifications", value=new_def_max))
+        elif setting:
+            db.session.delete(setting)
 
         for key, val in (
             ("scraper_interval_minutes", str(new_scraper)),
