@@ -101,6 +101,11 @@
         </tbody>
       </table>
     </div>
+    <div class="pagination-bar" id="st-pagination" style="display:none">
+      <button class="btn-sm btn-ghost" id="st-prev-btn" onclick="stChangePage(-1)" disabled>← Prev</button>
+      <span id="st-page-info" class="text-muted" style="font-size:13px"></span>
+      <button class="btn-sm btn-ghost" id="st-next-btn" onclick="stChangePage(1)">Next →</button>
+    </div>
     {% else %}
     <div class="empty-state">
       <p>No showtimes found yet.</p>
@@ -201,10 +206,35 @@
   }
 
   loadSchedulerStatus();
+  applyShowtimeFilters();
 
-  // ── Showtime filter + sort ──────────────────────────────────────────
+  // ── Showtime filter + sort + pagination ────────────────────────────
   let _stSortCol = null;
   let _stSortAsc = true;
+  let _stPage    = 0;
+  const _stPageSize = {{ rows_per_page }};
+
+  function _applyStPagination(visibleRows) {
+    const total = visibleRows.length;
+    const pages = Math.max(1, Math.ceil(total / _stPageSize));
+    if (_stPage >= pages) _stPage = pages - 1;
+    const start = _stPage * _stPageSize;
+    const end   = start + _stPageSize;
+
+    visibleRows.forEach((row, i) => { row.style.display = (i >= start && i < end) ? '' : 'none'; });
+
+    const bar = document.getElementById('st-pagination');
+    if (total > _stPageSize) {
+      bar.style.display = '';
+      document.getElementById('st-page-info').textContent = `Page ${_stPage + 1} of ${pages} (${total} total)`;
+      document.getElementById('st-prev-btn').disabled = (_stPage === 0);
+      document.getElementById('st-next-btn').disabled = (_stPage >= pages - 1);
+    } else {
+      bar.style.display = 'none';
+    }
+  }
+
+  function stChangePage(delta) { _stPage += delta; applyShowtimeFilters(); }
 
   function applyShowtimeFilters() {
     const movies   = Array.from(document.getElementById('st-filter-movie').selectedOptions).map(o => o.value);
@@ -212,21 +242,24 @@
     const format   = document.getElementById('st-filter-format').value.toLowerCase();
     const date     = document.getElementById('st-filter-date').value;
 
-    const rows = Array.from(document.querySelectorAll('#showtimes-tbody tr'));
-    let visible = 0;
-    rows.forEach(row => {
-      const show =
-        (!movies.length   || movies.includes(row.dataset.movie)) &&
-        (!theaters.length || theaters.includes(row.dataset.theater)) &&
-        (!format  || row.dataset.format === format) &&
-        (!date    || row.dataset.date >= date);
-      row.style.display = show ? '' : 'none';
-      if (show) visible++;
-    });
+    const allRows = Array.from(document.querySelectorAll('#showtimes-tbody tr'));
+    const matched = allRows.filter(row =>
+      (!movies.length   || movies.includes(row.dataset.movie)) &&
+      (!theaters.length || theaters.includes(row.dataset.theater)) &&
+      (!format  || row.dataset.format === format) &&
+      (!date    || row.dataset.date >= date)
+    );
+
+    // Hide all, then pagination will reveal the current page slice
+    allRows.forEach(r => r.style.display = 'none');
+    _applyStPagination(matched);
 
     const anyActive = movies.length || theaters.length || format || date;
     document.getElementById('st-clear-btn').disabled = !anyActive;
-    document.getElementById('st-count').textContent = `${visible} of ${rows.length} showtimes`;
+    document.getElementById('st-count').textContent =
+      matched.length === allRows.length
+        ? `${allRows.length} showtimes`
+        : `${matched.length} of ${allRows.length} showtimes`;
   }
 
   function clearShowtimeFilters() {
@@ -234,7 +267,7 @@
     Array.from(document.getElementById('st-filter-theater').options).forEach(o => o.selected = false);
     document.getElementById('st-filter-format').value = '';
     document.getElementById('st-filter-date').value = '';
-    _stSortCol = null; _stSortAsc = true;
+    _stSortCol = null; _stSortAsc = true; _stPage = 0;
     document.querySelectorAll('#showtimes-table .sort-indicator').forEach(el => el.textContent = '');
     applyShowtimeFilters();
   }
