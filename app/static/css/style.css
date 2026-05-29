@@ -153,11 +153,57 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
 #showtimes-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 #showtimes-table th.sortable:hover { color: var(--accent); }
 
+/* ── Login page ─────────────────────────────────────────────────────── */
+.login-body {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  padding: 24px;
+}
+.login-container {
+  width: 100%;
+  max-width: 420px;
+}
+.login-brand {
+  text-align: center;
+  margin-bottom: 24px;
+}
+.login-logo {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 8px;
+}
+.login-title {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+.login-subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.login-card {
+  padding: 32px;
+}
+.login-error {
+  background: rgba(255, 68, 68, 0.1);
+  color: var(--danger);
+  border: 1px solid rgba(255, 68, 68, 0.3);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
 /* ── Two column layout ──────────────────────────────────────────────── */
 .two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 24px;
+  align-items: start;
 }
 @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
 
@@ -701,7 +747,7 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 .admin-edit-form { max-width: 960px; }
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 24px;
   margin-bottom: 24px;
 }
