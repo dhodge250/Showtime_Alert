@@ -222,8 +222,9 @@ def alert_detail(pref_id):
             q = q.filter(Showtime.movie_id.in_(movie_ids))
     showtimes = q.order_by(Showtime.show_datetime).all()
 
-    notifs = pref.notifications.all()
+    notifs = Notification.query.filter_by(alert_preference_id=pref.id).order_by(Notification.sent_at.desc()).all()
     alert_movies = pref.alert_movies.all()
+    rows_per_page = _get_setting_int("rows_per_page", 15)
 
     return render_template(
         "alert_detail.html",
@@ -231,6 +232,7 @@ def alert_detail(pref_id):
         alert_movies=alert_movies,
         showtimes=showtimes,
         notifs=notifs,
+        rows_per_page=rows_per_page,
     )
 
 
@@ -248,6 +250,13 @@ def profile():
         unit = request.form.get("measurement_unit", "metric")
         if unit in ("metric", "imperial"):
             user.measurement_unit = unit
+        tz = request.form.get("timezone", "UTC").strip()
+        try:
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+            ZoneInfo(tz)
+            user.timezone = tz
+        except (ZoneInfoNotFoundError, KeyError):
+            pass
         db.session.commit()
         saved = True
 
