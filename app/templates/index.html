@@ -38,8 +38,20 @@
     </div>
     {% if recent_showtimes %}
     <div class="showtime-filters" id="showtime-filters">
-      <input type="text"   id="st-filter-movie"   placeholder="Filter by movie…"   oninput="applyShowtimeFilters()">
-      <input type="text"   id="st-filter-theater" placeholder="Filter by theater…" oninput="applyShowtimeFilters()">
+      {% set st_movies   = recent_showtimes | map(attribute='movie')   | select | map(attribute='title') | select | unique | sort | list %}
+      {% set st_theaters = recent_showtimes | map(attribute='theater') | select | map(attribute='name')  | select | unique | sort | list %}
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span class="filter-label">Movie (Ctrl+click for multiple)</span>
+        <select id="st-filter-movie" multiple onchange="applyShowtimeFilters()">
+          {% for m in st_movies %}<option value="{{ m | lower }}">{{ m }}</option>{% endfor %}
+        </select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span class="filter-label">Theater (Ctrl+click for multiple)</span>
+        <select id="st-filter-theater" multiple onchange="applyShowtimeFilters()">
+          {% for t in st_theaters %}<option value="{{ t | lower }}">{{ t }}</option>{% endfor %}
+        </select>
+      </div>
       <select id="st-filter-format" onchange="applyShowtimeFilters()">
         <option value="">All Formats</option>
         {% set formats = recent_showtimes | map(attribute='format_type') | select | unique | sort %}
@@ -195,31 +207,31 @@
   let _stSortAsc = true;
 
   function applyShowtimeFilters() {
-    const movie   = document.getElementById('st-filter-movie').value.toLowerCase();
-    const theater = document.getElementById('st-filter-theater').value.toLowerCase();
-    const format  = document.getElementById('st-filter-format').value.toLowerCase();
-    const date    = document.getElementById('st-filter-date').value;   // 'YYYY-MM-DD' or ''
+    const movies   = Array.from(document.getElementById('st-filter-movie').selectedOptions).map(o => o.value);
+    const theaters = Array.from(document.getElementById('st-filter-theater').selectedOptions).map(o => o.value);
+    const format   = document.getElementById('st-filter-format').value.toLowerCase();
+    const date     = document.getElementById('st-filter-date').value;
 
     const rows = Array.from(document.querySelectorAll('#showtimes-tbody tr'));
     let visible = 0;
     rows.forEach(row => {
       const show =
-        (!movie   || row.dataset.movie.includes(movie)) &&
-        (!theater || row.dataset.theater.includes(theater)) &&
+        (!movies.length   || movies.includes(row.dataset.movie)) &&
+        (!theaters.length || theaters.includes(row.dataset.theater)) &&
         (!format  || row.dataset.format === format) &&
         (!date    || row.dataset.date >= date);
       row.style.display = show ? '' : 'none';
       if (show) visible++;
     });
 
-    const anyActive = movie || theater || format || date;
+    const anyActive = movies.length || theaters.length || format || date;
     document.getElementById('st-clear-btn').disabled = !anyActive;
     document.getElementById('st-count').textContent = `${visible} of ${rows.length} showtimes`;
   }
 
   function clearShowtimeFilters() {
-    document.getElementById('st-filter-movie').value = '';
-    document.getElementById('st-filter-theater').value = '';
+    Array.from(document.getElementById('st-filter-movie').options).forEach(o => o.selected = false);
+    Array.from(document.getElementById('st-filter-theater').options).forEach(o => o.selected = false);
     document.getElementById('st-filter-format').value = '';
     document.getElementById('st-filter-date').value = '';
     _stSortCol = null; _stSortAsc = true;

@@ -150,6 +150,25 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
   color: var(--text);
   font-size: 13px;
 }
+.showtime-filters select[multiple] {
+  padding: 3px 6px;
+  min-width: 160px;
+  max-height: 80px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.filter-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 4px;
+  justify-content: center;
+}
 #showtimes-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 #showtimes-table th.sortable:hover { color: var(--accent); }
 
