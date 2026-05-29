@@ -93,6 +93,7 @@
         </label>
         <input type="number" id="max_notifications" name="max_notifications"
                min="1" placeholder="Unlimited"
+               {% if default_max_notifications %}value="{{ default_max_notifications }}"{% endif %}
                style="width:120px" />
         <small class="text-muted" style="font-size:11px;margin-top:2px">
           Auto-close this alert after sending this many notifications. Leave blank for unlimited.
