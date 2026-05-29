@@ -23,8 +23,31 @@ jobs:
       - name: Run tests
         run: pytest tests/ -q
 
-  build-and-push:
+  scan:
     needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Build image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: imax-alert:scan
+
+      - name: Trivy — scan image for OS and library CVEs
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: imax-alert:scan
+          format: table
+          exit-code: '0'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+  build-and-push:
+    needs: [test, scan]
     runs-on: ubuntu-latest
     # Only push to Docker Hub on a version tag push — not on branch merges.
     # This keeps `latest` in sync with explicit releases rather than every main merge.
