@@ -102,12 +102,11 @@ def index():
         ).all()
         users = [current_user]
 
-    # Distinct movies actively being watched (unsent AlertMovie rows only)
+    # Distinct movies being watched across all active alerts
     tracked_movie_ids = {
         am.movie_id
         for a in alerts
         for am in a.alert_movies.all()
-        if not am.alert_sent
     }
 
     return render_template(
