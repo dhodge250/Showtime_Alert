@@ -10,23 +10,35 @@
     </div>
     <div class="page-header-actions">
       <a href="{{ url_for('main.admin_theater_new') }}" class="btn btn-primary">+ Add Theater</a>
-      <button id="scrape-btn" class="btn btn-outline" onclick="triggerScrape(this)">
-        Scrape Showtimes
-      </button>
-      <button id="crawl-btn" class="btn btn-outline" onclick="triggerCrawl(this)">
-        {% if crawl_running %}Crawl Running…{% else %}Refresh Theater List{% endif %}
-      </button>
-      <button id="geocode-btn" class="btn btn-outline"
-              onclick="triggerGeocode(this)"
-              {% if geocode_status.running %}disabled{% endif %}>
-        {% if geocode_status.running %}
-          Geocoding… ({{ geocode_status.processed }}/{{ geocode_status.total }})
-        {% else %}
-          Geocode Missing
-        {% endif %}
-      </button>
-      <button id="clear-btn" class="btn btn-danger"
-              onclick="openClearModal()">
+      <div class="actions-dropdown" id="actions-dropdown">
+        <button class="btn btn-outline" onclick="toggleActionsDropdown(event)">
+          Actions ▾
+        </button>
+        <div class="actions-dropdown-menu" id="actions-menu">
+          <button class="actions-dropdown-item" id="scrape-btn"
+                  onclick="closeActionsDropdown(); triggerScrape(this)">
+            Scrape Showtimes
+          </button>
+          <button class="actions-dropdown-item" id="sync-csv-btn"
+                  onclick="closeActionsDropdown(); syncFromCSV(this)">
+            Sync from CSV
+          </button>
+          <button class="actions-dropdown-item" id="crawl-btn"
+                  onclick="closeActionsDropdown(); triggerCrawl(this)">
+            {% if crawl_running %}Crawl Running…{% else %}Refresh Theater List{% endif %}
+          </button>
+          <button class="actions-dropdown-item" id="geocode-btn"
+                  onclick="closeActionsDropdown(); triggerGeocode(this)"
+                  {% if geocode_status.running %}disabled{% endif %}>
+            {% if geocode_status.running %}
+              Geocoding… ({{ geocode_status.processed }}/{{ geocode_status.total }})
+            {% else %}
+              Geocode Missing
+            {% endif %}
+          </button>
+        </div>
+      </div>
+      <button id="clear-btn" class="btn btn-danger" onclick="openClearModal()">
         Clear Showtimes
       </button>
     </div>
@@ -291,6 +303,22 @@
 
 {% block scripts %}
 <script>
+// ── Actions dropdown ──────────────────────────────────────────────────
+function toggleActionsDropdown(e) {
+  e.stopPropagation();
+  document.getElementById('actions-menu').classList.toggle('open');
+}
+function closeActionsDropdown() {
+  document.getElementById('actions-menu').classList.remove('open');
+}
+document.addEventListener('click', function(e) {
+  const dd = document.getElementById('actions-dropdown');
+  if (dd && !dd.contains(e.target)) closeActionsDropdown();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeActionsDropdown();
+});
+
 // ── Lookup data ───────────────────────────────────────────────────────
 const LOOKUP = JSON.parse(document.getElementById('lookup-data').textContent);
 
@@ -422,6 +450,28 @@ function triggerScrape(btn) {
     .catch(() => {
       btn.textContent = 'Error';
       setTimeout(() => { btn.disabled = false; btn.textContent = 'Scrape Showtimes'; }, 3000);
+    });
+}
+
+// ── Sync from CSV ─────────────────────────────────────────────────────
+function syncFromCSV(btn) {
+  btn.disabled = true; btn.textContent = 'Syncing…';
+  fetch('/api/admin/theaters/sync-csv', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.errors && data.errors.length) {
+        showToast('CSV sync done with errors — check logs.', 'error');
+        btn.textContent = 'Done (with errors)';
+      } else {
+        const msg = (data.updated || 0) + ' updated, ' + (data.inserted || 0) + ' inserted';
+        showToast('CSV sync complete: ' + msg + '.');
+        btn.textContent = msg;
+      }
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Sync from CSV'; location.reload(); }, 3000);
+    })
+    .catch(() => {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Sync from CSV'; }, 3000);
     });
 }
 
