@@ -701,7 +701,7 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 .admin-edit-form { max-width: 960px; }
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 24px;
   margin-bottom: 24px;
 }
