@@ -1959,6 +1959,17 @@ def api_venue_crawl_status():
     })
 
 
+@api_bp.route("/admin/theaters/sync-csv", methods=["POST"])
+@require_role("admin")
+def api_sync_theaters_from_csv():
+    """Re-run the CSV upsert against all current rows. Returns inserted/updated/skipped counts."""
+    from flask import current_app
+
+    from app import _upsert_theaters_from_csv
+    summary = _upsert_theaters_from_csv(current_app._get_current_object())
+    return jsonify(summary)
+
+
 @api_bp.route("/venues/crawl/trigger", methods=["POST"])
 @require_role("admin")
 def api_trigger_venue_crawl():

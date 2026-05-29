@@ -57,7 +57,9 @@ def create_app(config_name="default"):
         _seed_roles_and_admin()
         _seed_lookup_tables()
         _seed_default_settings()
-        _seed_theaters_from_csv(app)
+        from app.models import Theater as _T
+        if _T.query.count() == 0:
+            _upsert_theaters_from_csv(app)
         _load_settings_into_config(app)
         _migrate_legacy_alert_movies()
 
@@ -199,6 +201,14 @@ def _run_migrations():
         (
             "force_password_change", "users",
             "ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0", None,
+        ),
+        # Stable upsert key for CSV sync
+        # SQLite cannot add a UNIQUE column via ALTER TABLE; add plain column
+        # and create the unique index separately as the backfill step.
+        (
+            "venue_key", "theaters",
+            "ALTER TABLE theaters ADD COLUMN venue_key VARCHAR(100)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_theaters_venue_key ON theaters(venue_key)",
         ),
     ]
 
@@ -475,19 +485,35 @@ def _migrate_legacy_alert_movies():
         logger.info("Migrated %d legacy AlertPreference.movie_id → AlertMovie rows.", migrated)
 
 
-def _seed_theaters_from_csv(app):
+def _upsert_theaters_from_csv(app):
     """
-    Seed theaters from seeds/imax_theaters.csv on first boot.
-    Skips entirely if Theater table already has rows.
-    Cascade-deletes alerts/showtimes before wiping existing theaters.
-    Normalises malformed aspect ratio strings (e.g. '2.30:01' → '2.30:1').
+    Upsert theaters from seeds/imax_theaters.csv.
+
+    Match priority per row:
+      1. venue_key  — if the CSV row has a non-empty Venue Key and a Theater with
+                      that key exists, update that row.
+      2. name       — case-insensitive fallback for rows without a key (legacy).
+      3. no match   — insert a new Theater row.
+
+    Fields updated when non-empty in the CSV: venue_key, chain/chain_id,
+    website, audio_system/audio_system_id, address, phone, and all
+    screen/projector/dimension fields.
+
+    Fields never overwritten: is_active, latitude, longitude, zip_code,
+    phone (preserved if CSV is blank), image_url.
+
+    Returns a summary dict: {"inserted": N, "updated": N, "skipped": N, "errors": []}.
     """
     import csv
     import os
     import re
 
+    from sqlalchemy import func
+
     from app.lookup_helpers import (
         get_or_create_aspect_ratio,
+        get_or_create_audio_system,
+        get_or_create_chain,
         get_or_create_city,
         get_or_create_continent,
         get_or_create_country,
@@ -495,129 +521,156 @@ def _seed_theaters_from_csv(app):
         get_or_create_region,
         parse_screen_dims,
     )
-    from app.models import AlertPreference, Showtime, Theater
-
-    if Theater.query.count() > 0:
-        logger.debug("Theater CSV seed skipped: theater table already populated.")
-        return
+    from app.models import Theater
 
     csv_path = os.path.join(os.path.dirname(__file__), "..", "seeds", "imax_theaters.csv")
     csv_path = os.path.abspath(csv_path)
     if not os.path.exists(csv_path):
-        logger.warning("CSV seed file not found at %s — skipping theater seed.", csv_path)
-        return
+        logger.warning("CSV upsert skipped: file not found at %s.", csv_path)
+        return {"inserted": 0, "updated": 0, "skipped": 0, "errors": []}
 
     def _normalise_ar(raw: str) -> str:
-        """Fix '2.30:01' or '2:30:01' → '2.30:1'."""
+        """Fix '2.30:01' → '2.30:1'."""
         if not raw:
             return raw
-        raw = raw.strip()
-        # e.g. "2.30:01" → "2.30:1"
-        raw = re.sub(r":0+(\d)$", r":\1", raw)
-        return raw
+        return re.sub(r":0+(\d)$", r":\1", raw.strip())
 
-    logger.info("Seeding theaters from CSV: %s", csv_path)
-    inserted = 0
+    logger.info("CSV theater upsert started: %s", csv_path)
+    inserted = updated = skipped = 0
     errors = []
+    processed = 0
 
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                continent_name = (row.get("Region") or "").strip()
-                country_name = (row.get("Country") or "").strip()
-                state_name = (row.get("State/Province") or "").strip()
-                city_name = (row.get("City") or "").strip()
-                location_name = (row.get("Location Name") or "").strip()
-                screen_ar_raw = _normalise_ar(row.get("Screen AR") or "")
-                digital_proj = (row.get("Digital Projector") or "").strip()
-                digital_ar_raw = _normalise_ar(
-                    row.get(" max AR (Digital)")
-                    or row.get("max AR (Digital)")
-                    or ""
-                )
-                film_proj_raw = (row.get("Film Projector") or "").strip()
-                screen_dims_str = (row.get("Screen Dimensions") or "").strip()
-                commercial = (row.get("Commercial Films Shown") or "").strip() or None
+    with app.app_context():
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    location_name = (row.get("Location Name") or "").strip()
+                    if not location_name:
+                        skipped += 1
+                        continue
 
-                if not location_name:
-                    continue
+                    # --- Parse all CSV fields ---
+                    continent_name  = (row.get("Region") or "").strip()
+                    country_name    = (row.get("Country") or "").strip()
+                    state_name      = (row.get("State/Province") or "").strip()
+                    city_name       = (row.get("City") or "").strip()
+                    screen_ar_raw   = _normalise_ar(row.get("Screen AR") or "")
+                    digital_proj    = (row.get("Digital Projector") or "").strip()
+                    digital_ar_raw  = _normalise_ar(
+                        row.get(" max AR (Digital)") or row.get("max AR (Digital)") or ""
+                    )
+                    film_proj_raw   = (row.get("Film Projector") or "").strip()
+                    screen_dims_str = (row.get("Screen Dimensions") or "").strip()
+                    commercial      = (row.get("Commercial Films Shown") or "").strip() or None
+                    venue_key       = (row.get("Venue Key") or "").strip() or None
+                    chain_name      = (row.get("Chain") or "").strip() or None
+                    website_url     = (row.get("Website") or "").strip() or None
+                    audio_sys_name  = (row.get("Audio System") or "").strip() or None
+                    address         = (row.get("Address") or "").strip() or None
+                    phone           = (row.get("Phone") or "").strip() or None
 
-                # Lookup / create FK objects
-                continent_obj = (
-                    get_or_create_continent(continent_name) if continent_name else None
-                )
-                country_obj = (
-                    get_or_create_country(country_name) if country_name else None
-                )
-                region_obj = (
-                    get_or_create_region(state_name, country_obj)
-                    if state_name and country_obj else None
-                )
-                city_obj = (
-                    get_or_create_city(city_name, country_obj, region_obj)
-                    if city_name and country_obj else None
-                )
-                ar_obj = (
-                    get_or_create_aspect_ratio(screen_ar_raw) if screen_ar_raw else None
-                )
-                dig_proj_obj = (
-                    get_or_create_projector_type(digital_proj) if digital_proj else None
-                )
-                dig_ar_obj = (
-                    get_or_create_aspect_ratio(digital_ar_raw) if digital_ar_raw else None
-                )
-                film_pt_obj = (
-                    get_or_create_projector_type(film_proj_raw) if film_proj_raw else None
-                )
+                    # --- Resolve FK objects ---
+                    continent_obj  = get_or_create_continent(continent_name) if continent_name else None
+                    country_obj    = get_or_create_country(country_name) if country_name else None
+                    region_obj     = (
+                        get_or_create_region(state_name, country_obj)
+                        if state_name and country_obj else None
+                    )
+                    city_obj       = (
+                        get_or_create_city(city_name, country_obj, region_obj)
+                        if city_name and country_obj else None
+                    )
+                    ar_obj         = get_or_create_aspect_ratio(screen_ar_raw) if screen_ar_raw else None
+                    dig_proj_obj   = get_or_create_projector_type(digital_proj) if digital_proj else None
+                    dig_ar_obj     = get_or_create_aspect_ratio(digital_ar_raw) if digital_ar_raw else None
+                    film_pt_obj    = get_or_create_projector_type(film_proj_raw) if film_proj_raw else None
+                    chain_obj      = get_or_create_chain(chain_name) if chain_name else None
+                    audio_sys_obj  = get_or_create_audio_system(audio_sys_name) if audio_sys_name else None
+                    w_m, h_m       = parse_screen_dims(screen_dims_str) if screen_dims_str else (None, None)
 
-                # Parse screen dimensions
-                w_m, h_m = parse_screen_dims(screen_dims_str) if screen_dims_str else (None, None)
+                    # --- Find existing theater ---
+                    t = None
+                    if venue_key:
+                        t = Theater.query.filter_by(venue_key=venue_key).first()
+                    if t is None:
+                        t = Theater.query.filter(
+                            func.lower(Theater.name) == location_name.lower()
+                        ).first()
 
-                t = Theater(
-                    name=location_name,
-                    country=country_name,
-                    state=state_name,
-                    city=city_name,
-                    screen_size=screen_ar_raw,
-                    projector_type=digital_proj,
-                    screen_dims=screen_dims_str,
-                    country_id=country_obj.id if country_obj else None,
-                    region_id=region_obj.id if region_obj else None,
-                    city_id=city_obj.id if city_obj else None,
-                    aspect_ratio_id=ar_obj.id if ar_obj else None,
-                    projector_type_id=dig_proj_obj.id if dig_proj_obj else None,
-                    continent_id=continent_obj.id if continent_obj else None,
-                    digital_projector_ar_id=dig_ar_obj.id if dig_ar_obj else None,
-                    film_projector_type_id=film_pt_obj.id if film_pt_obj else None,
-                    film_projector_type=film_proj_raw or None,
-                    commercial_films=commercial,
-                    screen_width_m=w_m,
-                    screen_height_m=h_m,
-                    is_active=True,
-                    crawl_source="csv",
-                )
-                db.session.add(t)
-                inserted += 1
+                    if t is None:
+                        # Insert
+                        t = Theater(
+                            name=location_name,
+                            is_active=True,
+                            crawl_source="csv",
+                        )
+                        db.session.add(t)
+                        inserted += 1
+                    else:
+                        updated += 1
 
-                # Flush every 50 rows to keep identity map lean
-                if inserted % 50 == 0:
-                    db.session.flush()
+                    # --- Apply CSV fields (always update non-empty values) ---
+                    t.name = location_name
+                    if venue_key:
+                        t.venue_key = venue_key
+                    t.country     = country_name or t.country
+                    t.state       = state_name or t.state
+                    t.city        = city_name or t.city
+                    t.screen_size = screen_ar_raw or t.screen_size
+                    t.projector_type = digital_proj or t.projector_type
+                    t.screen_dims = screen_dims_str or t.screen_dims
+                    if chain_name:
+                        t.chain    = chain_name
+                        t.chain_id = chain_obj.id if chain_obj else t.chain_id
+                    if website_url:
+                        t.website = website_url
+                    if audio_sys_name:
+                        t.audio_system    = audio_sys_name
+                        t.audio_system_id = audio_sys_obj.id if audio_sys_obj else t.audio_system_id
+                    if address:
+                        t.address = address
+                    if phone:
+                        t.phone = phone
+                    t.country_id            = country_obj.id if country_obj else t.country_id
+                    t.region_id             = region_obj.id if region_obj else t.region_id
+                    t.city_id               = city_obj.id if city_obj else t.city_id
+                    t.aspect_ratio_id       = ar_obj.id if ar_obj else t.aspect_ratio_id
+                    t.projector_type_id     = dig_proj_obj.id if dig_proj_obj else t.projector_type_id
+                    t.continent_id          = continent_obj.id if continent_obj else t.continent_id
+                    t.digital_projector_ar_id = dig_ar_obj.id if dig_ar_obj else t.digital_projector_ar_id
+                    t.film_projector_type_id  = film_pt_obj.id if film_pt_obj else t.film_projector_type_id
+                    t.film_projector_type   = film_proj_raw or t.film_projector_type
+                    if commercial is not None:
+                        t.commercial_films = commercial
+                    if w_m is not None:
+                        t.screen_width_m  = w_m
+                    if h_m is not None:
+                        t.screen_height_m = h_m
+                    t.crawl_source = "csv"
 
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"Row '{row.get('Location Name')}': {exc}")
-                logger.warning("CSV seed row error: %s", exc)
+                    processed += 1
+                    if processed % 50 == 0:
+                        db.session.flush()
 
-    try:
-        db.session.commit()
-    except Exception as exc:  # noqa: BLE001
-        db.session.rollback()
-        logger.error("CSV seed final commit failed: %s", exc)
-        return
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"Row '{row.get('Location Name')}': {exc}")
+                    logger.warning("CSV upsert row error: %s", exc)
 
-    logger.info("CSV theater seed complete: %d inserted, %d errors.", inserted, len(errors))
+        try:
+            db.session.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.session.rollback()
+            logger.error("CSV upsert final commit failed: %s", exc)
+            return {"inserted": 0, "updated": 0, "skipped": skipped, "errors": [str(exc)]}
+
+    logger.info(
+        "CSV theater upsert complete: %d inserted, %d updated, %d skipped, %d errors.",
+        inserted, updated, skipped, len(errors),
+    )
     for e in errors:
-        logger.warning("CSV seed error: %s", e)
+        logger.warning("CSV upsert error: %s", e)
+    return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors}
 
 
 def _maybe_seed_venues(app):

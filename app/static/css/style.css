@@ -192,6 +192,38 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
 .btn-sm.btn-ghost   { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
 .btn-sm.btn-danger  { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
 
+/* ── Actions dropdown (admin pages) ─────────────────────────────────── */
+.actions-dropdown { position: relative; display: inline-block; }
+.actions-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 190px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 600;
+  overflow: hidden;
+}
+.actions-dropdown-menu.open { display: block; }
+.actions-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+}
+.actions-dropdown-item:last-child { border-bottom: none; }
+.actions-dropdown-item:hover:not(:disabled) { background: rgba(0,212,255,0.08); color: var(--accent); }
+.actions-dropdown-item:disabled { color: var(--text-muted); cursor: default; }
+
 /* ── Table ──────────────────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
 .data-table {

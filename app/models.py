@@ -271,6 +271,7 @@ class Theater(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(200), nullable=False)
+    venue_key = db.Column(db.String(100), unique=True, nullable=True)
 
     # --- Legacy string columns (kept for backward compat; populated by crawler) ---
     chain = db.Column(db.String(100))

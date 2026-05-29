@@ -1195,17 +1195,16 @@ class TestCSVSeeding:
                 assert t.commercial_films in valid, f"Unexpected commercial_films: {t.commercial_films!r}"
 
     def test_csv_seed_is_idempotent(self, app):
-        """Calling _seed_theaters_from_csv a second time should be a no-op."""
+        """Calling _upsert_theaters_from_csv a second time should not change count."""
         with app.app_context():
-            from app import _seed_theaters_from_csv
+            from app import _upsert_theaters_from_csv
             count_before = Theater.query.count()
-            _seed_theaters_from_csv(app)
+            _upsert_theaters_from_csv(app)
             count_after = Theater.query.count()
-            assert count_before == count_after, "CSV seed is not idempotent"
+            assert count_before == count_after, "CSV upsert changed theater count"
 
     def test_aspect_ratio_normalisation(self, app):
         """Malformed '2.30:01' should be normalised to '2.30:1'."""
-        from app import _seed_theaters_from_csv
         import re
         def normalise_ar(raw):
             if not raw:
