@@ -57,9 +57,9 @@ def create_app(config_name="default"):
         _seed_roles_and_admin()
         _seed_lookup_tables()
         _seed_default_settings()
-        from app.models import Theater as _T
-        if _T.query.count() == 0:
-            _upsert_theaters_from_csv(app)
+        # Always run to fill in any fields (e.g. website URLs) that were
+        # blank in the CSV at install time but have since been added.
+        _upsert_theaters_from_csv(app)
         _load_settings_into_config(app)
         _migrate_legacy_alert_movies()
 
@@ -623,7 +623,7 @@ def _upsert_theaters_from_csv(app):
                     if chain_name:
                         t.chain    = chain_name
                         t.chain_id = chain_obj.id if chain_obj else t.chain_id
-                    if website_url:
+                    if website_url and not t.website:
                         t.website = website_url
                     if audio_sys_name:
                         t.audio_system    = audio_sys_name
