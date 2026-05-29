@@ -26,8 +26,9 @@ jobs:
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
-    # Only push to Docker Hub on a real merge to main or a version tag push, not on pull requests.
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    # Only push to Docker Hub on a version tag push — not on branch merges.
+    # This keeps `latest` in sync with explicit releases rather than every main merge.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - uses: actions/checkout@v4
