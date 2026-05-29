@@ -352,10 +352,23 @@ def _get_matching_showtimes_for_pref(
             am.movie_id
             for am in pref.alert_movies.filter_by(alert_sent=False).all()
         }
+        # When a notification cap is set, movies are never individually marked
+        # sent between fires. Use the Notification log to deduplicate showtimes
+        # so the same screening doesn't trigger a second notification.
+        already_notified_ids: set[int] = set()
+        if pref.max_notifications:
+            for n in Notification.query.filter_by(alert_preference_id=pref.id).all():
+                if n.notified_showtime_ids:
+                    try:
+                        already_notified_ids.update(json.loads(n.notified_showtime_ids))
+                    except (ValueError, TypeError):
+                        pass
+                elif n.showtime_id is not None:
+                    already_notified_ids.add(n.showtime_id)
         for st in candidates:
             if pref.theater_id is not None and pref.theater_id != st.theater_id:
                 continue
-            if st.movie_id in unsent_movie_ids:
+            if st.movie_id in unsent_movie_ids and st.id not in already_notified_ids:
                 result.append(st)
 
     return result
@@ -417,8 +430,11 @@ def _notify_for_alert(
     # Increment fired counter
     pref.notifications_fired = (pref.notifications_fired or 0) + 1
 
-    # Mark specific movies as sent and close pref if all are done
-    if not pref.is_any_movie:
+    # Mark specific movies as sent and close pref if all are done.
+    # In one-shot mode (no max_notifications) a movie is done after its first
+    # notification. When a cap is set the Notification log handles per-showtime
+    # deduplication, so movies stay "unsent" until the cap is reached.
+    if not pref.is_any_movie and not pref.max_notifications:
         notified_movie_ids = {st.movie_id for st in showtimes}
         for am in pref.alert_movies.all():
             if am.movie_id in notified_movie_ids and not am.alert_sent:
