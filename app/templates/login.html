@@ -7,41 +7,56 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
 </head>
 <body class="login-body">
-  <div class="login-container">
-    <div class="login-brand">
-      <span class="login-logo">🎬</span>
-      <h1 class="login-title">IMAX Alert</h1>
-      <p class="login-subtitle">Sign in to your account</p>
+  <div class="login-split">
+    <!-- Left: brand panel -->
+    <div class="login-brand-panel">
+      <div class="login-brand-inner">
+        <span class="login-logo">🎬</span>
+        <h1 class="login-title">IMAX Alert</h1>
+        <p class="login-tagline">Never miss an IMAX showtime.<br>Get notified the moment tickets go on sale.</p>
+        <ul class="login-feature-list">
+          <li>Track movies at any IMAX theater</li>
+          <li>Email &amp; SMS notifications</li>
+          <li>370+ IMAX theaters worldwide</li>
+        </ul>
+      </div>
     </div>
 
-    <div class="card login-card">
-      {% if error %}
-        <div class="login-error">{{ error }}</div>
-      {% endif %}
+    <!-- Right: form panel -->
+    <div class="login-form-panel">
+      <div class="login-form-inner">
+        <h2 class="login-form-heading">Sign in</h2>
+        <p class="login-form-sub">Welcome back — enter your credentials below</p>
 
-      <form method="POST" action="{{ url_for('auth.login') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}" class="form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-group">
-          <label for="email">Username / Email</label>
-          <input type="text" id="email" name="email" class="form-control"
-                 placeholder="Enter your username" autocomplete="username" required autofocus />
-        </div>
+        {% if error %}
+          <div class="login-error">{{ error }}</div>
+        {% endif %}
 
-        <div class="form-group">
-          <label for="password">Password</label>
-          <input type="password" id="password" name="password" class="form-control"
-                 placeholder="••••••••" autocomplete="current-password" required />
-        </div>
+        <form method="POST" action="{{ url_for('auth.login') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}" class="form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-        <div class="form-group checkbox-row">
-          <label class="checkbox-label">
-            <input type="checkbox" name="remember" />
-            <span>Remember me</span>
-          </label>
-        </div>
+          <div class="form-group">
+            <label for="email">Username / Email</label>
+            <input type="text" id="email" name="email" class="form-control"
+                   placeholder="Enter your username" autocomplete="username" required autofocus />
+          </div>
 
-        <button type="submit" class="btn btn-primary" style="width:100%">Sign In</button>
-      </form>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" class="form-control"
+                   placeholder="••••••••" autocomplete="current-password" required />
+          </div>
+
+          <div class="login-remember-row">
+            <label class="login-remember-label">
+              <input type="checkbox" name="remember" />
+              <span>Remember me</span>
+            </label>
+          </div>
+
+          <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px">Sign In</button>
+        </form>
+      </div>
     </div>
   </div>
 </body>
