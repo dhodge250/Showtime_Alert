@@ -248,6 +248,13 @@ def profile():
         unit = request.form.get("measurement_unit", "metric")
         if unit in ("metric", "imperial"):
             user.measurement_unit = unit
+        tz = request.form.get("timezone", "UTC").strip()
+        try:
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+            ZoneInfo(tz)
+            user.timezone = tz
+        except (ZoneInfoNotFoundError, KeyError):
+            pass
         db.session.commit()
         saved = True
 

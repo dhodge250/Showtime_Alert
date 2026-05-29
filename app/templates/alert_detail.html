@@ -40,7 +40,7 @@
           {% endif %}
         {% elif pref.alert_sent %}
           <span class="status-badge status-active">
-            Sent {% if pref.alert_sent_at %}{{ pref.alert_sent_at.strftime('%b %d, %Y at %I:%M %p') }}{% endif %}
+            Sent {% if pref.alert_sent_at %}{{ pref.alert_sent_at | in_user_tz(current_user.timezone) }}{% endif %}
           </span>
         {% else %}
           <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">Watching</span>
@@ -65,7 +65,7 @@
       <dd>{{ pref.user.name if pref.user else '–' }}</dd>
 
       <dt>Created at</dt>
-      <dd>{{ pref.created_at.strftime('%B %d, %Y at %I:%M %p') }}</dd>
+      <dd>{{ pref.created_at | in_user_tz(current_user.timezone, '%B %d, %Y at %I:%M %p') }}</dd>
 
       <dt>Notification limit</dt>
       <dd>
@@ -111,7 +111,7 @@
           {% for n in notifs %}
           <tr>
             <td style="white-space:nowrap">
-              {{ n.sent_at.strftime('%b %d, %Y %I:%M %p') if n.sent_at else '–' }}
+              {{ n.sent_at | in_user_tz(current_user.timezone) if n.sent_at else '–' }}
             </td>
             <td>
               <span class="status-badge {% if n.method == 'email' %}status-active{% else %}status-inactive{% endif %}">
@@ -174,7 +174,7 @@
           <td>
             {% if am.alert_sent %}
               <span class="status-badge status-active">
-                Sent {% if am.alert_sent_at %}{{ am.alert_sent_at.strftime('%b %d') }}{% endif %}
+                Sent {% if am.alert_sent_at %}{{ am.alert_sent_at | in_user_tz(current_user.timezone, '%b %d') }}{% endif %}
               </span>
             {% else %}
               <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">Watching</span>
@@ -209,7 +209,7 @@
     <table class="data-table">
       <thead>
         <tr>
-          <th>Date &amp; Time</th>
+          <th>Date &amp; Time <span class="text-muted" style="font-size:11px;font-weight:400">(local theater time)</span></th>
           <th>Movie</th>
           <th>Theater</th>
           <th>Format</th>

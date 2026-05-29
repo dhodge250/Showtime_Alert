@@ -582,6 +582,7 @@ class User(db.Model, UserMixin):
     location_address = db.Column(db.String(500))  # full address string for geocoding
     notify_email = db.Column(db.Boolean, default=True)
     notify_sms = db.Column(db.Boolean, default=False)
+    timezone = db.Column(db.String(100), default="UTC")
     force_password_change = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
