@@ -116,6 +116,7 @@ CHAIN_WEBSITE_MAP: dict[str, str] = {
     "flix": "https://www.flixbrewhouse.com",
     "landmark": "https://www.landmarktheatres.com",
     "pacific": "https://www.pacifictheatres.com",
+    "cineplex": "https://www.cineplex.com",
     "cineplexx": "https://www.cineplexx.at",
     "odeon": "https://www.odeon.co.uk",
     "vue": "https://www.myvue.com",
