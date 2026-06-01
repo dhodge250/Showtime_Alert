@@ -23,11 +23,16 @@ FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Only the shared libraries lxml needs at runtime (not the -dev headers)
+# Install runtime shared libraries for lxml; purge perl (no upstream fix —
+# CVE-2026-42496 CRITICAL, CVE-2026-9538/48959/42497/48962 HIGH);
+# upgrade system pip/wheel to patched versions (CVE-2026-24049, CVE-2025-8869 et al.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2 \
     libxslt1.1 \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get purge -y --allow-remove-essential perl perl-base \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --upgrade "pip>=26.1" "wheel>=0.46.2"
 
 # Copy the entire venv from builder — captures all transitive dependencies
 COPY --from=builder /venv /venv
