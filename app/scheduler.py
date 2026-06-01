@@ -24,13 +24,22 @@ def _scrape_job(app):
     from app.scraper import run_all_scrapers
 
     with app.app_context():
+        from app.log_utils import write_log
         logger.info("Scheduled scrape starting...")
-        new_showtimes = run_all_scrapers()
-        logger.info("Scrape complete. %d new showtimes found.", len(new_showtimes))
-
-        if new_showtimes:
-            sent = process_new_showtimes(app, new_showtimes)
-            logger.info("Sent %d notifications.", sent)
+        write_log("scrape", "Scheduled scrape starting")
+        try:
+            new_showtimes = run_all_scrapers()
+            logger.info("Scrape complete. %d new showtimes found.", len(new_showtimes))
+            sent = 0
+            if new_showtimes:
+                sent = process_new_showtimes(app, new_showtimes)
+                logger.info("Sent %d notifications.", sent)
+            write_log("scrape",
+                      f"Scheduled scrape complete: {len(new_showtimes)} new showtimes, {sent} notifications sent",
+                      details={"new_showtimes": len(new_showtimes), "notifications_sent": sent})
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Scheduled scrape failed: %s", exc)
+            write_log("scrape", f"Scheduled scrape failed: {exc}", level="ERROR")
 
 
 def _venue_crawl_job(app):
@@ -38,21 +47,34 @@ def _venue_crawl_job(app):
     from app.venue_crawler import run_venue_crawl
 
     with app.app_context():
+        from app.log_utils import write_log
         logger.info("Scheduled venue crawl starting...")
-        summary = run_venue_crawl()
-        logger.info(
-            "Venue crawl complete: %d venues found, %d inserted, %d updated, "
-            "%d geocoded, %d geocode failures, %d errors",
-            summary["venues_found"],
-            summary["inserted"],
-            summary["updated"],
-            summary["geocoded"],
-            summary["geocode_failed"],
-            len(summary["errors"]),
-        )
-        if summary["errors"]:
-            for err in summary["errors"]:
-                logger.warning("Venue crawl error: %s", err)
+        write_log("scrape", "Scheduled venue crawl starting")
+        try:
+            summary = run_venue_crawl()
+            logger.info(
+                "Venue crawl complete: %d venues found, %d inserted, %d updated, "
+                "%d geocoded, %d geocode failures, %d errors",
+                summary["venues_found"],
+                summary["inserted"],
+                summary["updated"],
+                summary["geocoded"],
+                summary["geocode_failed"],
+                len(summary["errors"]),
+            )
+            level = "WARNING" if summary["errors"] else "INFO"
+            write_log("scrape",
+                      f"Venue crawl complete: {summary['venues_found']} venues, "
+                      f"{summary['inserted']} inserted, {summary['updated']} updated, "
+                      f"{len(summary['errors'])} errors",
+                      level=level,
+                      details=summary)
+            if summary["errors"]:
+                for err in summary["errors"]:
+                    logger.warning("Venue crawl error: %s", err)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Scheduled venue crawl failed: %s", exc)
+            write_log("scrape", f"Scheduled venue crawl failed: {exc}", level="ERROR")
 
 
 def _alert_job(app):
@@ -60,14 +82,19 @@ def _alert_job(app):
     from app.notifications import process_pending_alerts
 
     with app.app_context():
+        from app.log_utils import write_log
         logger.info("Alert processor starting...")
-        sent = process_pending_alerts(app)
-        if sent:
-            logger.info(
-                "Alert processor complete. %d notification(s) sent.", sent
-            )
-        else:
-            logger.debug("Alert processor complete. No notifications to send.")
+        try:
+            sent = process_pending_alerts(app)
+            if sent:
+                logger.info("Alert processor complete. %d notification(s) sent.", sent)
+                write_log("alert", f"Alert processor: {sent} notification(s) sent",
+                          details={"notifications_sent": sent})
+            else:
+                logger.debug("Alert processor complete. No notifications to send.")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Alert processor failed: %s", exc)
+            write_log("alert", f"Alert processor failed: {exc}", level="ERROR")
 
 
 def _cleanup_job(app):
