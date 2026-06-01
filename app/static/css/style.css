@@ -1331,4 +1331,120 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   min-height: 1.4em;
 }
 
+/* ── Hamburger button (desktop: hidden) ─────────────────────────────── */
+.nav-hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+  height: var(--nav-height);
+}
+.nav-hamburger span {
+  display: block;
+  width: 22px;
+  height: 2px;
+  background: var(--text-primary);
+  border-radius: 2px;
+  transition: transform 0.2s, opacity 0.2s;
+}
+.navbar.open .nav-hamburger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.navbar.open .nav-hamburger span:nth-child(2) { opacity: 0; transform: scaleX(0); }
+.navbar.open .nav-hamburger span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
+/* ── Mobile responsive ───────────────────────────────────────────────── */
+@media (max-width: 768px) {
+
+  /* Navbar: brand row + hamburger; links expand on .open */
+  .navbar {
+    height: auto;
+    min-height: var(--nav-height);
+    flex-wrap: wrap;
+    padding: 0 16px;
+  }
+  .nav-brand { height: var(--nav-height); flex: 1; }
+  .nav-hamburger { display: flex; }
+
+  .nav-links {
+    display: none;
+    flex-direction: column;
+    width: 100%;
+    gap: 0;
+    padding: 4px 0 12px;
+  }
+  .navbar.open .nav-links { display: flex; }
+  .nav-links a {
+    padding: 12px 4px;
+    font-size: 15px;
+    border-radius: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-links li:last-child a { border-bottom: none; }
+
+  .nav-user {
+    display: none;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 12px 0 16px;
+    gap: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .navbar.open .nav-user { display: flex; }
+  .nav-user-name { font-size: 14px; }
+
+  /* Main content: tighter padding */
+  .main-content { padding: 16px; }
+
+  /* Admin subnav: wrap instead of overflow */
+  .admin-subnav {
+    padding: 0 16px;
+    flex-wrap: wrap;
+    height: auto;
+    margin-bottom: 16px;
+  }
+  .admin-subnav a { padding: 8px 12px; font-size: 12px; }
+
+  /* Page headings */
+  .page-header h1 { font-size: 22px; }
+
+  /* Touch targets: small buttons get a taller tap area */
+  .btn-sm { padding: 8px 14px; min-height: 36px; }
+
+  /* Stats grid: slightly tighter minimum */
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+
+  /* Admin form grid: single column */
+  .form-grid { grid-template-columns: 1fr; }
+
+  /* Alert detail: narrow label column */
+  .detail-list { grid-template-columns: 100px 1fr; font-size: 13px; }
+
+  /* Theater card footer: allow buttons to wrap */
+  .theater-card-footer { flex-wrap: wrap; }
+
+  /* Alert pref actions: stack vertically */
+  .pref-actions { flex-direction: column; }
+
+  /* Showtime filter bar: full-width inputs on small screens */
+  .showtime-filters input,
+  .showtime-filters select { min-width: 80px; }
+
+  /* Admin filter bar: inputs expand to fill row */
+  .admin-search-input { min-width: 0; }
+
+  /* Stat value: slightly smaller on very narrow screens */
+  .stat-value { font-size: 32px; }
+
+  /* Modal: full-width with small margin */
+  .modal-box { max-width: 100%; margin: 12px; }
+
+  /* Two-col-map: clear the fixed height constraint */
+  .two-col-map { height: auto; min-height: 0; }
+  #theater-map { min-height: 340px; }
+}
