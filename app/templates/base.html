@@ -10,11 +10,14 @@
   <script src="{{ url_for('static', filename='vendor/leaflet.js') }}"></script>
 </head>
 <body>
-  <nav class="navbar">
+  <nav class="navbar" id="main-navbar">
     <div class="nav-brand">
       <span class="nav-logo">🎬</span>
       <span class="nav-title">IMAX Alert</span>
     </div>
+    <button class="nav-hamburger" id="nav-hamburger" aria-label="Toggle navigation" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
     <ul class="nav-links">
       <li><a href="{{ url_for('main.index') }}" {% if request.endpoint == 'main.index' %}class="active"{% endif %}>Dashboard</a></li>
       <li><a href="{{ url_for('main.theaters') }}" {% if request.endpoint in ['main.theaters','main.theater_detail'] %}class="active"{% endif %}>Theaters</a></li>
@@ -61,5 +64,22 @@
   </footer>
 
   {% block scripts %}{% endblock %}
+  <script>
+    (function () {
+      var btn = document.getElementById('nav-hamburger');
+      var nav = document.getElementById('main-navbar');
+      if (!btn || !nav) return;
+      btn.addEventListener('click', function () {
+        var open = nav.classList.toggle('open');
+        btn.setAttribute('aria-expanded', open);
+      });
+      document.addEventListener('click', function (e) {
+        if (!nav.contains(e.target)) {
+          nav.classList.remove('open');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
