@@ -43,6 +43,11 @@ class Config:
     # Set to "false" to disable the startup crawl (e.g. if seeding manually).
     VENUE_CRAWL_ON_EMPTY = os.environ.get("VENUE_CRAWL_ON_EMPTY", "true").lower() == "true"
 
+    # Tie CSRF token lifetime to the session rather than a fixed 1-hour window.
+    # Without this, Mobile Safari suspends background tabs long enough for the
+    # default 3600 s limit to expire, causing "CSRF token expired" on next use.
+    WTF_CSRF_TIME_LIMIT = None
+
     # Google Maps / Leaflet (no API key needed for Leaflet + OpenStreetMap)
     MAPS_ENABLED = True
 
