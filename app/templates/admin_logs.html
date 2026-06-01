@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Activity Logs – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Activity Logs</h1>
+  <p class="subtitle">Structured app-wide activity and error log</p>
+</div>
+
+<!-- Filters -->
+<form method="get" action="{{ url_for('main.admin_logs') }}" class="showtime-filters" style="margin-bottom:16px">
+  <select name="level" onchange="this.form.submit()">
+    <option value="" {% if not level_filter %}selected{% endif %}>All Levels</option>
+    <option value="INFO"    {% if level_filter == 'INFO'    %}selected{% endif %}>INFO</option>
+    <option value="WARNING" {% if level_filter == 'WARNING' %}selected{% endif %}>WARNING</option>
+    <option value="ERROR"   {% if level_filter == 'ERROR'   %}selected{% endif %}>ERROR</option>
+  </select>
+  <select name="category" onchange="this.form.submit()">
+    <option value="" {% if not category_filter %}selected{% endif %}>All Categories</option>
+    {% for cat in categories %}
+    <option value="{{ cat }}" {% if category_filter == cat %}selected{% endif %}>{{ cat | capitalize }}</option>
+    {% endfor %}
+  </select>
+  {% if level_filter or category_filter %}
+  <a href="{{ url_for('main.admin_logs') }}" class="btn-sm btn-ghost">Clear</a>
+  {% endif %}
+  <span class="text-muted" style="font-size:13px">{{ entries | length }} entries (latest 500)</span>
+</form>
+
+<section class="card">
+  {% if entries %}
+  <div class="table-wrap" style="max-height:600px;overflow-y:auto">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="white-space:nowrap">Timestamp</th>
+          <th>Level</th>
+          <th>Category</th>
+          <th>Message</th>
+          <th>User</th>
+        </tr>
+      </thead>
+      <tbody id="log-tbody">
+        {% for e in entries %}
+        <tr class="log-row">
+          <td style="white-space:nowrap;font-size:12px">
+            {{ e.created_at | in_user_tz(current_user.timezone, '%b %d %H:%M:%S') if e.created_at else '–' }}
+          </td>
+          <td>
+            {% if e.level == 'ERROR' %}
+              <span class="status-badge status-inactive">ERROR</span>
+            {% elif e.level == 'WARNING' %}
+              <span class="status-badge" style="background:rgba(245,158,11,0.15);color:var(--warning)">WARN</span>
+            {% else %}
+              <span class="status-badge status-active">INFO</span>
+            {% endif %}
+          </td>
+          <td><span class="badge">{{ e.category }}</span></td>
+          <td style="font-size:13px">{{ e.message }}</td>
+          <td style="font-size:12px;color:var(--text-muted)">
+            {{ e.user.name if e.user else '–' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination-bar" id="log-pager" style="display:none;margin-top:8px">
+    <button class="btn-sm btn-ghost" id="log-prev" onclick="logPage(-1)" disabled>← Prev</button>
+    <span id="log-page-info" class="text-muted" style="font-size:13px"></span>
+    <button class="btn-sm btn-ghost" id="log-next" onclick="logPage(1)">Next →</button>
+  </div>
+  {% else %}
+  <p class="text-muted">No log entries found.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const _logPageSize = {{ rows_per_page }};
+let _logPage = 0;
+
+function logPage(delta) {
+  const rows = document.querySelectorAll('#log-tbody .log-row');
+  const pages = Math.max(1, Math.ceil(rows.length / _logPageSize));
+  _logPage = Math.min(Math.max(0, _logPage + delta), pages - 1);
+  logApply();
+}
+
+function logApply() {
+  const rows = [...document.querySelectorAll('#log-tbody .log-row')];
+  if (!rows.length) return;
+  const pages = Math.max(1, Math.ceil(rows.length / _logPageSize));
+  const start = _logPage * _logPageSize;
+  rows.forEach((r, i) => { r.style.display = (i >= start && i < start + _logPageSize) ? '' : 'none'; });
+  const pager = document.getElementById('log-pager');
+  if (rows.length > _logPageSize) {
+    pager.style.display = '';
+    document.getElementById('log-prev').disabled = _logPage === 0;
+    document.getElementById('log-next').disabled = _logPage >= pages - 1;
+    document.getElementById('log-page-info').textContent =
+      `Page ${_logPage + 1} of ${pages} (${rows.length} entries)`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', logApply);
+</script>
+{% endblock %}

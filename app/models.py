@@ -799,3 +799,26 @@ class Notification(db.Model):
             f"<Notification to={self.user_id} method={self.method} "
             f"sent={self.sent_at}>"
         )
+
+
+class LogEntry(db.Model):
+    """Structured in-app activity and error log."""
+
+    __tablename__ = "log_entries"
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    level = db.Column(db.String(10), default="INFO")
+    category = db.Column(db.String(30), index=True)
+    message = db.Column(db.Text)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    details = db.Column(db.Text, nullable=True)
+
+    user = db.relationship("User", backref=db.backref("log_entries", lazy="dynamic"))
+
+    def __repr__(self):
+        return f"<LogEntry [{self.level}] {self.category}: {self.message[:60]}>"
