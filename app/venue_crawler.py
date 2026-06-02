@@ -69,6 +69,33 @@ GEOCODE_DELAY_SECONDS = 1.1
 MAX_GEOCODE_FAILURES = 10
 REQUEST_TIMEOUT = 20
 
+# OSM class/type pairs that indicate the geocoder matched a city or
+# administrative boundary rather than an actual venue.  Results matching
+# these are rejected and the next query strategy is tried.
+_COARSE_OSM_TYPES = frozenset({
+    "city", "town", "village", "suburb", "county", "state", "country",
+    "administrative", "municipality", "district", "region", "province",
+    "borough", "quarter", "neighbourhood",
+})
+
+# CSV seed file path
+_CSV_SEED_PATH = Path(__file__).parent.parent / "seeds" / "imax_theaters.csv"
+
+# Mapping of Theater DB field → CSV column header for re-seed operations
+CSV_RESEED_COLUMNS: dict[str, str] = {
+    "address":             "Address",
+    "phone":               "Phone",
+    "website":             "Website",
+    "chain":               "Chain",
+    "venue_key":           "Venue Key",
+    "audio_system":        "Audio System",
+    "screen_dims":         "Screen Dimensions",
+    "screen_size":         "Screen AR",
+    "projector_type":      "Digital Projector",
+    "film_projector_type": "Film Projector",
+    "commercial_films":    "Commercial Films Shown",
+}
+
 NOMINATIM_HEADERS = {
     "User-Agent": "IMAXAlert/1.0 (IMAX theater notification app; contact via GitHub)"
 }
@@ -495,9 +522,13 @@ def geocode_venue(name: str, city: str, state: str, country: str,
     Look up coordinates for a theater using Nominatim.
 
     Query priority:
-      1. Precise address (if address provided): "123 Main St, City, State, ZIP, Country"
-      2. Name-based:  "Name, City, State, Country"
-      3. City-only fallback: "City, State, Country"
+      1. Precise address (if address provided): "123 Main St, City, State, ZIP"
+      2. Name-based: "Theater Name, City, State, Country"
+
+    City-only queries are intentionally omitted — they always return the city
+    center node, not a venue location.  Results whose OSM type indicates a
+    city or administrative boundary are rejected so city-center coordinates
+    are never returned as a theater location.
 
     Returns a dict with keys: address, zip_code, latitude, longitude,
     city_name, state_name, country_name.
@@ -511,7 +542,8 @@ def geocode_venue(name: str, city: str, state: str, country: str,
     country_q = "USA" if is_us else country
     params_base = {"countrycodes": "us"} if is_us else {}
 
-    # Build ordered query list — precise address first, then name-based fallbacks
+    # Build ordered query list — precise address first, then name-based.
+    # City-only fallback intentionally removed (always returns city center).
     queries = []
 
     if address and address.strip():
@@ -520,16 +552,9 @@ def geocode_venue(name: str, city: str, state: str, country: str,
             parts.insert(-1 if is_us else len(parts), zip_code.strip())
         queries.append(", ".join(p for p in parts if p))
 
-    if is_us:
-        queries += [
-            f"{name}, {city}, {state}, USA",
-            f"{city}, {state}, USA",
-        ]
-    else:
-        queries += [
-            f"{name}, {city}, {country_q}",
-            f"{city}, {country_q}",
-        ]
+    queries.append(
+        f"{name}, {city}, {state}, USA" if is_us else f"{name}, {city}, {country_q}"
+    )
 
     params = {
         "format": "jsonv2",
@@ -538,8 +563,10 @@ def geocode_venue(name: str, city: str, state: str, country: str,
         **params_base,
     }
 
-    data = []
-    for query in queries:
+    hit = None
+    for i, query in enumerate(queries):
+        if i > 0:
+            time.sleep(GEOCODE_DELAY_SECONDS)
         params["q"] = query
         try:
             resp = requests.get(
@@ -557,15 +584,24 @@ def geocode_venue(name: str, city: str, state: str, country: str,
             logger.warning("Geocode JSON parse error for '%s': %s", query, exc)
             return result
 
-        if data:
-            break
-        time.sleep(GEOCODE_DELAY_SECONDS)
+        if not data:
+            continue
 
-    if not data:
-        logger.debug("No geocode results for '%s, %s %s %s'", name, city, state, country)
+        candidate = data[0]
+        if candidate.get("class") == "place" and candidate.get("type") in _COARSE_OSM_TYPES:
+            logger.debug(
+                "Rejecting coarse OSM result (class=%s type=%s) for query '%s'",
+                candidate.get("class"), candidate.get("type"), query,
+            )
+            continue
+
+        hit = candidate
+        break
+
+    if not hit:
+        logger.warning("No geocode results for '%s, %s %s %s'", name, city, state, country)
         return result
 
-    hit = data[0]
     addr = hit.get("address", {})
     number = addr.get("house_number", "")
     road = addr.get("road", "")
@@ -574,7 +610,6 @@ def geocode_venue(name: str, city: str, state: str, country: str,
     result["zip_code"]     = addr.get("postcode", "")
     result["latitude"]     = float(hit.get("lat", 0)) or None
     result["longitude"]    = float(hit.get("lon", 0)) or None
-    # City: Nominatim may use city, town, village, or municipality
     result["city_name"]    = (addr.get("city") or addr.get("town") or
                               addr.get("village") or addr.get("municipality") or "")
     result["state_name"]   = addr.get("state", "")
@@ -799,42 +834,50 @@ def get_geocode_status() -> dict:
     return dict(_geocode_status)
 
 
-def run_bulk_geocode(app) -> None:
+def run_bulk_geocode(app, mode: str = "missing") -> None:
     """
-    Geocode every Theater row that has latitude=NULL or longitude=NULL.
+    Geocode Theater rows in a background daemon thread.
 
-    Designed to be called from a daemon thread.  Updates the module-level
-    ``_geocode_status`` dict in real time so the UI can poll for progress.
+    mode="missing"  — only rows with latitude=NULL or longitude=NULL (default)
+    mode="all"      — every row, overwriting existing coordinates
+
+    Updates ``_geocode_status`` in real time so the UI can poll for progress.
+    Only latitude and longitude are written back; address and zip_code are
+    inputs to the geocoder, not outputs from it.
     """
     global _geocode_status  # noqa: PLW0603
 
     with app.app_context():
-        # Load only the scalar columns we need — avoids lazy-load issues outside the session
-        rows = (
-            db.session.query(
-                Theater.id,
-                Theater.name,
-                Theater.city,
-                Theater.state,
-                Theater.country,
-            )
-            .filter(
-                db.or_(Theater.latitude.is_(None), Theater.longitude.is_(None))
-            )
-            .order_by(Theater.id)
-            .all()
+        q = db.session.query(
+            Theater.id,
+            Theater.name,
+            Theater.city,
+            Theater.state,
+            Theater.country,
+            Theater.address,
+            Theater.zip_code,
         )
+        if mode == "missing":
+            q = q.filter(db.or_(Theater.latitude.is_(None), Theater.longitude.is_(None)))
+        rows = q.order_by(Theater.id).all()
 
-    # Build plain dicts so nothing depends on an open session
     theaters = [
-        {"id": r.id, "name": r.name or "", "city": r.city or "",
-         "state": r.state or "", "country": r.country or "United States"}
+        {
+            "id":       r.id,
+            "name":     r.name     or "",
+            "city":     r.city     or "",
+            "state":    r.state    or "",
+            "country":  r.country  or "United States",
+            "address":  r.address  or "",
+            "zip_code": r.zip_code or "",
+        }
         for r in rows
     ]
 
     total = len(theaters)
     _geocode_status = {
         "running":      True,
+        "mode":         mode,
         "started_at":   datetime.now(timezone.utc).isoformat(),
         "finished_at":  None,
         "total":        total,
@@ -843,23 +886,26 @@ def run_bulk_geocode(app) -> None:
         "failed":       0,
         "errors":       [],
     }
-    logger.info("Bulk geocode starting: %d theaters to process.", total)
+    logger.info("Bulk geocode (%s) starting: %d theaters to process.", mode, total)
     with app.app_context():
         from app.log_utils import write_log
-        write_log("geocode", f"Bulk geocode started: {total} theaters to process",
-                  details={"total": total})
+        write_log("geocode", f"Bulk geocode ({mode}) started: {total} theaters to process",
+                  details={"total": total, "mode": mode})
 
     try:
         for theater in theaters:
-            name    = theater["name"]
-            city    = theater["city"]
-            state   = theater["state"]
-            country = theater["country"]
+            name     = theater["name"]
+            city     = theater["city"]
+            state    = theater["state"]
+            country  = theater["country"]
+            address  = theater["address"]
+            zip_code = theater["zip_code"]
 
             time.sleep(GEOCODE_DELAY_SECONDS)
 
             try:
-                geo = geocode_venue(name, city, state, country)
+                geo = geocode_venue(name, city, state, country,
+                                    address=address, zip_code=zip_code)
             except Exception as exc:  # noqa: BLE001
                 msg = f"geocode_venue raised for '{name}': {exc}"
                 logger.warning(msg)
@@ -884,10 +930,7 @@ def run_bulk_geocode(app) -> None:
                 if geo.get("latitude"):
                     t.latitude  = geo["latitude"]
                     t.longitude = geo["longitude"]
-                    if geo.get("address"):
-                        t.address  = geo["address"]
-                    if geo.get("zip_code"):
-                        t.zip_code = geo["zip_code"]
+                    # address and zip_code are source data — never overwritten by geocoding
                     try:
                         db.session.commit()
                         _geocode_status["geocoded"] += 1
@@ -922,7 +965,7 @@ def run_bulk_geocode(app) -> None:
         _geocode_status["running"]     = False
         _geocode_status["finished_at"] = datetime.now(timezone.utc).isoformat()
         summary_msg = (
-            f"Bulk geocode complete: {_geocode_status['geocoded']}/{total} geocoded, "
+            f"Bulk geocode ({mode}) complete: {_geocode_status['geocoded']}/{total} geocoded, "
             f"{_geocode_status['failed']} failed, {len(_geocode_status['errors'])} errors"
         )
         logger.info(summary_msg)
@@ -932,7 +975,92 @@ def run_bulk_geocode(app) -> None:
             write_log("geocode", summary_msg, level=level,
                       details={
                           "total": total,
+                          "mode":  mode,
                           "geocoded": _geocode_status["geocoded"],
                           "failed":   _geocode_status["failed"],
                           "errors":   len(_geocode_status["errors"]),
                       })
+
+
+# ---------------------------------------------------------------------------
+# Geocoding reset
+# ---------------------------------------------------------------------------
+
+def reset_geocoding() -> int:
+    """
+    Null out latitude and longitude for every Theater row.
+    Returns the number of rows affected.
+    Only touches lat/lng — address and all other fields are left unchanged.
+    """
+    result = db.session.execute(
+        db.text("UPDATE theaters SET latitude = NULL, longitude = NULL")
+    )
+    db.session.commit()
+    return result.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Re-seed from CSV
+# ---------------------------------------------------------------------------
+
+def reseed_from_csv(columns: list[str], dry_run: bool = False) -> dict:
+    """
+    Restore selected Theater columns from seeds/imax_theaters.csv.
+
+    Match key: Location Name (case-insensitive) + Country.
+    Only columns present in CSV_RESEED_COLUMNS are accepted.
+    Returns {"updated": N, "skipped": N, "unmatched": N, "errors": []}.
+    """
+    import csv as _csv
+
+    valid = [c for c in columns if c in CSV_RESEED_COLUMNS]
+    if not valid:
+        return {"updated": 0, "skipped": 0, "unmatched": 0, "errors": ["No valid columns specified"]}
+
+    if not _CSV_SEED_PATH.exists():
+        return {"updated": 0, "skipped": 0, "unmatched": 0,
+                "errors": [f"Seed file not found: {_CSV_SEED_PATH}"]}
+
+    updated = skipped = unmatched = 0
+    errors: list[str] = []
+
+    with open(_CSV_SEED_PATH, newline="", encoding="utf-8") as f:
+        reader = _csv.DictReader(f)
+        for row in reader:
+            location_name = (row.get("Location Name") or "").strip()
+            country_name  = (row.get("Country") or "").strip()
+            if not location_name:
+                skipped += 1
+                continue
+
+            t = Theater.query.filter(
+                db.func.lower(Theater.name) == location_name.lower(),
+                db.func.lower(Theater.country) == country_name.lower(),
+            ).first()
+
+            if t is None:
+                unmatched += 1
+                continue
+
+            if dry_run:
+                updated += 1
+                continue
+
+            try:
+                for col in valid:
+                    csv_header = CSV_RESEED_COLUMNS[col]
+                    raw = (row.get(csv_header) or "").strip() or None
+                    setattr(t, col, raw)
+                updated += 1
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"Error updating '{location_name}': {exc}")
+
+    if not dry_run and updated:
+        try:
+            db.session.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.session.rollback()
+            errors.append(f"DB commit failed: {exc}")
+            updated = 0
+
+    return {"updated": updated, "skipped": skipped, "unmatched": unmatched, "errors": errors}

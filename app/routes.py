@@ -1984,6 +1984,81 @@ def api_geocode_bulk_status():
     return jsonify(get_geocode_status())
 
 
+@api_bp.route("/geocode/bulk/rerun", methods=["POST"])
+@require_role("admin")
+def api_geocode_bulk_rerun():
+    """Re-geocode every theater regardless of whether coordinates already exist."""
+    from app.log_utils import write_log
+    from app.venue_crawler import get_geocode_status, run_bulk_geocode
+
+    status = get_geocode_status()
+    if status["running"]:
+        return jsonify({"status": "already_running"}), 409
+
+    total = Theater.query.count()
+    write_log("geocode", f"Re-geocode All triggered: {total} theaters queued",
+              user_id=current_user.id, details={"total": total})
+
+    app = current_app._get_current_object()
+    thread = threading.Thread(
+        target=run_bulk_geocode,
+        args=(app,),
+        kwargs={"mode": "all"},
+        daemon=True,
+        name="bulk-geocode-all",
+    )
+    thread.start()
+    return jsonify({"status": "started", "total": total})
+
+
+@api_bp.route("/geocode/reset", methods=["POST"])
+@require_role("admin")
+def api_geocode_reset():
+    """Null latitude and longitude for all theaters so they can be re-geocoded."""
+    from app.log_utils import write_log
+    from app.venue_crawler import reset_geocoding
+
+    try:
+        count = reset_geocoding()
+        write_log("geocode", f"Geocoding reset: {count} theaters cleared",
+                  user_id=current_user.id, details={"count": count})
+        return jsonify({"status": "ok", "count": count})
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Geocoding reset failed: %s", exc)
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@api_bp.route("/admin/theaters/reseed/preview", methods=["POST"])
+@require_role("admin")
+def api_reseed_preview():
+    """Return how many theaters would be updated by a re-seed (dry run)."""
+    from app.venue_crawler import reseed_from_csv
+    columns = (request.get_json(force=True) or {}).get("columns", [])
+    result = reseed_from_csv(columns, dry_run=True)
+    return jsonify(result)
+
+
+@api_bp.route("/admin/theaters/reseed", methods=["POST"])
+@require_role("admin")
+def api_reseed_from_csv():
+    """Restore selected Theater columns from seeds/imax_theaters.csv."""
+    from app.log_utils import write_log
+    from app.venue_crawler import reseed_from_csv
+
+    columns = (request.get_json(force=True) or {}).get("columns", [])
+    if not columns:
+        return jsonify({"status": "error", "message": "No columns specified"}), 400
+
+    result = reseed_from_csv(columns)
+    level = "WARNING" if result["errors"] else "INFO"
+    write_log("geocode",
+              f"Re-seed from CSV: {result['updated']} updated, "
+              f"{result['unmatched']} unmatched, {len(result['errors'])} errors",
+              level=level, user_id=current_user.id,
+              details={"columns": columns, **result})
+    return jsonify({"status": "ok", **result})
+
+
 # ---------------------------------------------------------------------------
 # API: Scheduler
 # ---------------------------------------------------------------------------

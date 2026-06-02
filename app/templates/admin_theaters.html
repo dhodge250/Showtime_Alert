@@ -36,6 +36,21 @@
               Geocode Missing
             {% endif %}
           </button>
+          <button class="actions-dropdown-item" id="geocode-all-btn"
+                  onclick="closeActionsDropdown(); triggerGeocodeAll(this)"
+                  {% if geocode_status.running %}disabled{% endif %}>
+            Re-geocode All
+          </button>
+          <button class="actions-dropdown-item" id="geocode-reset-btn"
+                  onclick="closeActionsDropdown(); triggerGeocodeReset(this)"
+                  {% if geocode_status.running %}disabled{% endif %}>
+            Reset Geocoding
+          </button>
+          <div class="actions-dropdown-divider"></div>
+          <button class="actions-dropdown-item" id="reseed-btn"
+                  onclick="closeActionsDropdown(); openReseedModal()">
+            Re-seed from CSV
+          </button>
         </div>
       </div>
       <button id="clear-btn" class="btn btn-danger" onclick="openClearModal()">
@@ -65,11 +80,11 @@
 <div id="geocode-status-bar" class="admin-crawl-summary"
   {% if not geocode_status.running and not geocode_status.finished_at %}style="display:none"{% endif %}>
   {% if geocode_status.running %}
-    <strong>Geocoding in progress:</strong>
+    <strong>{% if geocode_status.mode == 'all' %}Re-geocode All{% else %}Geocoding{% endif %} in progress:</strong>
     {{ geocode_status.processed }} / {{ geocode_status.total }}
     &mdash; {{ geocode_status.geocoded }} geocoded, {{ geocode_status.failed }} failed
   {% elif geocode_status.finished_at %}
-    <strong>Last geocode:</strong>
+    <strong>Last geocode{% if geocode_status.mode == 'all' %} (all){% endif %}:</strong>
     {{ geocode_status.finished_at }} &mdash;
     {{ geocode_status.geocoded }} geocoded, {{ geocode_status.failed }} failed
     {% if geocode_status.errors %}<span class="text-error">, {{ geocode_status.errors|length }} error(s)</span>{% endif %}
@@ -240,6 +255,46 @@
 <div id="pagination-bar" class="pagination-bar" style="display:none"></div>
 
 <div id="toast" class="toast" style="display:none"></div>
+
+<!-- ── Re-seed from CSV Modal ─────────────────────────────────────── -->
+<div id="reseed-modal" class="modal-overlay" style="display:none" onclick="handleReseedOverlayClick(event)">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="reseed-modal-title">
+    <div class="modal-header">
+      <h2 id="reseed-modal-title">Re-seed from CSV</h2>
+      <button class="modal-close" onclick="closeReseedModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-top:0;color:var(--text-muted);font-size:13px">
+        Restores selected fields for matched theaters from
+        <code>seeds/imax_theaters.csv</code>.
+        Match key: theater name + country (case-insensitive).
+      </p>
+      <div class="form-group">
+        <label>Fields to restore</label>
+        <div id="reseed-columns" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:6px">
+          <label class="checkbox-label"><input type="checkbox" value="address"> Address</label>
+          <label class="checkbox-label"><input type="checkbox" value="phone"> Phone</label>
+          <label class="checkbox-label"><input type="checkbox" value="website"> Website</label>
+          <label class="checkbox-label"><input type="checkbox" value="chain"> Chain</label>
+          <label class="checkbox-label"><input type="checkbox" value="venue_key"> Venue Key</label>
+          <label class="checkbox-label"><input type="checkbox" value="audio_system"> Audio System</label>
+          <label class="checkbox-label"><input type="checkbox" value="screen_dims"> Screen Dimensions</label>
+          <label class="checkbox-label"><input type="checkbox" value="screen_size"> Screen AR</label>
+          <label class="checkbox-label"><input type="checkbox" value="projector_type"> Digital Projector</label>
+          <label class="checkbox-label"><input type="checkbox" value="film_projector_type"> Film Projector</label>
+          <label class="checkbox-label"><input type="checkbox" value="commercial_films"> Commercial Films Shown</label>
+        </div>
+      </div>
+      <p id="reseed-preview" style="margin-bottom:0;font-size:13px">Select at least one field to preview.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeReseedModal()">Cancel</button>
+      <button id="reseed-confirm-btn" class="btn btn-primary" onclick="executeReseed()" disabled>
+        Re-seed
+      </button>
+    </div>
+  </div>
+</div>
 
 <!-- ── Clear Showtimes Modal ─────────────────────────────────────── -->
 <div id="clear-modal" class="modal-overlay" style="display:none" onclick="handleClearOverlayClick(event)">
@@ -667,6 +722,137 @@ function triggerGeocode(btn) {
 
 // Resume polling if a geocode job was already running when the page loaded
 {% if geocode_status.running %}startGeocodePolling();{% endif %}
+
+// ── Re-geocode All ────────────────────────────────────────────────────
+function triggerGeocodeAll(btn) {
+  if (!confirm('Re-geocode all ' + {{ theaters|length }} + ' theaters? This will overwrite existing coordinates and may take a while.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  fetch('/api/geocode/bulk/rerun', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'started') {
+        btn.textContent = 'Re-geocoding… (0/' + data.total + ')';
+        startGeocodePolling();
+      } else if (data.status === 'already_running') {
+        btn.textContent = 'Already Running';
+        startGeocodePolling();
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Re-geocode All';
+        showToast('Error starting re-geocode — check logs.', 'error');
+      }
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = 'Re-geocode All'; });
+}
+
+// ── Reset Geocoding ───────────────────────────────────────────────────
+function triggerGeocodeReset(btn) {
+  if (!confirm('Clear latitude and longitude for all theaters? Run Geocode Missing (or Re-geocode All) afterwards to repopulate.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Resetting…';
+  fetch('/api/geocode/reset', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'ok') {
+        showToast(data.count + ' theaters cleared. Run Geocode Missing to repopulate.');
+        btn.textContent = 'Reset done';
+        setTimeout(() => { btn.disabled = false; btn.textContent = 'Reset Geocoding'; }, 3000);
+      } else {
+        showToast('Reset failed — check logs.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Reset Geocoding';
+      }
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = 'Reset Geocoding'; });
+}
+
+// ── Re-seed from CSV modal ────────────────────────────────────────────
+function openReseedModal() {
+  document.getElementById('reseed-preview').textContent = 'Select at least one field to preview.';
+  document.getElementById('reseed-confirm-btn').disabled = true;
+  document.getElementById('reseed-modal').style.display = 'flex';
+  document.querySelectorAll('#reseed-columns input').forEach(cb => {
+    cb.checked = false;
+    cb.onchange = scheduleReseedPreview;
+  });
+}
+
+function closeReseedModal() {
+  document.getElementById('reseed-modal').style.display = 'none';
+}
+
+function handleReseedOverlayClick(e) {
+  if (e.target === document.getElementById('reseed-modal')) closeReseedModal();
+}
+
+let _reseedPreviewTimer = null;
+function scheduleReseedPreview() {
+  clearTimeout(_reseedPreviewTimer);
+  document.getElementById('reseed-preview').textContent = 'Counting…';
+  document.getElementById('reseed-confirm-btn').disabled = true;
+  _reseedPreviewTimer = setTimeout(updateReseedPreview, 300);
+}
+
+function getReseedColumns() {
+  return Array.from(document.querySelectorAll('#reseed-columns input:checked')).map(cb => cb.value);
+}
+
+function updateReseedPreview() {
+  const cols = getReseedColumns();
+  if (!cols.length) {
+    document.getElementById('reseed-preview').textContent = 'Select at least one field to preview.';
+    return;
+  }
+  fetch('/api/admin/theaters/reseed/preview', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({columns: cols}),
+  })
+    .then(r => r.json())
+    .then(data => {
+      const preview = document.getElementById('reseed-preview');
+      if (data.errors && data.errors.length) {
+        preview.textContent = 'Error: ' + data.errors[0];
+        document.getElementById('reseed-confirm-btn').disabled = true;
+      } else {
+        preview.textContent =
+          data.updated + ' theater' + (data.updated !== 1 ? 's' : '') + ' will be updated' +
+          (data.unmatched ? ', ' + data.unmatched + ' unmatched' : '') + '.';
+        document.getElementById('reseed-confirm-btn').disabled = data.updated === 0;
+      }
+    })
+    .catch(() => {
+      document.getElementById('reseed-preview').textContent = 'Error fetching preview.';
+    });
+}
+
+function executeReseed() {
+  const cols = getReseedColumns();
+  const btn = document.getElementById('reseed-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Reseeding…';
+  fetch('/api/admin/theaters/reseed', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({columns: cols}),
+  })
+    .then(r => r.json())
+    .then(data => {
+      closeReseedModal();
+      if (data.errors && data.errors.length) {
+        showToast('Re-seed done with errors — check logs.', 'error');
+      } else {
+        showToast('Re-seed complete: ' + data.updated + ' theaters updated.');
+      }
+      btn.textContent = 'Re-seed';
+    })
+    .catch(() => {
+      showToast('Re-seed failed — check logs.', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Re-seed';
+    });
+}
 
 // ── Inline dropdown editing ───────────────────────────────────────────
 let activeCancel = null;
