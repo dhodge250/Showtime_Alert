@@ -400,6 +400,8 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
 .actions-dropdown-item:last-child { border-bottom: none; }
 .actions-dropdown-item:hover:not(:disabled) { background: rgba(0,212,255,0.08); color: var(--accent); }
 .actions-dropdown-item:disabled { color: var(--text-muted); cursor: default; }
+.actions-dropdown-divider { border-top: 1px solid var(--border); margin: 4px 0; }
+.checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 
 /* ── Table ──────────────────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
