@@ -1379,7 +1379,7 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   }
   .navbar.open .nav-links { display: flex; }
   .nav-links a {
-    padding: 12px 4px;
+    padding: 14px 16px;
     font-size: 15px;
     border-radius: 0;
     border-bottom: 1px solid var(--border);
@@ -1401,14 +1401,18 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   /* Main content: tighter padding */
   .main-content { padding: 16px; }
 
-  /* Admin subnav: wrap instead of overflow */
+  /* Admin subnav: scroll horizontally instead of wrapping */
   .admin-subnav {
     padding: 0 16px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
     height: auto;
     margin-bottom: 16px;
   }
-  .admin-subnav a { padding: 8px 12px; font-size: 12px; }
+  .admin-subnav::-webkit-scrollbar { display: none; }
+  .admin-subnav a { padding: 8px 12px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
 
   /* Page headings */
   .page-header h1 { font-size: 22px; }
@@ -1435,8 +1439,8 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   .showtime-filters input,
   .showtime-filters select { min-width: 80px; }
 
-  /* Admin filter bar: inputs expand to fill row */
-  .admin-search-input { min-width: 0; }
+  /* Admin filter bar: search gets its own full-width row */
+  .admin-search-input { flex-basis: 100%; min-width: 0; }
 
   /* Stat value: slightly smaller on very narrow screens */
   .stat-value { font-size: 32px; }
@@ -1447,4 +1451,14 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   /* Two-col-map: clear the fixed height constraint */
   .two-col-map { height: auto; min-height: 0; }
   #theater-map { min-height: 340px; }
+
+  /* Tables: prevent cell text from wrapping so the table scrolls as a unit */
+  .table-wrap .data-table td { white-space: nowrap; }
+
+  /* Showtime filter bar: date picker on its own full-width row */
+  #st-filter-date { flex-basis: 100%; }
+
+  /* Alerts page: show Your Alerts above Create New Alert on mobile */
+  .alerts-layout { display: flex; flex-direction: column; }
+  .alerts-layout > section:last-child { order: -1; }
 }
