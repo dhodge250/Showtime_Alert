@@ -75,9 +75,17 @@ _COARSE_OSM_TYPES = frozenset({
     "borough", "quarter", "neighbourhood",
 })
 
-# Tokens stripped before fuzzy name comparison
+# Tokens stripped before fuzzy name comparison (Overpass / Nominatim)
 _NAME_NOISE = re.compile(
     r"\b(imax|imax[\s\-]?laser|laser|dine[\s\-]?in|& imax|"
+    r"\d{1,3}|theatres?|theaters?|cinemas?|multiplex|"
+    r"amc dine-in|amc dine in)\b",
+    re.IGNORECASE,
+)
+# Same, but keeps "imax" — used when matching DDG/Apple Maps results where the
+# place name often includes "IMAX" and we want that to contribute to the score.
+_NAME_NOISE_NO_IMAX = re.compile(
+    r"\b(imax[\s\-]?laser|laser|dine[\s\-]?in|"
     r"\d{1,3}|theatres?|theaters?|cinemas?|multiplex|"
     r"amc dine-in|amc dine in)\b",
     re.IGNORECASE,
@@ -89,16 +97,17 @@ _PUNCT = re.compile(r"[^a-z0-9 ]")
 # Name normalisation helpers
 # ---------------------------------------------------------------------------
 
-def _normalize_name(name: str) -> str:
+def _normalize_name(name: str, keep_imax: bool = False) -> str:
     name = name.lower()
-    name = _NAME_NOISE.sub(" ", name)
+    noise = _NAME_NOISE_NO_IMAX if keep_imax else _NAME_NOISE
+    name = noise.sub(" ", name)
     name = _PUNCT.sub(" ", name)
     return " ".join(name.split())
 
 
-def _name_score(csv_name: str, osm_name: str) -> float:
-    n1 = _normalize_name(csv_name)
-    n2 = _normalize_name(osm_name)
+def _name_score(csv_name: str, osm_name: str, keep_imax: bool = False) -> float:
+    n1 = _normalize_name(csv_name, keep_imax=keep_imax)
+    n2 = _normalize_name(osm_name, keep_imax=keep_imax)
     if not n1 or not n2:
         return 0.0
     tokens1 = n1.split()
@@ -442,7 +451,9 @@ def ddg_browser_address(
     best_score = 0.0
     best_place = None
     for pl in places:
-        score = _name_score(csv_name, pl.get("name", ""))
+        # Keep "imax" during DDG scoring — Apple Maps often includes it in the
+        # place name, so preserving it gives better discrimination.
+        score = _name_score(csv_name, pl.get("name", ""), keep_imax=True)
         if score > best_score:
             best_score = score
             best_place = pl
