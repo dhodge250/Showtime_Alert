@@ -887,6 +887,10 @@ def run_bulk_geocode(app, mode: str = "missing") -> None:
         "errors":       [],
     }
     logger.info("Bulk geocode (%s) starting: %d theaters to process.", mode, total)
+    with app.app_context():
+        from app.log_utils import write_log
+        write_log("geocode", f"Bulk geocode ({mode}) started: {total} theaters to process",
+                  details={"total": total, "mode": mode})
 
     try:
         for theater in theaters:
@@ -908,9 +912,15 @@ def run_bulk_geocode(app, mode: str = "missing") -> None:
                 _geocode_status["errors"].append(msg)
                 _geocode_status["processed"] += 1
                 _geocode_status["failed"]    += 1
+                with app.app_context():
+                    from app.log_utils import write_log
+                    write_log("geocode", msg, level="ERROR",
+                              details={"theater_id": theater["id"], "name": name,
+                                       "city": city, "country": country})
                 continue
 
             with app.app_context():
+                from app.log_utils import write_log
                 t = Theater.query.get(theater["id"])
                 if t is None:
                     _geocode_status["processed"] += 1
@@ -930,9 +940,16 @@ def run_bulk_geocode(app, mode: str = "missing") -> None:
                         logger.error(msg)
                         _geocode_status["errors"].append(msg)
                         _geocode_status["failed"] += 1
+                        write_log("geocode", msg, level="ERROR",
+                                  details={"theater_id": theater["id"], "name": name})
                 else:
                     logger.warning("No geocode result for '%s, %s %s %s'",
                                    name, city, state, country)
+                    write_log("geocode",
+                              f"Geocode failed: {name}, {city} {state} {country}",
+                              level="WARNING",
+                              details={"theater_id": theater["id"], "name": name,
+                                       "city": city, "state": state, "country": country})
                     _geocode_status["failed"] += 1
 
             _geocode_status["processed"] += 1
@@ -941,14 +958,28 @@ def run_bulk_geocode(app, mode: str = "missing") -> None:
         msg = f"Bulk geocode aborted unexpectedly: {exc}"
         logger.error(msg)
         _geocode_status["errors"].append(msg)
+        with app.app_context():
+            from app.log_utils import write_log
+            write_log("geocode", msg, level="ERROR")
     finally:
         _geocode_status["running"]     = False
         _geocode_status["finished_at"] = datetime.now(timezone.utc).isoformat()
-        logger.info(
-            "Bulk geocode (%s) complete: %d/%d geocoded, %d failed, %d errors.",
-            mode, _geocode_status["geocoded"], total,
-            _geocode_status["failed"], len(_geocode_status["errors"]),
+        summary_msg = (
+            f"Bulk geocode ({mode}) complete: {_geocode_status['geocoded']}/{total} geocoded, "
+            f"{_geocode_status['failed']} failed, {len(_geocode_status['errors'])} errors"
         )
+        logger.info(summary_msg)
+        level = "WARNING" if _geocode_status["failed"] > 0 else "INFO"
+        with app.app_context():
+            from app.log_utils import write_log
+            write_log("geocode", summary_msg, level=level,
+                      details={
+                          "total": total,
+                          "mode":  mode,
+                          "geocoded": _geocode_status["geocoded"],
+                          "failed":   _geocode_status["failed"],
+                          "errors":   len(_geocode_status["errors"]),
+                      })
 
 
 # ---------------------------------------------------------------------------

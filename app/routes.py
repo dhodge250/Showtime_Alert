@@ -1945,6 +1945,7 @@ def api_geocode():
 @require_role("admin")
 def api_geocode_bulk_trigger():
     """Start a background bulk-geocode job for all theaters missing lat/lng."""
+    from app.log_utils import write_log
     from app.venue_crawler import get_geocode_status, run_bulk_geocode
 
     status = get_geocode_status()
@@ -1959,6 +1960,9 @@ def api_geocode_bulk_trigger():
 
     if total == 0:
         return jsonify({"status": "nothing_to_do", "total": 0})
+
+    write_log("geocode", f"Bulk geocode triggered: {total} theaters queued",
+              user_id=current_user.id, details={"total": total})
 
     app = current_app._get_current_object()
 
