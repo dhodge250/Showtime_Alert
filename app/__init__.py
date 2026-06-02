@@ -629,6 +629,11 @@ def _upsert_theaters_from_csv(app):
                     if venue_key:
                         t = Theater.query.filter_by(venue_key=venue_key).first()
                     if t is None:
+                        # Exact match first so Unicode names (e.g. Turkish İ) that
+                        # SQLite lower() can't fold still match correctly after the
+                        # first upsert stores them verbatim.
+                        t = Theater.query.filter_by(name=location_name).first()
+                    if t is None:
                         t = Theater.query.filter(
                             func.lower(Theater.name) == location_name.lower()
                         ).first()
