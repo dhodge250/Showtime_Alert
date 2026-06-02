@@ -122,6 +122,13 @@
     Show inactive
   </label>
 
+  <select id="page-size-select" onchange="onPageSizeChange()" title="Rows per page">
+    <option value="25" selected>25 / page</option>
+    <option value="50">50 / page</option>
+    <option value="100">100 / page</option>
+    <option value="150">150 / page</option>
+  </select>
+
   <button id="btn-clear" class="btn-sm btn-ghost" onclick="clearFilters()" disabled>Clear</button>
 </div>
 
@@ -230,6 +237,8 @@
   </table>
 </div>
 
+<div id="pagination-bar" class="pagination-bar" style="display:none"></div>
+
 <div id="toast" class="toast" style="display:none"></div>
 
 <!-- ── Clear Showtimes Modal ─────────────────────────────────────── -->
@@ -322,6 +331,11 @@ document.addEventListener('keydown', function(e) {
 // ── Lookup data ───────────────────────────────────────────────────────
 const LOOKUP = JSON.parse(document.getElementById('lookup-data').textContent);
 
+// ── Pagination state ──────────────────────────────────────────────────
+let currentPage = 1;
+let pageSize    = 25;
+let filteredRows = [];   // subset of rows matching the current filter
+
 // ── Data for cascading filter dropdowns ───────────────────────────────
 const rows = Array.from(document.querySelectorAll('#admin-table tbody .admin-row'));
 
@@ -386,20 +400,19 @@ function onStateChange() {
 }
 
 function onFilterChange() {
-  const q           = document.getElementById('admin-search').value.toLowerCase();
-  const chain       = document.getElementById('filter-chain').value;
-  const country     = document.getElementById('filter-country').value;
-  const state       = document.getElementById('filter-state').value;
-  const city        = document.getElementById('filter-city').value;
-  const aspect      = document.getElementById('filter-aspect').value;
-  const projector   = document.getElementById('filter-projector').value;
+  const q            = document.getElementById('admin-search').value.toLowerCase();
+  const chain        = document.getElementById('filter-chain').value;
+  const country      = document.getElementById('filter-country').value;
+  const state        = document.getElementById('filter-state').value;
+  const city         = document.getElementById('filter-city').value;
+  const aspect       = document.getElementById('filter-aspect').value;
+  const projector    = document.getElementById('filter-projector').value;
   const showInactive = document.getElementById('show-inactive').checked;
 
   const anyActive = q || chain || country || state || city || aspect || projector || showInactive;
   document.getElementById('btn-clear').disabled = !anyActive;
 
-  let visible = 0;
-  rows.forEach(row => {
+  filteredRows = rows.filter(row => {
     const matchSearch    = !q || row.dataset.name.includes(q) || row.dataset.city.includes(q) || row.dataset.country.includes(q);
     const matchChain     = !chain     || row.dataset.chain     === chain;
     const matchCountry   = !country   || row.dataset.country   === country;
@@ -407,17 +420,105 @@ function onFilterChange() {
     const matchCity      = !city      || row.dataset.city      === city;
     const matchAspect    = !aspect    || row.dataset.aspect    === aspect;
     const matchProjector = !projector || row.dataset.projector === projector;
-    const matchActive    = showInactive || row.dataset.active === '1';
-    const show = matchSearch && matchChain && matchCountry && matchState && matchCity && matchAspect && matchProjector && matchActive;
-    row.style.display = show ? '' : 'none';
-    if (show) visible++;
+    const matchActive    = showInactive || row.dataset.active  === '1';
+    return matchSearch && matchChain && matchCountry && matchState && matchCity && matchAspect && matchProjector && matchActive;
   });
 
-  const total = {{ theaters|length }};
+  currentPage = 1;
+  renderPage();
+}
+
+function renderPage() {
+  const total      = {{ theaters|length }};
+  const start      = (currentPage - 1) * pageSize;
+  const end        = start + pageSize;
+  const pageRows   = filteredRows.slice(start, end);
+  const pageRowSet = new Set(pageRows);
+
+  rows.forEach(row => { row.style.display = pageRowSet.has(row) ? '' : 'none'; });
+
+  // Result count
   const subtitle = document.getElementById('result-count');
-  subtitle.textContent = visible === total
-    ? total + ' total theaters (including inactive)'
-    : visible + ' of ' + total + ' theaters shown';
+  const matched  = filteredRows.length;
+  if (matched === total && pageSize >= total) {
+    subtitle.textContent = total + ' total theaters (including inactive)';
+  } else if (matched === total) {
+    const a = start + 1, b = Math.min(end, total);
+    subtitle.textContent = 'Showing ' + a + '–' + b + ' of ' + total + ' theaters';
+  } else {
+    const a = start + 1, b = Math.min(end, matched);
+    subtitle.textContent = 'Showing ' + a + '–' + b + ' of ' + matched + ' filtered (total: ' + total + ')';
+  }
+
+  renderPagination();
+}
+
+function renderPagination() {
+  const bar        = document.getElementById('pagination-bar');
+  const totalPages = Math.ceil(filteredRows.length / pageSize);
+
+  if (totalPages <= 1) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+
+  // Build page number list with ellipsis
+  const pages = [];
+  const delta = 2;
+  const rangeStart = Math.max(2, currentPage - delta);
+  const rangeEnd   = Math.min(totalPages - 1, currentPage + delta);
+
+  pages.push(1);
+  if (rangeStart > 2) pages.push('…');
+  for (let p = rangeStart; p <= rangeEnd; p++) pages.push(p);
+  if (rangeEnd < totalPages - 1) pages.push('…');
+  if (totalPages > 1) pages.push(totalPages);
+
+  bar.innerHTML = '';
+
+  // Prev button
+  const prev = document.createElement('button');
+  prev.className = 'page-btn page-prev';
+  prev.textContent = '‹ Prev';
+  prev.disabled = currentPage === 1;
+  prev.addEventListener('click', () => changePage(currentPage - 1));
+  bar.appendChild(prev);
+
+  // Page number buttons
+  pages.forEach(p => {
+    if (p === '…') {
+      const sep = document.createElement('span');
+      sep.className = 'page-sep';
+      sep.textContent = '…';
+      bar.appendChild(sep);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'page-btn' + (p === currentPage ? ' active' : '');
+      btn.textContent = p;
+      btn.addEventListener('click', () => changePage(p));
+      bar.appendChild(btn);
+    }
+  });
+
+  // Next button
+  const next = document.createElement('button');
+  next.className = 'page-btn page-next';
+  next.textContent = 'Next ›';
+  next.disabled = currentPage === totalPages;
+  next.addEventListener('click', () => changePage(currentPage + 1));
+  bar.appendChild(next);
+}
+
+function changePage(p) {
+  const totalPages = Math.ceil(filteredRows.length / pageSize);
+  currentPage = Math.max(1, Math.min(p, totalPages));
+  renderPage();
+  // Scroll table back into view
+  document.getElementById('admin-table').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function onPageSizeChange() {
+  pageSize = parseInt(document.getElementById('page-size-select').value, 10);
+  currentPage = 1;
+  renderPage();
 }
 
 function clearFilters() {
