@@ -845,6 +845,47 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+
+/* ── Admin: pagination bar ──────────────────────────────────────────── */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 16px;
+}
+.page-btn {
+  min-width: 36px;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.page-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--accent); }
+.page-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: default;
+}
+.page-btn:disabled { opacity: 0.4; cursor: default; }
+.page-sep {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 34px;
+  color: var(--text-muted);
+  font-size: 13px;
+  user-select: none;
+}
+
 .admin-table {
   width: 100%;
   border-collapse: collapse;
