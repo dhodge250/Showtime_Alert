@@ -53,14 +53,16 @@ def create_app(config_name="default"):
         from app import models  # noqa: F401
 
         db.create_all()
-        _run_migrations()
+        if not app.config.get("SKIP_MIGRATIONS", False):
+            _run_migrations()
         _enable_wal_mode(app)
         _seed_roles_and_admin()
         _seed_lookup_tables()
         _seed_default_settings()
         # Always run to fill in any fields (e.g. website URLs) that were
         # blank in the CSV at install time but have since been added.
-        _upsert_theaters_from_csv(app)
+        if not app.config.get("SKIP_CSV_SEED", False):
+            _upsert_theaters_from_csv(app)
         _load_settings_into_config(app)
         _migrate_legacy_alert_movies()
 
