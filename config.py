@@ -71,6 +71,12 @@ class TestingConfig(Config):
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     WTF_CSRF_ENABLED = False
     VENUE_CRAWL_ON_EMPTY = False
+    # Skip the 1927-row CSV upsert and incremental column migrations in tests —
+    # create_all() builds the schema fresh, and tests supply their own fixture data.
+    SKIP_CSV_SEED = True
+    SKIP_MIGRATIONS = True
+    # Disable rate limiting so repeated login calls across tests don't trip 429s.
+    RATELIMIT_ENABLED = False
 
 
 config = {

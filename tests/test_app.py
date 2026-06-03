@@ -5,15 +5,47 @@ from app import create_app, db
 from app.models import AlertMovie, AlertPreference, Movie, Notification, Role, Settings, Showtime, Theater, User
 
 
-@pytest.fixture
-def app():
-    """Create application for testing."""
+@pytest.fixture(scope="session")
+def _app_session():
+    """Create the Flask app once for the entire test session.
+
+    Avoids repeating the expensive parts of create_app() — Flask extension
+    init, SQLAlchemy engine setup, WAL mode config — for every test.
+    """
     application = create_app("testing")
-    with application.app_context():
-        db.create_all()
-        yield application
-        db.session.remove()
+    yield application
+
+
+@pytest.fixture
+def app(_app_session):
+    """Per-test: push an app context and reset the DB to a clean seeded state.
+
+    drop_all + create_all + three lightweight seeders is far cheaper than
+    a full create_app() call (skips 1927-row CSV upsert and 29 migration
+    column checks via SKIP_CSV_SEED / SKIP_MIGRATIONS in TestingConfig).
+    """
+    from app import (  # noqa: PLC0415
+        _seed_default_settings,
+        _seed_lookup_tables,
+        _seed_roles_and_admin,
+    )
+
+    with _app_session.app_context():
         db.drop_all()
+        db.create_all()
+        _seed_roles_and_admin()
+        _seed_lookup_tables()
+        _seed_default_settings()
+        yield _app_session
+        db.session.remove()
+
+
+@pytest.fixture(autouse=True)
+def _zero_geocode_delay(monkeypatch):
+    """Zero out the Nominatim rate-limit sleep so any test that exercises
+    geocode_venue doesn't pay the 1.1-second artificial delay."""
+    import app.venue_crawler as vc  # noqa: PLC0415
+    monkeypatch.setattr(vc, "GEOCODE_DELAY_SECONDS", 0)
 
 
 @pytest.fixture
@@ -23,16 +55,19 @@ def client(app):
 
 @pytest.fixture
 def auth_client(app):
-    """Test client pre-logged-in as the seeded admin (admin/admin)."""
+    """Test client pre-logged-in as the seeded admin (admin/admin).
+
+    The app fixture already pushes an app context, so no inner context
+    push is needed here — doing so would call db.session.remove() on exit
+    and tear down the session the outer context is using.
+    """
+    # Ensure seeding ran — admin user should exist
+    admin = User.query.filter_by(email="admin").first()
+    assert admin is not None, "Admin user not seeded"
+    # Disable forced password change so tests aren't redirected to /change-password
+    admin.force_password_change = False
+    db.session.commit()
     c = app.test_client()
-    with app.app_context():
-        # Ensure seeding ran — admin user should exist
-        admin = User.query.filter_by(email="admin").first()
-        assert admin is not None, "Admin user not seeded"
-        # Disable forced password change so tests aren't redirected to /change-password
-        admin.force_password_change = False
-        from app import db as _db
-        _db.session.commit()
     resp = c.post("/login", data={"email": "admin", "password": "admin"},
                   follow_redirects=True)
     assert resp.status_code == 200, f"Login failed: {resp.status_code}"
@@ -1156,52 +1191,57 @@ class TestLookupHelpers:
 # ── CSV seeding ───────────────────────────────────────────────────────
 
 
+@pytest.fixture
+def csv_seeded_app(app):
+    """Like app but also runs the CSV theater upsert.
+
+    TestingConfig sets SKIP_CSV_SEED=True so the per-test app fixture skips
+    the 1927-row upsert for speed.  Tests in TestCSVSeeding explicitly test
+    that function, so they use this fixture to run it on demand.
+    """
+    from app import _upsert_theaters_from_csv  # noqa: PLC0415
+    _upsert_theaters_from_csv(app)
+    return app
+
+
 class TestCSVSeeding:
-    """Tests for _seed_theaters_from_csv and related helpers."""
+    """Tests for _upsert_theaters_from_csv and related helpers."""
 
-    def test_csv_seed_populates_theaters(self, app):
-        """CSV seed should have inserted theaters on first boot."""
-        with app.app_context():
-            count = Theater.query.count()
-            # TestingConfig disables VENUE_CRAWL_ON_EMPTY but CSV seed should run
-            # (it has its own skip-if-empty guard based on Theater.query.count() > 0)
-            assert count > 0, "CSV seed did not insert any theaters"
+    def test_csv_seed_populates_theaters(self, csv_seeded_app):
+        """CSV upsert should insert theaters from the seed file."""
+        count = Theater.query.count()
+        assert count > 0, "CSV seed did not insert any theaters"
 
-    def test_csv_seed_sets_continent(self, app):
+    def test_csv_seed_sets_continent(self, csv_seeded_app):
         """At least one theater should have a continent FK set."""
-        with app.app_context():
-            from app.models import Continent
-            assert Continent.query.count() > 0, "No continents seeded"
-            t = Theater.query.filter(Theater.continent_id.isnot(None)).first()
-            assert t is not None, "No theater has continent_id set"
+        from app.models import Continent  # noqa: PLC0415
+        assert Continent.query.count() > 0, "No continents seeded"
+        t = Theater.query.filter(Theater.continent_id.isnot(None)).first()
+        assert t is not None, "No theater has continent_id set"
 
-    def test_csv_seed_sets_aspect_ratio(self, app):
+    def test_csv_seed_sets_aspect_ratio(self, csv_seeded_app):
         """At least one theater should have aspect_ratio_id set."""
-        with app.app_context():
-            t = Theater.query.filter(Theater.aspect_ratio_id.isnot(None)).first()
-            assert t is not None, "No theater has aspect_ratio_id set"
+        t = Theater.query.filter(Theater.aspect_ratio_id.isnot(None)).first()
+        assert t is not None, "No theater has aspect_ratio_id set"
 
-    def test_csv_seed_sets_projector_type(self, app):
+    def test_csv_seed_sets_projector_type(self, csv_seeded_app):
         """At least one theater should have projector_type_id set."""
-        with app.app_context():
-            t = Theater.query.filter(Theater.projector_type_id.isnot(None)).first()
-            assert t is not None
+        t = Theater.query.filter(Theater.projector_type_id.isnot(None)).first()
+        assert t is not None
 
-    def test_csv_seed_commercial_films_values(self, app):
+    def test_csv_seed_commercial_films_values(self, csv_seeded_app):
         """commercial_films column should only contain valid values or NULL."""
-        with app.app_context():
-            valid = {"Yes", "Limited", "No", None}
-            for t in Theater.query.all():
-                assert t.commercial_films in valid, f"Unexpected commercial_films: {t.commercial_films!r}"
+        valid = {"Yes", "Limited", "No", None}
+        for t in Theater.query.all():
+            assert t.commercial_films in valid, f"Unexpected: {t.commercial_films!r}"
 
-    def test_csv_seed_is_idempotent(self, app):
+    def test_csv_seed_is_idempotent(self, csv_seeded_app):
         """Calling _upsert_theaters_from_csv a second time should not change count."""
-        with app.app_context():
-            from app import _upsert_theaters_from_csv
-            count_before = Theater.query.count()
-            _upsert_theaters_from_csv(app)
-            count_after = Theater.query.count()
-            assert count_before == count_after, "CSV upsert changed theater count"
+        from app import _upsert_theaters_from_csv  # noqa: PLC0415
+        count_before = Theater.query.count()
+        _upsert_theaters_from_csv(csv_seeded_app)
+        count_after = Theater.query.count()
+        assert count_before == count_after, "CSV upsert changed theater count"
 
     def test_aspect_ratio_normalisation(self, app):
         """Malformed '2.30:01' should be normalised to '2.30:1'."""
