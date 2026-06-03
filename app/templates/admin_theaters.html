@@ -41,7 +41,7 @@
                   {% if geocode_status.running %}disabled{% endif %}>
             Re-geocode All
           </button>
-          <button class="actions-dropdown-item" id="geocode-reset-btn"
+          <button class="actions-dropdown-item actions-dropdown-item--pre-divider" id="geocode-reset-btn"
                   onclick="closeActionsDropdown(); triggerGeocodeReset(this)"
                   {% if geocode_status.running %}disabled{% endif %}>
             Reset Geocoding
@@ -271,7 +271,7 @@
       </p>
       <div class="form-group">
         <label>Fields to restore</label>
-        <div id="reseed-columns" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:6px">
+        <div id="reseed-columns" style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-top:6px">
           <label class="checkbox-label"><input type="checkbox" value="address"> Address</label>
           <label class="checkbox-label"><input type="checkbox" value="phone"> Phone</label>
           <label class="checkbox-label"><input type="checkbox" value="website"> Website</label>
