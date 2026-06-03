@@ -404,7 +404,8 @@ def _notify_for_alert(
             user, pref, "email", text_body, ok, err, showtime_ids_json
         )
         channel_attempted = True
-        sent += 1
+        if ok:
+            sent += 1
 
     if user.notify_sms and user.phone:
         ok, err = send_sms(app.config, user.phone, sms_body)
@@ -412,7 +413,8 @@ def _notify_for_alert(
             user, pref, "sms", sms_body, ok, err, showtime_ids_json
         )
         channel_attempted = True
-        sent += 1
+        if ok:
+            sent += 1
 
     if not channel_attempted:
         logger.warning(
@@ -424,7 +426,17 @@ def _notify_for_alert(
         )
         return 0
 
-    # Increment fired counter
+    if not sent:
+        # Channels were attempted but every delivery failed — do not advance
+        # the fired counter so the alert retries on the next cycle.
+        logger.warning(
+            "AlertPreference %d: notification attempted but all deliveries "
+            "failed — notifications_fired not incremented.",
+            pref.id,
+        )
+        return 0
+
+    # Increment fired counter only when at least one channel delivered.
     pref.notifications_fired = (pref.notifications_fired or 0) + 1
 
     # Mark specific movies as sent and close pref if all are done.
