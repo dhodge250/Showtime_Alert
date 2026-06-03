@@ -324,51 +324,48 @@ def _get_matching_showtimes_for_pref(
     Filter *candidates* to the showtimes that should trigger *pref*.
 
     For any-movie alerts: returns candidates matching the theater that haven't
-    already been notified (checked via the Notification table).
+    already been notified, unless a notification cap is set — in that case all
+    matching candidates are returned so the alert keeps firing until the cap.
     For specific-movie alerts: returns candidates whose movie_id matches an
-    unsent AlertMovie row.
+    unsent AlertMovie row.  Per-showtime deduplication is skipped when a cap
+    is set because the cap itself (notifications_fired >= max_notifications in
+    _notify_for_alert) is the correct closure guard; deduplicating by showtime
+    ID here would prevent any notification after the first from ever firing.
     """
     result: list[Showtime] = []
 
     if pref.is_any_movie:
-        # Build the set of already-notified showtime IDs from both old per-row
-        # records and new batch records that store a JSON list.
-        notified_ids: set[int] = set()
-        for n in Notification.query.filter_by(alert_preference_id=pref.id).all():
-            if n.notified_showtime_ids:
-                try:
-                    notified_ids.update(json.loads(n.notified_showtime_ids))
-                except (ValueError, TypeError):
-                    pass
-            elif n.showtime_id is not None:
-                notified_ids.add(n.showtime_id)
-        for st in candidates:
-            if pref.theater_id is not None and pref.theater_id != st.theater_id:
-                continue
-            if st.id not in notified_ids:
+        if pref.max_notifications:
+            # Cap mode: re-notify on every alert cycle until the cap is reached.
+            for st in candidates:
+                if pref.theater_id is not None and pref.theater_id != st.theater_id:
+                    continue
                 result.append(st)
+        else:
+            # One-shot mode: skip showtimes already covered by a prior notification.
+            notified_ids: set[int] = set()
+            for n in Notification.query.filter_by(alert_preference_id=pref.id).all():
+                if n.notified_showtime_ids:
+                    try:
+                        notified_ids.update(json.loads(n.notified_showtime_ids))
+                    except (ValueError, TypeError):
+                        pass
+                elif n.showtime_id is not None:
+                    notified_ids.add(n.showtime_id)
+            for st in candidates:
+                if pref.theater_id is not None and pref.theater_id != st.theater_id:
+                    continue
+                if st.id not in notified_ids:
+                    result.append(st)
     else:
         unsent_movie_ids: set[int] = {
             am.movie_id
             for am in pref.alert_movies.filter_by(alert_sent=False).all()
         }
-        # When a notification cap is set, movies are never individually marked
-        # sent between fires. Use the Notification log to deduplicate showtimes
-        # so the same screening doesn't trigger a second notification.
-        already_notified_ids: set[int] = set()
-        if pref.max_notifications:
-            for n in Notification.query.filter_by(alert_preference_id=pref.id).all():
-                if n.notified_showtime_ids:
-                    try:
-                        already_notified_ids.update(json.loads(n.notified_showtime_ids))
-                    except (ValueError, TypeError):
-                        pass
-                elif n.showtime_id is not None:
-                    already_notified_ids.add(n.showtime_id)
         for st in candidates:
             if pref.theater_id is not None and pref.theater_id != st.theater_id:
                 continue
-            if st.movie_id in unsent_movie_ids and st.id not in already_notified_ids:
+            if st.movie_id in unsent_movie_ids:
                 result.append(st)
 
     return result
@@ -407,7 +404,8 @@ def _notify_for_alert(
             user, pref, "email", text_body, ok, err, showtime_ids_json
         )
         channel_attempted = True
-        sent += 1
+        if ok:
+            sent += 1
 
     if user.notify_sms and user.phone:
         ok, err = send_sms(app.config, user.phone, sms_body)
@@ -415,7 +413,8 @@ def _notify_for_alert(
             user, pref, "sms", sms_body, ok, err, showtime_ids_json
         )
         channel_attempted = True
-        sent += 1
+        if ok:
+            sent += 1
 
     if not channel_attempted:
         logger.warning(
@@ -427,7 +426,17 @@ def _notify_for_alert(
         )
         return 0
 
-    # Increment fired counter
+    if not sent:
+        # Channels were attempted but every delivery failed — do not advance
+        # the fired counter so the alert retries on the next cycle.
+        logger.warning(
+            "AlertPreference %d: notification attempted but all deliveries "
+            "failed — notifications_fired not incremented.",
+            pref.id,
+        )
+        return 0
+
+    # Increment fired counter only when at least one channel delivered.
     pref.notifications_fired = (pref.notifications_fired or 0) + 1
 
     # Mark specific movies as sent and close pref if all are done.

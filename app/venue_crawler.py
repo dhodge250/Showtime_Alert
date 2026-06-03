@@ -78,12 +78,20 @@ _COARSE_OSM_TYPES = frozenset({
     "borough", "quarter", "neighbourhood",
 })
 
+# Strips chain numbers and "& IMAX" suffix to get a shorter venue name that
+# OSM is more likely to have indexed (e.g. "AMC River Park Square 20 & IMAX"
+# → "AMC River Park Square").
+_GEOCODE_NAME_SIMPLIFY_RE = re.compile(
+    r"\s*(?:&\s*)?IMAX\b.*$|\s+\d+\s*$|\bDINE[\s\-]?IN\b", re.IGNORECASE
+)
+
 # CSV seed file path
 _CSV_SEED_PATH = Path(__file__).parent.parent / "seeds" / "imax_theaters.csv"
 
 # Mapping of Theater DB field → CSV column header for re-seed operations
 CSV_RESEED_COLUMNS: dict[str, str] = {
     "address":             "Address",
+    "zip_code":            "Postal Code",
     "phone":               "Phone",
     "website":             "Website",
     "chain":               "Chain",
@@ -522,8 +530,10 @@ def geocode_venue(name: str, city: str, state: str, country: str,
     Look up coordinates for a theater using Nominatim.
 
     Query priority:
-      1. Precise address (if address provided): "123 Main St, City, State, ZIP"
-      2. Name-based: "Theater Name, City, State, Country"
+      1. Free-text address: "123 Main St, City, State, ZIP"
+      2. Structured address: Nominatim street/city/state/country params
+      3. Full name free-text: "Theater Name, City, State, Country"
+      4. Simplified name: strip chain number and IMAX suffix for a better OSM hit
 
     City-only queries are intentionally omitted — they always return the city
     center node, not a venue location.  Results whose OSM type indicates a
@@ -540,48 +550,67 @@ def geocode_venue(name: str, city: str, state: str, country: str,
 
     is_us = country in ("United States", "US", "USA")
     country_q = "USA" if is_us else country
-    params_base = {"countrycodes": "us"} if is_us else {}
-
-    # Build ordered query list — precise address first, then name-based.
-    # City-only fallback intentionally removed (always returns city center).
-    queries = []
-
-    if address and address.strip():
-        parts = [address.strip(), city, state] if is_us else [address.strip(), city, country_q]
-        if zip_code and zip_code.strip():
-            parts.insert(-1 if is_us else len(parts), zip_code.strip())
-        queries.append(", ".join(p for p in parts if p))
-
-    queries.append(
-        f"{name}, {city}, {state}, USA" if is_us else f"{name}, {city}, {country_q}"
-    )
-
-    params = {
+    params_base: dict = {
         "format": "jsonv2",
         "addressdetails": 1,
         "limit": 1,
-        **params_base,
     }
+    if is_us:
+        params_base["countrycodes"] = "us"
+
+    # Each entry is merged into params_base for a Nominatim request.
+    # Use {"q": "..."} for free-text search, or structured keys
+    # (street/city/state/country/postalcode) for Nominatim's structured search.
+    queries: list[dict] = []
+
+    if address and address.strip():
+        # 1. Free-text address query
+        parts = [address.strip(), city, state] if is_us else [address.strip(), city, country_q]
+        if zip_code and zip_code.strip():
+            parts.append(zip_code.strip())
+        queries.append({"q": ", ".join(p for p in parts if p)})
+
+        # 2. Structured query — often more reliable when free-text address fails
+        struct: dict = {"street": address.strip(), "city": city}
+        if is_us:
+            if state:
+                struct["state"] = state
+            struct["country"] = "US"
+            if zip_code and zip_code.strip():
+                struct["postalcode"] = zip_code.strip()
+        else:
+            struct["country"] = country_q
+        queries.append(struct)
+
+    # 3. Full name free-text
+    queries.append({"q": f"{name}, {city}, {state}, USA" if is_us else f"{name}, {city}, {country_q}"})
+
+    # 4. Simplified name: drop trailing number and "& IMAX" so the base venue
+    #    name (e.g. "AMC River Park Square") has a better chance of an OSM hit
+    short_name = _GEOCODE_NAME_SIMPLIFY_RE.sub("", name).strip(" ,&")
+    if short_name and short_name.lower() != name.lower():
+        q4 = f"{short_name}, {city}, {state}, USA" if is_us else f"{short_name}, {city}, {country_q}"
+        queries.append({"q": q4})
 
     hit = None
-    for i, query in enumerate(queries):
+    for i, q_override in enumerate(queries):
         if i > 0:
             time.sleep(GEOCODE_DELAY_SECONDS)
-        params["q"] = query
+        request_params = {**params_base, **q_override}
         try:
             resp = requests.get(
                 NOMINATIM_URL,
-                params=params,
+                params=request_params,
                 headers=NOMINATIM_HEADERS,
                 timeout=REQUEST_TIMEOUT,
             )
             resp.raise_for_status()
             data = resp.json()
         except requests.RequestException as exc:
-            logger.warning("Geocode request failed for '%s': %s", query, exc)
+            logger.warning("Geocode request failed for %r: %s", q_override, exc)
             return result
         except ValueError as exc:
-            logger.warning("Geocode JSON parse error for '%s': %s", query, exc)
+            logger.warning("Geocode JSON parse error for %r: %s", q_override, exc)
             return result
 
         if not data:
@@ -590,8 +619,8 @@ def geocode_venue(name: str, city: str, state: str, country: str,
         candidate = data[0]
         if candidate.get("class") == "place" and candidate.get("type") in _COARSE_OSM_TYPES:
             logger.debug(
-                "Rejecting coarse OSM result (class=%s type=%s) for query '%s'",
-                candidate.get("class"), candidate.get("type"), query,
+                "Rejecting coarse OSM result (class=%s type=%s) for query %r",
+                candidate.get("class"), candidate.get("type"), q_override,
             )
             continue
 

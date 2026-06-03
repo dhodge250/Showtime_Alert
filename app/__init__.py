@@ -53,14 +53,16 @@ def create_app(config_name="default"):
         from app import models  # noqa: F401
 
         db.create_all()
-        _run_migrations()
+        if not app.config.get("SKIP_MIGRATIONS", False):
+            _run_migrations()
         _enable_wal_mode(app)
         _seed_roles_and_admin()
         _seed_lookup_tables()
         _seed_default_settings()
         # Always run to fill in any fields (e.g. website URLs) that were
         # blank in the CSV at install time but have since been added.
-        _upsert_theaters_from_csv(app)
+        if not app.config.get("SKIP_CSV_SEED", False):
+            _upsert_theaters_from_csv(app)
         _load_settings_into_config(app)
         _migrate_legacy_alert_movies()
 
@@ -531,10 +533,10 @@ def _upsert_theaters_from_csv(app):
       3. no match   — insert a new Theater row.
 
     Fields updated when non-empty in the CSV: venue_key, chain/chain_id,
-    website, audio_system/audio_system_id, address, phone, and all
-    screen/projector/dimension fields.
+    website, audio_system/audio_system_id, address, zip_code (only when DB
+    row has none), phone, and all screen/projector/dimension fields.
 
-    Fields never overwritten: is_active, latitude, longitude, zip_code,
+    Fields never overwritten: is_active, latitude, longitude,
     phone (preserved if CSV is blank), image_url.
 
     Returns a summary dict: {"inserted": N, "updated": N, "skipped": N, "errors": []}.
@@ -603,6 +605,7 @@ def _upsert_theaters_from_csv(app):
                     website_url     = (row.get("Website") or "").strip() or None
                     audio_sys_name  = (row.get("Audio System") or "").strip() or None
                     address         = (row.get("Address") or "").strip() or None
+                    postal_code     = (row.get("Postal Code") or "").strip() or None
                     phone           = (row.get("Phone") or "").strip() or None
 
                     # --- Resolve FK objects ---
@@ -670,6 +673,8 @@ def _upsert_theaters_from_csv(app):
                         t.audio_system_id = audio_sys_obj.id if audio_sys_obj else t.audio_system_id
                     if address:
                         t.address = address
+                    if postal_code and not t.zip_code:
+                        t.zip_code = postal_code
                     if phone:
                         t.phone = phone
                     t.country_id            = country_obj.id if country_obj else t.country_id
