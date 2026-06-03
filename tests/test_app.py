@@ -1046,11 +1046,13 @@ class TestNotifications:
 
     def test_notify_once_per_preference(self, app, sample_user, sample_theater, sample_movie):
         from datetime import datetime, timezone
+        from unittest.mock import patch
 
         from app.notifications import _notify_for_showtime
 
         with app.app_context():
-            # Give the user a channel so alert_sent becomes True after notification attempt.
+            # Give the user an email channel and mock delivery so the alert
+            # auto-closes after a successful notification.
             user = User.query.get(sample_user)
             user.notify_email = True
             user.email = "test@example.com"
@@ -1074,7 +1076,8 @@ class TestNotifications:
             db.session.add(showtime)
             db.session.commit()
 
-            _notify_for_showtime(app, showtime)
+            with patch("app.notifications.send_email", return_value=(True, "")):
+                _notify_for_showtime(app, showtime)
             db.session.refresh(pref)
             # All AlertMovie rows sent → pref auto-closes
             assert pref.alert_sent is True
@@ -1454,13 +1457,13 @@ class TestNotificationChannelGate:
             db.session.refresh(pref)
             assert pref.alert_sent is False
 
-    def test_alert_marked_sent_when_channel_attempted(
+    def test_alert_not_closed_when_delivery_fails(
         self, app, sample_user, sample_theater, sample_movie
     ):
         """
-        When notify_email=True but SMTP is unconfigured, the attempt is made
-        (and fails gracefully) — but alert_sent should still become True
-        because a channel WAS attempted.
+        When notify_email=True but SMTP is unconfigured the send fails —
+        alert_sent must remain False so the alert retries on the next cycle.
+        notifications_fired must not be incremented on a failed delivery.
         """
         from datetime import datetime, timezone
 
@@ -1493,9 +1496,9 @@ class TestNotificationChannelGate:
 
             _notify_for_showtime(app, showtime)
             db.session.refresh(pref)
-            # Channel was attempted (email); SMTP credentials empty → send failed,
-            # but alert_sent must be True to prevent infinite retries.
-            assert pref.alert_sent is True
+            # Delivery failed — alert must stay open to retry, counter unchanged.
+            assert pref.alert_sent is False
+            assert (pref.notifications_fired or 0) == 0
 
 
 # ── Admin Settings: notification keys ────────────────────────────────
