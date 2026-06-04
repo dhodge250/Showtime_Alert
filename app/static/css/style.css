@@ -1528,4 +1528,9 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   /* Alerts page: show Your Alerts above Create New Alert on mobile */
   .alerts-layout { display: flex; flex-direction: column; }
   .alerts-layout > section:last-child { order: -1; }
+
+  /* Lookup table cards: make card scroll rather than bleed content outside
+     its boundary. Uses :has() to avoid affecting cards with absolutely-
+     positioned dropdown panels (e.g. dashboard ms-panel dropdowns). */
+  .card:has(.admin-lookup-table) { overflow-x: auto; }
 }
