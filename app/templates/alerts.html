@@ -85,6 +85,18 @@
         </div>
       </div>
 
+      <!-- Target date filter -->
+      <div class="form-group">
+        <label for="target_date">
+          Specific date
+          <span class="text-muted" style="font-size:11px;font-weight:normal">(optional)</span>
+        </label>
+        <input type="date" id="target_date" name="target_date" style="width:180px" />
+        <small class="text-muted" style="font-size:11px;margin-top:2px">
+          Only notify when a showtime on this date is found. Leave blank to watch any date.
+        </small>
+      </div>
+
       <!-- Max notifications cap -->
       <div class="form-group">
         <label for="max_notifications">
@@ -150,6 +162,9 @@
             <div class="pref-meta" style="font-size:12px;color:var(--text-muted);margin-top:2px">
               {{ pref.user.name if pref.user else '–' }}
               &bull; {{ pref.created_at | in_user_tz(current_user.timezone, '%b %d, %Y') }}
+              {% if pref.target_date %}
+              &bull; <span style="color:var(--accent)">{{ pref.target_date.strftime('%b %d, %Y') }}</span>
+              {% endif %}
             </div>
             <div style="margin-top:4px">
               {% if not pref.is_active %}
@@ -385,12 +400,15 @@ document.getElementById('alert-form').addEventListener('submit', async e => {
   const maxNotifRaw = document.getElementById('max_notifications').value.trim();
   const maxNotif = maxNotifRaw !== '' ? parseInt(maxNotifRaw, 10) : null;
 
+  const targetDate = document.getElementById('target_date').value.trim() || null;
+
   const body = {
     user_id: userId,
     theater_id: theaterId,
     movie_ids,
     tmdb_ids,
     max_notifications: maxNotif,
+    target_date: targetDate,
   };
 
   try {

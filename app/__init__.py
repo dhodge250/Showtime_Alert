@@ -246,6 +246,12 @@ def _run_migrations():
             "ALTER TABLE users ADD COLUMN timezone VARCHAR(100) DEFAULT 'UTC'",
             None,
         ),
+        # Target date filter for alerts (fires only on a specific date when set)
+        (
+            "target_date", "alert_preferences",
+            "ALTER TABLE alert_preferences ADD COLUMN target_date DATE",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:

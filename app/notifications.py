@@ -332,6 +332,13 @@ def _get_matching_showtimes_for_pref(
     _notify_for_alert) is the correct closure guard; deduplicating by showtime
     ID here would prevent any notification after the first from ever firing.
     """
+    # When a target date is set, restrict candidates to that day only.
+    if pref.target_date:
+        candidates = [
+            st for st in candidates
+            if st.show_datetime.date() == pref.target_date
+        ]
+
     result: list[Showtime] = []
 
     if pref.is_any_movie:

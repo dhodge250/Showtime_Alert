@@ -1269,8 +1269,10 @@ def api_create_alert():
     resolved_movies = unique_movies
 
     # ── Duplicate / conflict check ────────────────────────────────────────
-    # A user cannot have the same (movie, theater) in any active alert unless
-    # that specific movie's AlertMovie row has already fired (alert_sent=True).
+    # A user cannot have the same (movie, theater, target_date) in any active
+    # alert unless that movie's AlertMovie row has already fired.
+    # Different target_dates on the same movie/theater are allowed (e.g. same
+    # film on June 21 and June 28 are independent alerts).
     conflicting_titles: list[str] = []
     for m in resolved_movies:
         conflict = (
@@ -1280,6 +1282,7 @@ def api_create_alert():
                 AlertPreference.user_id == user.id,
                 AlertPreference.theater_id == theater_id,
                 AlertPreference.is_active == True,  # noqa: E712
+                AlertPreference.target_date == target_date,
                 AlertMovie.movie_id == m.id,
                 AlertMovie.alert_sent == False,  # noqa: E712
             )
@@ -1299,7 +1302,7 @@ def api_create_alert():
             "conflicting_movies": conflicting_titles,
         }), 409
 
-    # ── Check for existing any-movie alert for same theater ───────────────
+    # ── Check for existing any-movie alert for same theater + date ────────
     # (Only if no specific movies were provided — i.e. new alert is also any-movie)
     if not resolved_movies:
         existing_any = AlertPreference.query.filter_by(
@@ -1307,6 +1310,7 @@ def api_create_alert():
             theater_id=theater_id,
             is_active=True,
             alert_sent=False,
+            target_date=target_date,
         ).filter(
             ~AlertPreference.alert_movies.any()  # type: ignore[attr-defined]
         ).first()
@@ -1325,10 +1329,20 @@ def api_create_alert():
     except (ValueError, TypeError):
         max_notifications = None
 
+    from datetime import date as date_type
+    target_date = None
+    raw_date = (data.get("target_date") or "").strip()
+    if raw_date:
+        try:
+            target_date = date_type.fromisoformat(raw_date)
+        except ValueError:
+            return jsonify({"error": f"Invalid target_date '{raw_date}'; expected YYYY-MM-DD."}), 400
+
     pref = AlertPreference(
         user_id=user.id,
         theater_id=theater_id,
         max_notifications=max_notifications,
+        target_date=target_date,
     )
     db.session.add(pref)
     db.session.flush()  # get pref.id

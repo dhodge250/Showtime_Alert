@@ -67,6 +67,11 @@
       <dt>Created at</dt>
       <dd>{{ pref.created_at | in_user_tz(current_user.timezone, '%B %d, %Y at %I:%M %p') }}</dd>
 
+      {% if pref.target_date %}
+      <dt>Target date</dt>
+      <dd>{{ pref.target_date.strftime('%B %d, %Y') }}</dd>
+      {% endif %}
+
       <dt>Notification limit</dt>
       <dd>
         {% if pref.max_notifications %}

@@ -659,6 +659,9 @@ class AlertPreference(db.Model):
     # None = unlimited.
     max_notifications = db.Column(db.Integer, nullable=True)
     notifications_fired = db.Column(db.Integer, default=0, nullable=False)
+    # Optional: only fire when a matching showtime exists on this specific date.
+    # None = fire on any date (existing behaviour).
+    target_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = db.relationship("User", back_populates="alert_preferences")
@@ -717,6 +720,7 @@ class AlertPreference(db.Model):
             "is_active": self.is_active,
             "max_notifications": self.max_notifications,
             "notifications_fired": self.notifications_fired or 0,
+            "target_date": self.target_date.isoformat() if self.target_date else None,
         }
 
     def __repr__(self):
