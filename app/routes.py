@@ -1268,6 +1268,16 @@ def api_create_alert():
             unique_movies.append(m)
     resolved_movies = unique_movies
 
+    # Parse target_date before duplicate checks (both checks reference it)
+    from datetime import date as date_type
+    target_date = None
+    raw_date = (data.get("target_date") or "").strip()
+    if raw_date:
+        try:
+            target_date = date_type.fromisoformat(raw_date)
+        except ValueError:
+            return jsonify({"error": f"Invalid target_date '{raw_date}'; expected YYYY-MM-DD."}), 400
+
     # ── Duplicate / conflict check ────────────────────────────────────────
     # A user cannot have the same (movie, theater, target_date) in any active
     # alert unless that movie's AlertMovie row has already fired.
@@ -1328,15 +1338,6 @@ def api_create_alert():
             max_notifications = None
     except (ValueError, TypeError):
         max_notifications = None
-
-    from datetime import date as date_type
-    target_date = None
-    raw_date = (data.get("target_date") or "").strip()
-    if raw_date:
-        try:
-            target_date = date_type.fromisoformat(raw_date)
-        except ValueError:
-            return jsonify({"error": f"Invalid target_date '{raw_date}'; expected YYYY-MM-DD."}), 400
 
     pref = AlertPreference(
         user_id=user.id,
