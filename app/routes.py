@@ -1278,6 +1278,15 @@ def api_create_alert():
         except ValueError:
             return jsonify({"error": f"Invalid target_date '{raw_date}'; expected YYYY-MM-DD."}), 400
 
+    target_date_buffer = None
+    if target_date:
+        raw_buffer = data.get("target_date_buffer")
+        try:
+            buf = int(raw_buffer) if raw_buffer is not None and raw_buffer != "" else None
+            target_date_buffer = max(0, buf) if buf is not None else None
+        except (ValueError, TypeError):
+            pass
+
     # ── Duplicate / conflict check ────────────────────────────────────────
     # A user cannot have the same (movie, theater, target_date) in any active
     # alert unless that movie's AlertMovie row has already fired.
@@ -1344,6 +1353,7 @@ def api_create_alert():
         theater_id=theater_id,
         max_notifications=max_notifications,
         target_date=target_date,
+        target_date_buffer=target_date_buffer,
     )
     db.session.add(pref)
     db.session.flush()  # get pref.id
@@ -1362,7 +1372,8 @@ def api_create_alert():
     write_log("alert", f"Alert created: {', '.join(movie_names)} @ {theater_name}",
               user_id=current_user.id,
               details={"pref_id": pref.id, "theater_id": theater_id,
-                       "target_date": target_date.isoformat() if target_date else None})
+                       "target_date": target_date.isoformat() if target_date else None,
+                       "target_date_buffer": target_date_buffer})
 
     warnings: list[str] = []
 

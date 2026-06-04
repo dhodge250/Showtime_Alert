@@ -662,6 +662,9 @@ class AlertPreference(db.Model):
     # Optional: only fire when a matching showtime exists on this specific date.
     # None = fire on any date (existing behaviour).
     target_date = db.Column(db.Date, nullable=True)
+    # Optional buffer (days) around target_date — fires if showtime falls within
+    # [target_date - buffer, target_date + buffer]. Ignored when target_date is None.
+    target_date_buffer = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = db.relationship("User", back_populates="alert_preferences")
@@ -681,6 +684,15 @@ class AlertPreference(db.Model):
         lazy="dynamic",
         order_by="Notification.sent_at.desc()",
     )
+
+    @property
+    def target_date_range(self):
+        """Return (date_from, date_to) when target_date is set, else (None, None)."""
+        if not self.target_date:
+            return None, None
+        from datetime import timedelta
+        buf = self.target_date_buffer or 0
+        return self.target_date - timedelta(days=buf), self.target_date + timedelta(days=buf)
 
     @property
     def is_any_movie(self) -> bool:
@@ -721,6 +733,7 @@ class AlertPreference(db.Model):
             "max_notifications": self.max_notifications,
             "notifications_fired": self.notifications_fired or 0,
             "target_date": self.target_date.isoformat() if self.target_date else None,
+            "target_date_buffer": self.target_date_buffer,
         }
 
     def __repr__(self):

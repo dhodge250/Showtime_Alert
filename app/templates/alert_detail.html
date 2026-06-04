@@ -69,7 +69,16 @@
 
       {% if pref.target_date %}
       <dt>Target date</dt>
-      <dd>{{ pref.target_date.strftime('%B %d, %Y') }}</dd>
+      <dd>
+        {% set date_from, date_to = pref.target_date_range %}
+        {{ pref.target_date.strftime('%B %d, %Y') }}
+        {% if pref.target_date_buffer %}
+          <span class="text-muted" style="font-size:12px">
+            &plusmn;{{ pref.target_date_buffer }} day{{ 's' if pref.target_date_buffer != 1 else '' }}
+            &mdash; matches {{ date_from.strftime('%b %d') }} &ndash; {{ date_to.strftime('%b %d') }}
+          </span>
+        {% endif %}
+      </dd>
       {% endif %}
 
       <dt>Notification limit</dt>
