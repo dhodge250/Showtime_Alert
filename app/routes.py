@@ -1361,17 +1361,76 @@ def api_create_alert():
     from app.log_utils import write_log
     write_log("alert", f"Alert created: {', '.join(movie_names)} @ {theater_name}",
               user_id=current_user.id,
-              details={"pref_id": pref.id, "theater_id": theater_id})
+              details={"pref_id": pref.id, "theater_id": theater_id,
+                       "target_date": target_date.isoformat() if target_date else None})
+
+    warnings: list[str] = []
+
+    # Warn if a dated alert overlaps an existing undated alert for the same
+    # movie(s)/theater \u2014 both will fire independently causing duplicate notifications.
+    if target_date and theater_id:
+        overlap_titles: list[str] = []
+        if resolved_movies:
+            for m in resolved_movies:
+                undated = (
+                    AlertMovie.query
+                    .join(AlertPreference)
+                    .filter(
+                        AlertPreference.user_id == user.id,
+                        AlertPreference.theater_id == theater_id,
+                        AlertPreference.is_active == True,  # noqa: E712
+                        AlertPreference.target_date.is_(None),
+                        AlertMovie.movie_id == m.id,
+                        AlertMovie.alert_sent == False,  # noqa: E712
+                    )
+                    .first()
+                )
+                if undated:
+                    overlap_titles.append(m.title)
+        else:
+            # Any-movie dated alert \u2014 check for undated any-movie alert
+            undated_any = AlertPreference.query.filter_by(
+                user_id=user.id,
+                theater_id=theater_id,
+                is_active=True,
+                alert_sent=False,
+                target_date=None,
+            ).filter(
+                ~AlertPreference.alert_movies.any()  # type: ignore[attr-defined]
+            ).first()
+            if undated_any:
+                overlap_titles.append("Any Movie")
+
+        if overlap_titles:
+            overlap_msg = (
+                f"An undated alert for {', '.join(overlap_titles)} at {theater_name} "
+                "is already active and will also fire on this date. "
+                "Both alerts are active \u2014 you may receive duplicate notifications."
+            )
+            warnings.append(overlap_msg)
+            write_log(
+                "alert",
+                f"Duplicate overlap warning: dated alert #{pref.id} overlaps undated "
+                f"alert for {', '.join(overlap_titles)} @ {theater_name}",
+                level="WARNING",
+                user_id=current_user.id,
+                details={"pref_id": pref.id, "theater_id": theater_id,
+                         "overlapping_movies": overlap_titles,
+                         "target_date": target_date.isoformat()},
+            )
 
     # Warn if the selected theater has no website
     if theater_id:
         t = Theater.query.get(theater_id)
         if t and not (t.website or "").strip():
-            resp_data["warning"] = (
+            warnings.append(
                 f"'{t.name}' has no website configured. "
                 "Showtimes cannot be scraped for this theater until a website is added "
                 "in Admin \u2192 Theaters."
             )
+
+    if warnings:
+        resp_data["warning"] = " ".join(warnings)
 
     return jsonify(resp_data), 201
 
