@@ -85,6 +85,27 @@
         </div>
       </div>
 
+      <!-- Target date filter -->
+      <div class="form-group">
+        <label for="target_date">
+          Specific date
+          <span class="text-muted" style="font-size:11px;font-weight:normal">(optional)</span>
+        </label>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <input type="date" id="target_date" name="target_date" style="width:180px"
+                 oninput="onTargetDateChange()" />
+          <div id="buffer-wrap" style="display:none;align-items:center;gap:6px">
+            <span style="font-size:13px;color:var(--text-muted)">±</span>
+            <input type="number" id="target_date_buffer" name="target_date_buffer"
+                   min="0" max="30" placeholder="0" style="width:64px" />
+            <span style="font-size:13px;color:var(--text-muted)">day(s)</span>
+          </div>
+        </div>
+        <small class="text-muted" style="font-size:11px;margin-top:2px">
+          Only notify when a showtime on this date is found. Add a ± buffer to match nearby dates too.
+        </small>
+      </div>
+
       <!-- Max notifications cap -->
       <div class="form-group">
         <label for="max_notifications">
@@ -150,6 +171,9 @@
             <div class="pref-meta" style="font-size:12px;color:var(--text-muted);margin-top:2px">
               {{ pref.user.name if pref.user else '–' }}
               &bull; {{ pref.created_at | in_user_tz(current_user.timezone, '%b %d, %Y') }}
+              {% if pref.target_date %}
+              &bull; <span style="color:var(--accent)">{{ pref.target_date.strftime('%b %d, %Y') }}{% if pref.target_date_buffer %} &plusmn;{{ pref.target_date_buffer }}d{% endif %}</span>
+              {% endif %}
             </div>
             <div style="margin-top:4px">
               {% if not pref.is_active %}
@@ -363,6 +387,13 @@ document.addEventListener('click', e => {
   }
 });
 
+function onTargetDateChange() {
+  const hasDate = document.getElementById('target_date').value.trim() !== '';
+  const wrap = document.getElementById('buffer-wrap');
+  wrap.style.display = hasDate ? 'flex' : 'none';
+  if (!hasDate) document.getElementById('target_date_buffer').value = '';
+}
+
 // ── Alert form submit ───────────────────────────────────────────────────
 document.getElementById('alert-form').addEventListener('submit', async e => {
   e.preventDefault();
@@ -385,12 +416,18 @@ document.getElementById('alert-form').addEventListener('submit', async e => {
   const maxNotifRaw = document.getElementById('max_notifications').value.trim();
   const maxNotif = maxNotifRaw !== '' ? parseInt(maxNotifRaw, 10) : null;
 
+  const targetDate = document.getElementById('target_date').value.trim() || null;
+  const bufferRaw  = document.getElementById('target_date_buffer').value.trim();
+  const targetDateBuffer = targetDate && bufferRaw !== '' ? parseInt(bufferRaw, 10) : null;
+
   const body = {
     user_id: userId,
     theater_id: theaterId,
     movie_ids,
     tmdb_ids,
     max_notifications: maxNotif,
+    target_date: targetDate,
+    target_date_buffer: targetDateBuffer,
   };
 
   try {
