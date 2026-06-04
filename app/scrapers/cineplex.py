@@ -37,9 +37,6 @@ class CineplexScraper(BaseScraper):
         "referer": "https://www.cineplex.com/",
         "cctoken": "undefined",
     }
-    # How many days ahead to scrape (matching the bookable window we care about).
-    _DAYS_AHEAD = 14
-
     def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
         new_showtimes: list = []
         if not theater.website:
@@ -51,14 +48,17 @@ class CineplexScraper(BaseScraper):
 
         bookable_dates = self._get_bookable_dates(location_id)
         today = date.today()
+        # Use all future bookable dates the API returns — no artificial cap.
+        # The dates/bookable endpoint already limits the window to what the
+        # theater has on sale, which can be months ahead for pre-sales.
         upcoming = [
             d for d in bookable_dates
-            if 0 <= (date.fromisoformat(d) - today).days < self._DAYS_AHEAD
+            if date.fromisoformat(d) >= today
         ]
 
         logger.info(
-            "Cineplex: %s — locationId=%s, %d bookable dates in next %d days",
-            theater.name, location_id, len(upcoming), self._DAYS_AHEAD,
+            "Cineplex: %s — locationId=%s, %d bookable dates from today onwards",
+            theater.name, location_id, len(upcoming),
         )
 
         for date_iso in upcoming:

@@ -1268,9 +1268,30 @@ def api_create_alert():
             unique_movies.append(m)
     resolved_movies = unique_movies
 
+    # Parse target_date before duplicate checks (both checks reference it)
+    from datetime import date as date_type
+    target_date = None
+    raw_date = (data.get("target_date") or "").strip()
+    if raw_date:
+        try:
+            target_date = date_type.fromisoformat(raw_date)
+        except ValueError:
+            return jsonify({"error": f"Invalid target_date '{raw_date}'; expected YYYY-MM-DD."}), 400
+
+    target_date_buffer = None
+    if target_date:
+        raw_buffer = data.get("target_date_buffer")
+        try:
+            buf = int(raw_buffer) if raw_buffer is not None and raw_buffer != "" else None
+            target_date_buffer = max(0, buf) if buf is not None else None
+        except (ValueError, TypeError):
+            pass
+
     # ── Duplicate / conflict check ────────────────────────────────────────
-    # A user cannot have the same (movie, theater) in any active alert unless
-    # that specific movie's AlertMovie row has already fired (alert_sent=True).
+    # A user cannot have the same (movie, theater, target_date) in any active
+    # alert unless that movie's AlertMovie row has already fired.
+    # Different target_dates on the same movie/theater are allowed (e.g. same
+    # film on June 21 and June 28 are independent alerts).
     conflicting_titles: list[str] = []
     for m in resolved_movies:
         conflict = (
@@ -1280,6 +1301,7 @@ def api_create_alert():
                 AlertPreference.user_id == user.id,
                 AlertPreference.theater_id == theater_id,
                 AlertPreference.is_active == True,  # noqa: E712
+                AlertPreference.target_date == target_date,
                 AlertMovie.movie_id == m.id,
                 AlertMovie.alert_sent == False,  # noqa: E712
             )
@@ -1299,7 +1321,7 @@ def api_create_alert():
             "conflicting_movies": conflicting_titles,
         }), 409
 
-    # ── Check for existing any-movie alert for same theater ───────────────
+    # ── Check for existing any-movie alert for same theater + date ────────
     # (Only if no specific movies were provided — i.e. new alert is also any-movie)
     if not resolved_movies:
         existing_any = AlertPreference.query.filter_by(
@@ -1307,6 +1329,7 @@ def api_create_alert():
             theater_id=theater_id,
             is_active=True,
             alert_sent=False,
+            target_date=target_date,
         ).filter(
             ~AlertPreference.alert_movies.any()  # type: ignore[attr-defined]
         ).first()
@@ -1329,6 +1352,8 @@ def api_create_alert():
         user_id=user.id,
         theater_id=theater_id,
         max_notifications=max_notifications,
+        target_date=target_date,
+        target_date_buffer=target_date_buffer,
     )
     db.session.add(pref)
     db.session.flush()  # get pref.id
@@ -1346,17 +1371,77 @@ def api_create_alert():
     from app.log_utils import write_log
     write_log("alert", f"Alert created: {', '.join(movie_names)} @ {theater_name}",
               user_id=current_user.id,
-              details={"pref_id": pref.id, "theater_id": theater_id})
+              details={"pref_id": pref.id, "theater_id": theater_id,
+                       "target_date": target_date.isoformat() if target_date else None,
+                       "target_date_buffer": target_date_buffer})
+
+    warnings: list[str] = []
+
+    # Warn if a dated alert overlaps an existing undated alert for the same
+    # movie(s)/theater \u2014 both will fire independently causing duplicate notifications.
+    if target_date and theater_id:
+        overlap_titles: list[str] = []
+        if resolved_movies:
+            for m in resolved_movies:
+                undated = (
+                    AlertMovie.query
+                    .join(AlertPreference)
+                    .filter(
+                        AlertPreference.user_id == user.id,
+                        AlertPreference.theater_id == theater_id,
+                        AlertPreference.is_active == True,  # noqa: E712
+                        AlertPreference.target_date.is_(None),
+                        AlertMovie.movie_id == m.id,
+                        AlertMovie.alert_sent == False,  # noqa: E712
+                    )
+                    .first()
+                )
+                if undated:
+                    overlap_titles.append(m.title)
+        else:
+            # Any-movie dated alert \u2014 check for undated any-movie alert
+            undated_any = AlertPreference.query.filter_by(
+                user_id=user.id,
+                theater_id=theater_id,
+                is_active=True,
+                alert_sent=False,
+                target_date=None,
+            ).filter(
+                ~AlertPreference.alert_movies.any()  # type: ignore[attr-defined]
+            ).first()
+            if undated_any:
+                overlap_titles.append("Any Movie")
+
+        if overlap_titles:
+            overlap_msg = (
+                f"An undated alert for {', '.join(overlap_titles)} at {theater_name} "
+                "is already active and will also fire on this date. "
+                "Both alerts are active \u2014 you may receive duplicate notifications."
+            )
+            warnings.append(overlap_msg)
+            write_log(
+                "alert",
+                f"Duplicate overlap warning: dated alert #{pref.id} overlaps undated "
+                f"alert for {', '.join(overlap_titles)} @ {theater_name}",
+                level="WARNING",
+                user_id=current_user.id,
+                details={"pref_id": pref.id, "theater_id": theater_id,
+                         "overlapping_movies": overlap_titles,
+                         "target_date": target_date.isoformat()},
+            )
 
     # Warn if the selected theater has no website
     if theater_id:
         t = Theater.query.get(theater_id)
         if t and not (t.website or "").strip():
-            resp_data["warning"] = (
+            warnings.append(
                 f"'{t.name}' has no website configured. "
                 "Showtimes cannot be scraped for this theater until a website is added "
                 "in Admin \u2192 Theaters."
             )
+
+    if warnings:
+        resp_data["warning"] = " ".join(warnings)
 
     return jsonify(resp_data), 201
 
