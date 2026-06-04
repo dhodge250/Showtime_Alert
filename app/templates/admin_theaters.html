@@ -192,6 +192,7 @@
           data-country="{{ (t.country_name or t.country or '')|lower }}"
           data-aspect="{{ (t.aspect_ratio_label or '')|lower }}"
           data-projector="{{ (t.projector_type_name or '')|lower }}"
+          data-film-projector="{{ (t.film_projector_type_name or '')|lower }}"
           data-active="{{ '1' if t.is_active else '0' }}">
         <td class="admin-cell-name">
           <a href="{{ url_for('main.admin_theater_edit', theater_id=t.id) }}">{{ t.name }}</a>
@@ -474,7 +475,7 @@ function onFilterChange() {
     const matchState     = !state     || row.dataset.state     === state;
     const matchCity      = !city      || row.dataset.city      === city;
     const matchAspect    = !aspect    || row.dataset.aspect    === aspect;
-    const matchProjector = !projector || row.dataset.projector === projector;
+    const matchProjector = !projector || row.dataset.projector === projector || row.dataset.filmProjector === projector;
     const matchActive    = showInactive || row.dataset.active  === '1';
     return matchSearch && matchChain && matchCountry && matchState && matchCity && matchAspect && matchProjector && matchActive;
   });
