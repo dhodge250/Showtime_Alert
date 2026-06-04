@@ -57,6 +57,12 @@
       <button id="btn-clear" class="btn-sm btn-ghost" onclick="clearFilters()" disabled>Clear</button>
 </div>
 
+<!-- Mobile-only List / Map toggle — hidden on desktop via CSS -->
+<div class="mobile-view-toggle" id="mobile-view-toggle">
+  <button class="mobile-toggle-btn active" id="toggle-list" onclick="setMobileView('list')">&#9776; List</button>
+  <button class="mobile-toggle-btn" id="toggle-map" onclick="setMobileView('map')">&#128506; Map</button>
+</div>
+
 <div class="two-col-map">
   <!-- Theater List -->
   <div class="theater-list-wrap">
@@ -188,6 +194,7 @@
 
   // ── Leaflet map ───────────────────────────────────────────────────────
   const map = L.map('theater-map', { zoomControl: true });
+  window._theaterMap = map; // exposed for mobile toggle invalidateSize
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 18,
@@ -364,5 +371,28 @@
 
   // Initial render
   applyFilters();
+
+  // ── Mobile List/Map toggle ────────────────────────────────────────────
+  function setMobileView(view) {
+    const wrap = document.querySelector('.two-col-map');
+    const listBtn = document.getElementById('toggle-list');
+    const mapBtn  = document.getElementById('toggle-map');
+    if (view === 'map') {
+      wrap.classList.add('mobile-show-map');
+      wrap.classList.remove('mobile-show-list');
+      mapBtn.classList.add('active');
+      listBtn.classList.remove('active');
+      // Leaflet needs a size hint after the container becomes visible
+      if (window._theaterMap) { setTimeout(() => window._theaterMap.invalidateSize(), 50); }
+    } else {
+      wrap.classList.add('mobile-show-list');
+      wrap.classList.remove('mobile-show-map');
+      listBtn.classList.add('active');
+      mapBtn.classList.remove('active');
+    }
+  }
+
+  // Start in list view on mobile
+  if (window.innerWidth <= 768) { setMobileView('list'); }
 </script>
 {% endblock %}

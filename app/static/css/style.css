@@ -565,6 +565,9 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
 .empty-state p { margin-bottom: 16px; }
 
 /* ── Theater map page layout ────────────────────────────────────────── */
+/* Mobile List/Map toggle is hidden on desktop */
+.mobile-view-toggle { display: none; }
+
 .two-col-map {
   display: grid;
   grid-template-columns: 400px 1fr;
@@ -1511,6 +1514,37 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   /* Two-col-map: clear the fixed height constraint */
   .two-col-map { height: auto; min-height: 0; }
   #theater-map { min-height: 340px; }
+
+  /* Mobile List/Map toggle */
+  .mobile-view-toggle {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .mobile-toggle-btn {
+    flex: 1;
+    padding: 12px;
+    min-height: 48px;
+    font-size: 15px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .mobile-toggle-btn.active {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+  }
+  /* List view: show list, hide map */
+  .two-col-map.mobile-show-list .theater-list-wrap { display: block; }
+  .two-col-map.mobile-show-list #theater-map { display: none; }
+  /* Map view: hide list, show map full height */
+  .two-col-map.mobile-show-map .theater-list-wrap { display: none; }
+  .two-col-map.mobile-show-map #theater-map { display: block; min-height: 65vh; }
 
   /* Tables: prevent cell text from wrapping so the table scrolls as a unit */
   .table-wrap .data-table td { white-space: nowrap; }
