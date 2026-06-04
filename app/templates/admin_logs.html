@@ -43,7 +43,8 @@
       <tbody id="log-tbody">
         {% for e in entries %}
         <tr class="log-row">
-          <td style="white-space:nowrap;font-size:12px">
+          <td style="white-space:nowrap;font-size:12px"
+              data-utc="{{ e.created_at.isoformat() if e.created_at else '' }}">
             {{ e.created_at | in_user_tz(current_user.timezone, '%b %d %H:%M:%S') if e.created_at else '–' }}
           </td>
           <td>
@@ -104,6 +105,21 @@ function logApply() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', logApply);
+// Re-render all UTC timestamps in the browser's local timezone.
+// The server always stores/outputs UTC; SQLite strips tzinfo so isoformat()
+// has no offset — append 'Z' so Date() parses it as UTC, not local time.
+function localizeTimestamps() {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const pad = n => String(n).padStart(2, '0');
+  document.querySelectorAll('td[data-utc]').forEach(cell => {
+    const raw = cell.dataset.utc;
+    if (!raw) return;
+    const d = new Date(raw.includes('T') && !raw.endsWith('Z') ? raw + 'Z' : raw);
+    if (isNaN(d.getTime())) return;
+    cell.textContent = `${months[d.getMonth()]} ${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => { localizeTimestamps(); logApply(); });
 </script>
 {% endblock %}
