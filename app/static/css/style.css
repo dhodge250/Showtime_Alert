@@ -336,6 +336,9 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
   gap: 24px;
   align-items: start;
 }
+/* min-width:0 lets grid cells shrink below their content width so
+   inner overflow-x:auto containers (table-wrap) actually scroll */
+.two-col > * { min-width: 0; }
 @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
 
 .single-col { max-width: 760px; }
@@ -1482,9 +1485,14 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   /* Alert pref actions: stack vertically */
   .pref-actions { flex-direction: column; }
 
+  /* Card header: allow title + action button to wrap on narrow screens */
+  .card-header { flex-wrap: wrap; gap: 8px; }
+
   /* Showtime filter bar: full-width inputs on small screens */
   .showtime-filters input,
   .showtime-filters select { min-width: 80px; }
+  /* Prevent multi-select buttons from blowing out card width */
+  .showtime-filters .ms-btn { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Admin filter bar: search gets its own full-width row */
   .admin-search-input { flex-basis: 100%; min-width: 0; }
