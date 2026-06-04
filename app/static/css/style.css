@@ -1429,10 +1429,13 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   }
   .navbar.open .nav-links { display: flex; }
   .nav-links a {
-    padding: 14px 16px;
-    font-size: 15px;
+    padding: 16px 20px;
+    font-size: 17px;
     border-radius: 0;
     border-bottom: 1px solid var(--border);
+    min-height: 48px;
+    display: flex;
+    align-items: center;
   }
   .nav-links li:last-child a { border-bottom: none; }
 
@@ -1441,12 +1444,14 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
     flex-direction: column;
     align-items: flex-start;
     width: 100%;
-    padding: 12px 0 16px;
-    gap: 10px;
+    padding: 12px 20px 16px;
+    gap: 12px;
     border-top: 1px solid var(--border);
   }
   .navbar.open .nav-user { display: flex; }
-  .nav-user-name { font-size: 14px; }
+  .nav-user-name { font-size: 15px; }
+  /* Logout button: full-width, easy to tap */
+  .nav-user .btn { width: 100%; justify-content: center; min-height: 48px; font-size: 16px; }
 
   /* Main content: tighter padding */
   .main-content { padding: 16px; }
