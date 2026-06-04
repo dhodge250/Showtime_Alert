@@ -222,5 +222,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Documentation
-docs/
+# Documentation (ignore build output but track markdown source files)
+docs/_build/
+docs/site/
+docs/*.html
+docs/*.xml
+docs/*.json

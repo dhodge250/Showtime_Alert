@@ -678,7 +678,7 @@ def admin_logs():
         q = q.filter_by(category=category_filter)
     entries = q.order_by(LogEntry.created_at.desc()).limit(500).all()
     rows_per_page = _get_setting_int("rows_per_page", 15)
-    categories = ["auth", "alert", "scrape", "notification", "admin", "system"]
+    categories = ["auth", "alert", "scrape", "notification", "geocode", "admin", "system"]
     return render_template(
         "admin_logs.html",
         entries=entries,

@@ -336,6 +336,9 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
   gap: 24px;
   align-items: start;
 }
+/* min-width:0 lets grid cells shrink below their content width so
+   inner overflow-x:auto containers (table-wrap) actually scroll */
+.two-col > * { min-width: 0; }
 @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
 
 .single-col { max-width: 760px; }
@@ -562,6 +565,9 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(
 .empty-state p { margin-bottom: 16px; }
 
 /* ── Theater map page layout ────────────────────────────────────────── */
+/* Mobile List/Map toggle is hidden on desktop */
+.mobile-view-toggle { display: none; }
+
 .two-col-map {
   display: grid;
   grid-template-columns: 400px 1fr;
@@ -1426,10 +1432,13 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   }
   .navbar.open .nav-links { display: flex; }
   .nav-links a {
-    padding: 14px 16px;
-    font-size: 15px;
+    padding: 16px 20px;
+    font-size: 17px;
     border-radius: 0;
     border-bottom: 1px solid var(--border);
+    min-height: 48px;
+    display: flex;
+    align-items: center;
   }
   .nav-links li:last-child a { border-bottom: none; }
 
@@ -1438,12 +1447,14 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
     flex-direction: column;
     align-items: flex-start;
     width: 100%;
-    padding: 12px 0 16px;
-    gap: 10px;
+    padding: 12px 20px 16px;
+    gap: 12px;
     border-top: 1px solid var(--border);
   }
   .navbar.open .nav-user { display: flex; }
-  .nav-user-name { font-size: 14px; }
+  .nav-user-name { font-size: 15px; }
+  /* Logout button: full-width, easy to tap */
+  .nav-user .btn { width: 100%; justify-content: center; min-height: 48px; font-size: 16px; }
 
   /* Main content: tighter padding */
   .main-content { padding: 16px; }
@@ -1482,12 +1493,37 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   /* Alert pref actions: stack vertically */
   .pref-actions { flex-direction: column; }
 
+  /* Card header: allow title + action button to wrap on narrow screens */
+  .card-header { flex-wrap: wrap; gap: 8px; }
+
   /* Showtime filter bar: full-width inputs on small screens */
   .showtime-filters input,
   .showtime-filters select { min-width: 80px; }
+  /* Prevent multi-select buttons from blowing out card width */
+  .showtime-filters .ms-btn { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Admin filter bar: search gets its own full-width row */
   .admin-search-input { flex-basis: 100%; min-width: 0; }
+
+  /* Admin page-header action buttons: equal height, wrap cleanly */
+  .page-header-actions { flex-wrap: wrap; }
+  .page-header-actions .btn,
+  .page-header-actions .btn-sm {
+    min-height: 44px;
+    padding: 10px 16px;
+    font-size: 14px;
+    box-sizing: border-box;
+  }
+
+  /* Admin filter bar: selects shrink/grow to fill available space */
+  .admin-filter-bar select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* Very narrow screens: stack filter bar items two-per-row */
+  @media (max-width: 480px) {
+    .admin-filter-bar select { flex-basis: calc(50% - 5px); }
+  }
 
   /* Stat value: slightly smaller on very narrow screens */
   .stat-value { font-size: 32px; }
@@ -1499,6 +1535,37 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   .two-col-map { height: auto; min-height: 0; }
   #theater-map { min-height: 340px; }
 
+  /* Mobile List/Map toggle */
+  .mobile-view-toggle {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .mobile-toggle-btn {
+    flex: 1;
+    padding: 12px;
+    min-height: 48px;
+    font-size: 15px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .mobile-toggle-btn.active {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+  }
+  /* List view: show list, hide map */
+  .two-col-map.mobile-show-list .theater-list-wrap { display: block; }
+  .two-col-map.mobile-show-list #theater-map { display: none; }
+  /* Map view: hide list, show map full height */
+  .two-col-map.mobile-show-map .theater-list-wrap { display: none; }
+  .two-col-map.mobile-show-map #theater-map { display: block; min-height: 65vh; }
+
   /* Tables: prevent cell text from wrapping so the table scrolls as a unit */
   .table-wrap .data-table td { white-space: nowrap; }
 
@@ -1508,4 +1575,9 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   /* Alerts page: show Your Alerts above Create New Alert on mobile */
   .alerts-layout { display: flex; flex-direction: column; }
   .alerts-layout > section:last-child { order: -1; }
+
+  /* Lookup table cards: make card scroll rather than bleed content outside
+     its boundary. Uses :has() to avoid affecting cards with absolutely-
+     positioned dropdown panels (e.g. dashboard ms-panel dropdowns). */
+  .card:has(.admin-lookup-table) { overflow-x: auto; }
 }
