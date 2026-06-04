@@ -2041,3 +2041,369 @@ class TestShowtimeClear:
                follow_redirects=True)
         resp = c.delete("/api/showtimes")
         assert resp.status_code == 403
+
+
+# ── Alert target date & buffer ────────────────────────────────────────
+
+
+class TestAlertTargetDate:
+    """Tests for the optional target_date / target_date_buffer fields on AlertPreference."""
+
+    # ── Model & property ─────────────────────────────────────────────────
+
+    def test_model_stores_target_date(self, app, sample_user, sample_theater):
+        from datetime import date
+        with app.app_context():
+            pref = AlertPreference(
+                user_id=sample_user,
+                theater_id=sample_theater,
+                target_date=date(2026, 7, 25),
+            )
+            db.session.add(pref)
+            db.session.commit()
+            fetched = AlertPreference.query.get(pref.id)
+            assert fetched.target_date == date(2026, 7, 25)
+            assert fetched.target_date_buffer is None
+
+    def test_model_stores_buffer(self, app, sample_user, sample_theater):
+        from datetime import date
+        with app.app_context():
+            pref = AlertPreference(
+                user_id=sample_user,
+                theater_id=sample_theater,
+                target_date=date(2026, 7, 25),
+                target_date_buffer=3,
+            )
+            db.session.add(pref)
+            db.session.commit()
+            fetched = AlertPreference.query.get(pref.id)
+            assert fetched.target_date_buffer == 3
+
+    def test_target_date_range_no_buffer(self, app, sample_user, sample_theater):
+        from datetime import date
+        with app.app_context():
+            pref = AlertPreference(
+                user_id=sample_user,
+                theater_id=sample_theater,
+                target_date=date(2026, 7, 25),
+            )
+            db.session.add(pref)
+            db.session.commit()
+            date_from, date_to = pref.target_date_range
+            assert date_from == date(2026, 7, 25)
+            assert date_to == date(2026, 7, 25)
+
+    def test_target_date_range_with_buffer(self, app, sample_user, sample_theater):
+        from datetime import date
+        with app.app_context():
+            pref = AlertPreference(
+                user_id=sample_user,
+                theater_id=sample_theater,
+                target_date=date(2026, 7, 25),
+                target_date_buffer=2,
+            )
+            db.session.add(pref)
+            db.session.commit()
+            date_from, date_to = pref.target_date_range
+            assert date_from == date(2026, 7, 23)
+            assert date_to == date(2026, 7, 27)
+
+    def test_target_date_range_none_when_no_date(self, app, sample_user, sample_theater):
+        with app.app_context():
+            pref = AlertPreference(user_id=sample_user, theater_id=sample_theater)
+            db.session.add(pref)
+            db.session.commit()
+            date_from, date_to = pref.target_date_range
+            assert date_from is None
+            assert date_to is None
+
+    def test_to_dict_includes_target_date(self, app, sample_user, sample_theater, sample_movie):
+        from datetime import date
+        with app.app_context():
+            pref = AlertPreference(
+                user_id=sample_user,
+                theater_id=sample_theater,
+                target_date=date(2026, 7, 25),
+                target_date_buffer=2,
+            )
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+            d = pref.to_dict()
+            assert d["target_date"] == "2026-07-25"
+            assert d["target_date_buffer"] == 2
+
+    # ── API ──────────────────────────────────────────────────────────────
+
+    def test_api_creates_alert_with_target_date(
+        self, auth_client, app, sample_user, sample_movie, sample_theater
+    ):
+        resp = auth_client.post("/api/alerts", json={
+            "user_id": sample_user,
+            "movie_ids": [sample_movie],
+            "theater_id": sample_theater,
+            "target_date": "2026-07-25",
+            "target_date_buffer": 2,
+        })
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data["target_date"] == "2026-07-25"
+        assert data["target_date_buffer"] == 2
+
+    def test_api_rejects_invalid_target_date(
+        self, auth_client, app, sample_user, sample_movie, sample_theater
+    ):
+        resp = auth_client.post("/api/alerts", json={
+            "user_id": sample_user,
+            "movie_ids": [sample_movie],
+            "theater_id": sample_theater,
+            "target_date": "not-a-date",
+        })
+        assert resp.status_code == 400
+
+    def test_same_date_is_duplicate(
+        self, auth_client, app, sample_user, sample_movie, sample_theater
+    ):
+        payload = {
+            "user_id": sample_user,
+            "movie_ids": [sample_movie],
+            "theater_id": sample_theater,
+            "target_date": "2026-07-25",
+        }
+        r1 = auth_client.post("/api/alerts", json=payload)
+        assert r1.status_code == 201
+        r2 = auth_client.post("/api/alerts", json=payload)
+        assert r2.status_code == 409
+
+    def test_different_dates_are_not_duplicates(
+        self, auth_client, app, sample_user, sample_movie, sample_theater
+    ):
+        base = {
+            "user_id": sample_user,
+            "movie_ids": [sample_movie],
+            "theater_id": sample_theater,
+        }
+        r1 = auth_client.post("/api/alerts", json={**base, "target_date": "2026-07-25"})
+        r2 = auth_client.post("/api/alerts", json={**base, "target_date": "2026-07-26"})
+        assert r1.status_code == 201
+        assert r2.status_code == 201
+
+    def test_undated_and_dated_are_not_duplicates(
+        self, auth_client, app, sample_user, sample_movie, sample_theater
+    ):
+        base = {"user_id": sample_user, "movie_ids": [sample_movie], "theater_id": sample_theater}
+        r1 = auth_client.post("/api/alerts", json=base)
+        r2 = auth_client.post("/api/alerts", json={**base, "target_date": "2026-07-25"})
+        assert r1.status_code == 201
+        assert r2.status_code == 201
+
+    def test_overlap_warning_when_undated_alert_exists(
+        self, auth_client, app, sample_user, sample_movie, sample_theater
+    ):
+        base = {"user_id": sample_user, "movie_ids": [sample_movie], "theater_id": sample_theater}
+        auth_client.post("/api/alerts", json=base)
+        r2 = auth_client.post("/api/alerts", json={**base, "target_date": "2026-07-25"})
+        assert r2.status_code == 201
+        assert "warning" in r2.get_json()
+        assert "undated alert" in r2.get_json()["warning"].lower()
+
+    # ── Notification processor ────────────────────────────────────────────
+
+    def _make_pref_with_showtime(self, app, sample_user, sample_theater, sample_movie, show_date, target_date, buffer=None):
+        """Helper: create an alert pref + a showtime on show_date, return (pref_id, showtime_id)."""
+        from datetime import datetime, timezone
+        with app.app_context():
+            pref = AlertPreference(
+                user_id=sample_user,
+                theater_id=sample_theater,
+                target_date=target_date,
+                target_date_buffer=buffer,
+            )
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            show_dt = datetime(show_date.year, show_date.month, show_date.day, 19, 0, tzinfo=timezone.utc)
+            st = Showtime(theater_id=sample_theater, movie_id=sample_movie, show_datetime=show_dt)
+            db.session.add(st)
+            db.session.commit()
+            return pref.id, st.id
+
+    def test_processor_fires_on_target_date(self, app, sample_user, sample_theater, sample_movie):
+        from datetime import date
+        from app.notifications import _get_matching_showtimes_for_pref
+        target = date(2026, 7, 25)
+        pref_id, _ = self._make_pref_with_showtime(
+            app, sample_user, sample_theater, sample_movie,
+            show_date=target, target_date=target,
+        )
+        with app.app_context():
+            pref = AlertPreference.query.get(pref_id)
+            candidates = Showtime.query.filter_by(theater_id=sample_theater).all()
+            matching = _get_matching_showtimes_for_pref(pref, candidates)
+            assert len(matching) == 1
+
+    def test_processor_does_not_fire_on_wrong_date(self, app, sample_user, sample_theater, sample_movie):
+        from datetime import date
+        from app.notifications import _get_matching_showtimes_for_pref
+        pref_id, _ = self._make_pref_with_showtime(
+            app, sample_user, sample_theater, sample_movie,
+            show_date=date(2026, 7, 20),
+            target_date=date(2026, 7, 25),
+        )
+        with app.app_context():
+            pref = AlertPreference.query.get(pref_id)
+            candidates = Showtime.query.filter_by(theater_id=sample_theater).all()
+            matching = _get_matching_showtimes_for_pref(pref, candidates)
+            assert len(matching) == 0
+
+    def test_processor_fires_within_buffer(self, app, sample_user, sample_theater, sample_movie):
+        from datetime import date
+        from app.notifications import _get_matching_showtimes_for_pref
+        # showtime is 2 days before target — within ±3 buffer
+        pref_id, _ = self._make_pref_with_showtime(
+            app, sample_user, sample_theater, sample_movie,
+            show_date=date(2026, 7, 23),
+            target_date=date(2026, 7, 25),
+            buffer=3,
+        )
+        with app.app_context():
+            pref = AlertPreference.query.get(pref_id)
+            candidates = Showtime.query.filter_by(theater_id=sample_theater).all()
+            matching = _get_matching_showtimes_for_pref(pref, candidates)
+            assert len(matching) == 1
+
+    def test_processor_does_not_fire_outside_buffer(self, app, sample_user, sample_theater, sample_movie):
+        from datetime import date
+        from app.notifications import _get_matching_showtimes_for_pref
+        # showtime is 5 days before target — outside ±3 buffer
+        pref_id, _ = self._make_pref_with_showtime(
+            app, sample_user, sample_theater, sample_movie,
+            show_date=date(2026, 7, 20),
+            target_date=date(2026, 7, 25),
+            buffer=3,
+        )
+        with app.app_context():
+            pref = AlertPreference.query.get(pref_id)
+            candidates = Showtime.query.filter_by(theater_id=sample_theater).all()
+            matching = _get_matching_showtimes_for_pref(pref, candidates)
+            assert len(matching) == 0
+
+    def test_processor_fires_on_any_date_when_no_target(self, app, sample_user, sample_theater, sample_movie):
+        from datetime import date
+        from app.notifications import _get_matching_showtimes_for_pref
+        pref_id, _ = self._make_pref_with_showtime(
+            app, sample_user, sample_theater, sample_movie,
+            show_date=date(2026, 7, 20),
+            target_date=None,
+        )
+        with app.app_context():
+            pref = AlertPreference.query.get(pref_id)
+            candidates = Showtime.query.filter_by(theater_id=sample_theater).all()
+            matching = _get_matching_showtimes_for_pref(pref, candidates)
+            assert len(matching) == 1
+
+
+# ── Cineplex scraper: date window ─────────────────────────────────────
+
+
+class TestCineplexScraperDateWindow:
+    """Tests that the Cineplex scraper uses all bookable dates, not a 14-day cap."""
+
+    def test_scrape_includes_dates_beyond_14_days(self, app, sample_theater):
+        """Showtimes returned by the API more than 14 days out must not be dropped."""
+        from datetime import date, datetime, timedelta, timezone
+        from unittest.mock import MagicMock, patch
+
+        from app.scrapers.cineplex import CineplexScraper
+
+        today = date.today()
+        # Simulate a date 30 days ahead — previously skipped by the 14-day cap.
+        far_date = today + timedelta(days=30)
+        far_date_iso = far_date.isoformat()
+
+        fake_session_data = [{
+            "dates": [{
+                "movies": [{
+                    "name": "The Odyssey",
+                    "experiences": [{
+                        "experienceTypes": ["IMAX", "70mm"],
+                        "sessions": [{
+                            "isInThePast": False,
+                            "showStartDateTime": f"{far_date_iso}T19:00:00",
+                            "ticketingUrl": "https://example.com/tickets",
+                        }],
+                    }],
+                }],
+            }],
+        }]
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            theater.website = "https://www.cineplex.com/theatre/test"
+            db.session.commit()
+
+            scraper = CineplexScraper()
+            with patch.object(scraper, "_get_location_id", return_value=9999), \
+                 patch.object(scraper, "_get_bookable_dates", return_value=[far_date_iso]):
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = fake_session_data
+                with patch("requests.get", return_value=mock_resp):
+                    # {None} is the "any movie" sentinel used by _movie_wanted
+                    result = scraper.scrape_theater(theater, {None})
+            assert len(result) == 1, "Showtime 30 days out should be included"
+            assert result[0].show_datetime.date() == far_date
+
+    def test_scrape_skips_past_dates(self, app, sample_theater):
+        """Dates before today returned by bookable endpoint are skipped."""
+        from datetime import date, timedelta
+        from unittest.mock import patch
+
+        from app.scrapers.cineplex import CineplexScraper
+
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            theater.website = "https://www.cineplex.com/theatre/test"
+            db.session.commit()
+
+            scraper = CineplexScraper()
+            with patch.object(scraper, "_get_location_id", return_value=9999), \
+                 patch.object(scraper, "_get_bookable_dates", return_value=[yesterday]):
+                result = scraper.scrape_theater(theater, set())
+            assert result == [], "Past dates should be skipped without calling the showtimes API"
+
+
+# ── Admin logs: UTC timestamp attribute ──────────────────────────────
+
+
+class TestAdminLogsTimestamp:
+    """Tests that activity log entries render with a data-utc attribute for browser-side TZ conversion."""
+
+    def test_log_rows_have_data_utc_attribute(self, auth_client, app):
+        from app.log_utils import write_log
+        with app.app_context():
+            write_log("system", "Test log entry for timestamp test")
+
+        resp = auth_client.get("/admin/logs")
+        assert resp.status_code == 200
+        html = resp.data.decode()
+        assert 'data-utc="' in html, "Each log timestamp cell must have a data-utc attribute"
+
+    def test_log_utc_value_is_iso_format(self, auth_client, app):
+        """The data-utc value should be a parseable ISO datetime string."""
+        import re
+        from app.log_utils import write_log
+        with app.app_context():
+            write_log("system", "ISO format test entry")
+
+        resp = auth_client.get("/admin/logs")
+        html = resp.data.decode()
+        # Extract first data-utc value and verify it looks like an ISO datetime
+        match = re.search(r'data-utc="([^"]+)"', html)
+        assert match, "No data-utc attribute found in log page HTML"
+        utc_val = match.group(1)
+        # Should be parseable as a datetime (YYYY-MM-DDTHH:MM:SS or similar)
+        assert "T" in utc_val, f"Expected ISO datetime with T separator, got: {utc_val}"
