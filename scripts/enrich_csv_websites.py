@@ -122,8 +122,17 @@ _EXCLUDED_DOMAINS = frozenset({
     "comingsoon.net",
     "screenrant.com",
     "cinemaholic.com",
+    "cinematreasures.org",   # cinema history database, not a theater's own site
     # International aggregators / directories
-    "allocine.fr",       # French movie database
+    "allocine.fr",       # French movie database/aggregator
+    "cinefil.com",       # French cinema listings aggregator
+    "autour-de-moi.com", # French location-based cinema locator
+    "cinema.autour-de-moi.com",
+    "ouest-france.fr",   # French regional newspaper
+    "20minutes.fr",      # French newspaper
+    "lemonde.fr",
+    "lefigaro.fr",
+    "leparisien.fr",
     "kino.de",           # German movie database
     "filmstarts.de",     # German aggregator
     "filmstart.no",      # Norwegian aggregator
@@ -163,6 +172,41 @@ _EXCLUDED_DOMAINS = frozenset({
     "nycgo.com",         # NYC tourism portal
     "discoverlosangeles.com",
     "visitphilly.com",
+    # City guide / expat / tourism blog domains (not theater websites)
+    "guangzhoutime.com",
+    "echinacities.com",
+    "beijingxpress.com",
+    "citiesinsider.com",
+    "chinaholiday.com",
+    "city8.com",           # Chinese local listings
+    "jadwalnonton.com",    # Indonesian movie times aggregator
+    "thebeijinger.com",
+    "smartshanghai.com",
+    "timeoutbeijing.com",
+    "timeoutshanghai.com",
+    "chengdu-expat.com",
+    "locator.hk",          # Hong Kong locator directory
+    "yahoo.com",           # news/finance articles, not theater websites
+    "trip.com",            # travel booking site
+    "tourismsaskatchewan.com",
+    "tourismnewbrunswick.ca",
+    "tourismvancouver.com",
+    "tourismtoronto.com",
+    "ontariotravel.net",
+    "visitolia.com",       # Saudi/Gulf tourism aggregator
+    "gulf-insider.com",
+    "expatica.com",        # expat lifestyle site
+    "thelocal.fr", "thelocal.de", "thelocal.es", "thelocal.it",
+    "angloinfo.com",       # expat directory
+    "yandex.ru",           # Russian Yandex (Afisha, Maps, etc. — not official theater sites)
+    "yandex.com",
+    "wanderboat.ai",       # AI travel planning, not a theater site
+    "dnb.com",             # Dun & Bradstreet business data
+    "district.in",         # Indian ticketing app
+    "yappe.in",            # Indian business directory
+    "onepluspartnership.com",
+    "cafeshanghai.com",
+    "qingdaochinaguide.com",
 })
 
 # Tokens to strip before fuzzy name comparison
@@ -368,8 +412,9 @@ _CHAIN_DOMAINS: dict[str, str] = {
     "malco theatres":       "malco.com",
     "landmark":             "landmarkcinemas.com",
     "landmark cinemas":     "landmarkcinemas.com",
-    "galaxy":               "galaxytheatres.com",
-    "galaxy theatres":      "galaxytheatres.com",
+    # Galaxy Theatres (US) intentionally excluded from site: search — "Galaxy" also names
+    # a separate Vietnam chain (galaxycine.vn), so a US-domain lookup causes cross-country
+    # false matches.  Both are handled by chain-aware scoring in ddg_html_search.
     "epic theatres":        "epictheatres.com",
     "santikos":             "santikos.com",
     "ncg":                  "ncgcinemas.com",
@@ -396,13 +441,17 @@ _CHAIN_DOMAINS: dict[str, str] = {
     "vue":                  "myvue.com",
     "showcase":             "showcasecinemas.co.uk",
     "showcase cinemas uk":  "showcasecinemas.co.uk",
+    "uci":                  "uci-kinowelt.de",
+    "uci kinowelt":         "uci-kinowelt.de",
     "cinestar":             "cinestar.de",
     "kinepolis":            "kinepolis.com",
-    "pathe":                "pathe.nl",
-    "pathé":                "pathe.nl",
+    # Gaumont and Pathé France merged; all French cinemas now use pathe.fr
+    "gaumont":              "pathe.fr",
+    "pathe":                "pathe.fr",
+    "pathé":                "pathe.fr",
+    "pathe nl":             "pathe.nl",   # Dutch Pathé is a separate operation
     "ugc":                  "ugc.fr",
     "mk2":                  "mk2.com",
-    "gaumont":              "gaumont.fr",
     "cgr":                  "cgr.fr",
     "megarama":             "megarama.fr",
     "cinemaxxi":            "cinemaxxi.it",
@@ -416,8 +465,8 @@ _CHAIN_DOMAINS: dict[str, str] = {
     "pvr inox":             "pvrinox.com",
     "pvr":                  "pvrinox.com",
     "inox":                 "pvrinox.com",
-    "cgv":                  "cgv.id",
-    "cgv cinemas":          "cgv.id",
+    # CGV intentionally omitted: it uses country-specific domains (cgv.vn, cgv.co.kr, cgv.id, etc.)
+    # so a single site: lookup causes cross-country false matches. Handled by chain-aware HTML scoring.
     "golden village":       "gv.com.sg",
     "gv":                   "gv.com.sg",
     "carnival cinemas":     "carnivalcinemas.com",
@@ -431,8 +480,8 @@ _CHAIN_DOMAINS: dict[str, str] = {
     "nu metro":             "numetro.co.za",
     "ster-kinekor":         "sterkinekor.com",
     "ster kinekor":         "sterkinekor.com",
-    "wanda":                "wandacinemas.com",
-    "wanda cinemas":        "wandacinemas.com",
+    # Wanda intentionally omitted: site: search only returns the mobile homepage
+    # (m.wandacinemas.com/index/main.do), never theater-specific pages. Handled by HTML scoring.
     # Latin America
     "cinepolis mx":         "cinepolis.com",
     "cinemex":              "cinemex.com",
@@ -460,7 +509,7 @@ def ddg_site_search(
     city: str,
     state: str,
     chain: str,
-    threshold: float = 0.20,
+    threshold: float = 0.35,
 ) -> str:
     """
     Search DDG with site:CHAIN_DOMAIN to find the theater-level page directly.
@@ -565,9 +614,12 @@ def ddg_html_search(
     country_lower = country.strip().lower()
     is_us = country_lower in {"united states", "usa", "us"}
 
-    # Build a targeted query
+    # Build a targeted query.
+    # Use "cinema" internationally — "movie theater" is US English and causes DDG
+    # to deprioritise non-English official websites (e.g. gaumont.fr for France).
     loc = f"{city} {state}".strip() if state else f"{city} {country}".strip()
-    query = f"{csv_name} {loc} movie theater"
+    query_suffix = "movie theater" if is_us else "cinema"
+    query = f"{csv_name} {loc} {query_suffix}"
 
     params = urllib.parse.urlencode({
         "q": query,
@@ -621,12 +673,28 @@ def ddg_html_search(
         if chain_slug:
             chain_toks = [t for t in chain_slug.split("-") if len(t) >= 3]
             full_url_lower = domain + path
+            chain_domain_match = False
             if chain_toks and all(t in domain for t in chain_toks[:2]):
-                score += 1.0   # all tokens in domain — best case
-            elif chain_toks and any(t in domain for t in chain_toks):
-                score += 0.6   # partial domain match
-            elif chain_toks and any(t in full_url_lower for t in chain_toks):
-                score += 0.4   # chain token found in path (e.g. regmovies.com/theatres/regal-...)
+                # Country-TLD guard: don't credit an AU/UK/etc. chain domain when the
+                # theater is in a different country.  e.g. hoyts.com.au should not
+                # match a Chinese "Village Hoyts" theater.
+                _ccTLDs = {".com.au": "australia", ".co.uk": "united kingdom",
+                           ".co.nz": "new zealand", ".co.in": "india",
+                           ".com.cn": "china", ".com.mx": "mexico",
+                           ".com.br": "brazil", ".com.sg": "singapore",
+                           ".com.my": "malaysia"}
+                wrong_country = any(
+                    domain.endswith(tld) and country.strip().lower() != expected
+                    for tld, expected in _ccTLDs.items()
+                )
+                if not wrong_country:
+                    score += 1.0   # all tokens in domain — best case
+                    chain_domain_match = True
+            if not chain_domain_match:
+                if chain_toks and any(t in domain for t in chain_toks):
+                    score += 0.6   # partial domain match
+                elif chain_toks and any(t in full_url_lower for t in chain_toks):
+                    score += 0.4   # chain token found in path
         # ── Secondary: domain contains a meaningful part of the theater name
         for tok in _normalize(csv_name).split():
             if len(tok) >= 5 and tok in domain:
