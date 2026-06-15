@@ -42,7 +42,7 @@ DDG_HTML_URL  = "https://html.duckduckgo.com/html/"
 
 NOMINATIM_DELAY = 1.1   # Nominatim ToS: max 1 req/sec
 OVERPASS_DELAY  = 2.0   # polite delay between Overpass requests
-DDG_DELAY       = 2.5   # polite delay between DDG HTML requests
+DDG_DELAY       = 4.0   # polite delay between DDG HTML requests
 
 USER_AGENT  = "IMAX_Alert_CSV_Enrichment/1.0 (github.com/dhodge250/IMAX_Alert)"
 BROWSER_UA  = (
@@ -207,6 +207,101 @@ _EXCLUDED_DOMAINS = frozenset({
     "onepluspartnership.com",
     "cafeshanghai.com",
     "qingdaochinaguide.com",
+    # Hotel / travel booking
+    "agoda.com",
+    "booking.com",
+    "expedia.com",
+    "trivago.com",
+    "klook.com",
+    # Tourism / travel blogs
+    "china-travel-routes.com",
+    "chinadiscovery.com",
+    "travelchinaguide.com",
+    "intotravelchina.com",
+    "babagoeschina.com",
+    "synotrip.com",
+    "chinatripedia.com",
+    "chinaservicesinfo.com",
+    "anchorageactivities.com",
+    "hkmytravel.com",
+    "eastbysoutheast.com",
+    "gokunming.com",
+    "shanghaideeptour.com",
+    "enjoyshanghai.com",
+    "goshopshanghai.com",
+    "guideofshanghai.com",
+    "ichongqing.info",
+    "i-changsha.net",
+    "hey-xian.com",
+    "itourbeijing.com",
+    "exploringtianjin.com",
+    "guangzhouinsider.info",
+    "nowshenzhen.com",
+    "thatsmags.com",
+    # Shopping guides (not theater sites)
+    "shenzhenshopper.com",
+    # IMAX's own Chinese listing site (same reason as imax.com)
+    "imax.cn",
+    # Encyclopedias / wikis
+    "baike.baidu.com",
+    "grokipedia.com",
+    # Social media
+    "reddit.com",
+    # Press release wire services
+    "prnewswire.com",
+    "einpresswire.com",
+    # Entertainment / cinema industry news (not theater websites)
+    "screendaily.com",
+    "variety.com",
+    "deadline.com",
+    "celluloidjunkie.com",
+    "dcinematoday.com",
+    # Box office analytics / financial news
+    "boxofficepro.com",
+    "marketscreener.com",
+    "bloomberg.com",
+    "advfn.com",
+    # Newspapers
+    "latimes.com",
+    "theglobeandmail.com",
+    "newsbreak.com",
+    "chinadaily.com.cn",
+    "cgtn.com",
+    "china.org.cn",
+    # Business directories
+    "cybo.com",
+    "poidata.io",
+    "zaubee.com",
+    "info-clipper.com",
+    "getoccupi.com",
+    # Travel routing / flight search
+    "rome2rio.com",
+    "skyscanner.com",
+    "tiket.com",             # Indonesian ticketing aggregator
+    # Equipment manufacturers (not theater sites)
+    "christiedigital.com",
+    "gdc-tech.com",
+    # Architecture / design awards (not theater sites)
+    "architizer.com",
+    "interiordesign.net",
+    "ifdesign.com",
+    "red-dot.org",
+    "archeyes.com",
+    "lead8.com",
+    "studioaxis.com",
+    "pragmagroup.com",
+    # Misc aggregators / placename databases
+    "worldplaces.me",
+    "loc8nearme.com",        # business/place locator directory
+    # Shopping mall / mixed-use development tenant listings
+    "shopdeltashores.com",
+    "downtownsilverspring.com",
+    "mayfairetown.com",
+    "edhtowncenter.com",         # El Dorado Hills Town Center
+    # Entertainment / things-to-do aggregators
+    "feverup.com",
+    # Business directories
+    "citysquares.com",
 })
 
 # Tokens to strip before fuzzy name comparison
@@ -249,7 +344,8 @@ def _url_domain(url: str) -> str:
     """Return the registered domain (e.g. 'amctheatres.com') from a URL."""
     try:
         netloc = urllib.parse.urlparse(url).netloc.lower()
-        netloc = netloc.lstrip("www.")
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
         return netloc
     except Exception:
         return ""
@@ -259,6 +355,12 @@ def _is_excluded(url: str) -> bool:
     """Return True if the URL is from an aggregator or excluded domain."""
     domain = _url_domain(url)
     if not domain:
+        return True
+    # Chinese government sites are not theater websites
+    if domain.endswith(".gov.cn"):
+        return True
+    # Hotel/resort subdomains are not cinema sites
+    if ".hotel" in domain or domain.startswith("hotel."):
         return True
     for ex in _EXCLUDED_DOMAINS:
         if domain == ex or domain.endswith("." + ex):
