@@ -1,5 +1,6 @@
 """IMAX Alert Flask application factory."""
 import logging
+import urllib.parse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import click as _click
@@ -892,7 +893,11 @@ def _upsert_theaters_from_csv(app):
                     dig_proj_obj   = get_or_create_projector_type(digital_proj) if digital_proj else None
                     dig_ar_obj     = get_or_create_aspect_ratio(digital_ar_raw) if digital_ar_raw else None
                     film_pt_obj    = get_or_create_projector_type(film_proj_raw) if film_proj_raw else None
-                    chain_obj      = get_or_create_chain(chain_name) if chain_name else None
+                    chain_root     = None
+                    if website_url:
+                        _p = urllib.parse.urlparse(website_url)
+                        chain_root = f"{_p.scheme}://{_p.netloc}" if _p.netloc else None
+                    chain_obj      = get_or_create_chain(chain_name, website=chain_root or "") if chain_name else None
                     audio_sys_obj  = get_or_create_audio_system(audio_sys_name) if audio_sys_name else None
                     w_m, h_m       = parse_screen_dims(screen_dims_str) if screen_dims_str else (None, None)
 
