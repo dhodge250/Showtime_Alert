@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ## Branching & PR Workflow (Gitflow)
 
 1. Cut branch from `develop`: `git checkout -b fix/issue-NNN-description origin/develop`
-2. Commit, push, PR → `develop` with `--reviewer Copilot`
+2. Commit, push, PR → `develop`
 3. Never merge PRs — create them and let the user approve and merge
 4. Never delete branches after merging
 5. Run only tests for changed code; full suite only when explicitly asked
@@ -54,7 +54,7 @@ docker logs imax-alert -f
 
 **Cloudflare-protected (AMC, Regal):** Playwright headless Chromium for initial page load only. After CF challenge clears, extract cookies via `context.cookies()`, seed a `requests.Session` with them, and make all API calls via `requests` — never `page.evaluate(fetch(...))`, which CF blocks inside Docker.
 
-**Plain HTTP (Cinemark, Cineplex):** `requests` + `BeautifulSoup` directly. No Playwright.
+**Plain HTTP (Cinemark, Cineplex, Royal BC Museum, TCL):** `requests` + `BeautifulSoup` directly. No Playwright.
 
 **Rules:** No `_MAX_DAYS` cap. `upsert_showtime()` deduplicates. `_movie_wanted()` scopes movies per alert.
 
@@ -62,10 +62,19 @@ docker logs imax-alert -f
 
 ## Release Roadmap
 
-| Version | Issue | Scraper |
-|---------|-------|---------|
-| v1.13.1 | #130 | AMC — Playwright + GraphQL API |
-| v1.13.2 | #131 | Regal — Playwright CF handshake + requests.Session |
-| v1.13.3 | #132 | Cinemark — requests + BeautifulSoup + GetByTheaterId API |
-| v1.13.4 | #133 | TCL Chinese Theatre — next |
-| v1.14   | #22 #24 #73 #80 | Account Security |
+| Version | Milestone | Status | Issues |
+|---------|-----------|--------|--------|
+| v1.12 | Bug Fixes & Mobile Responsiveness | ✅ shipped | #117–#129 |
+| v1.13 | Scraper Reliability | 🔄 in progress | #130 ✅ #131 ✅ #132 ✅ #133 🔄 |
+| v1.14 | Account Security | ⬜ next | #22 #24 #73 #80 |
+| v1.15 | Admin & User Management | ⬜ | #23 #25 #106 #119 |
+| v1.16 | Movies Feature | ⬜ | #29 #30 |
+| v1.17 | Theater Data Infrastructure | ⬜ | #46 #83 |
+| v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
+| v2.x | Global Expansion | ⬜ | #151 |
+
+**v1.13 scraper details:**
+- v1.13.1 #130 — AMC: Playwright + GraphQL API
+- v1.13.2 #131 — Regal: Playwright CF handshake + requests.Session
+- v1.13.3 #132 — Cinemark: requests + BeautifulSoup + GetByTheaterId API
+- v1.13.4 #133 — TCL Chinese Theatre: next up
