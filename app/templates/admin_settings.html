@@ -114,7 +114,7 @@
         Gmail users: use an App Password, not your account password.
       </p>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
         <div class="form-group">
           <label for="mail_server">SMTP Server</label>
           <input type="text" id="mail_server" name="mail_server"
@@ -250,7 +250,7 @@
         {% set crawl_job  = None %}
       {% endif %}
 
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px">
         <div class="form-group">
           <label for="scraper_interval_minutes">Showtime scrape interval (minutes)</label>
           <input type="number" id="scraper_interval_minutes" name="scraper_interval_minutes"
