@@ -55,6 +55,7 @@
         <option value="chain">Sort: Chain</option>
       </select>
       <button id="btn-clear" class="btn-sm btn-ghost" onclick="clearFilters()" disabled>Clear</button>
+      <button id="btn-viewport" class="btn-sm btn-ghost" onclick="toggleViewportFilter()" title="Filter list to theaters visible on the map">Filter to Map</button>
 </div>
 
 <!-- Mobile-only List / Map toggle — hidden on desktop via CSS -->
@@ -86,6 +87,8 @@
            data-projector="{{ theater.projector_type_name or '' }}"
            data-continent="{{ theater.continent_name or '' }}"
            data-commercial="{{ theater.commercial_films or '' }}"
+           data-lat="{{ theater.latitude or '' }}"
+           data-lng="{{ theater.longitude or '' }}"
            onclick="selectTheater({{ theater.id }}, {{ theater.latitude or 'null' }}, {{ theater.longitude or 'null' }})">
         <div class="theater-card-header">
           {% if theater.chain_name %}
@@ -305,6 +308,26 @@
     applyFilters();
   }
 
+  // ── Viewport filter ───────────────────────────────────────────────────
+  let _viewportFilterActive = false;
+  let _filteringFromViewport = false;
+
+  function toggleViewportFilter() {
+    _viewportFilterActive = !_viewportFilterActive;
+    const btn = document.getElementById('btn-viewport');
+    btn.classList.toggle('btn-primary', _viewportFilterActive);
+    btn.classList.toggle('btn-ghost', !_viewportFilterActive);
+    btn.textContent = _viewportFilterActive ? 'Map Filter On' : 'Filter to Map';
+    applyFilters();
+  }
+
+  map.on('moveend', function () {
+    if (!_viewportFilterActive) return;
+    _filteringFromViewport = true;
+    applyFilters();
+    _filteringFromViewport = false;
+  });
+
   // ── Filter / sort (pure — no dropdown rebuilding) ─────────────────────
   function applyFilters() {
     const search = document.getElementById('filter-search').value.toLowerCase();
@@ -320,18 +343,27 @@
     const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm);
     document.getElementById('btn-clear').disabled = !filtersActive;
 
+    const mapBounds = _viewportFilterActive ? map.getBounds() : null;
+
     const cards = [...document.querySelectorAll('.theater-card')];
-    let visible = cards.filter(card =>
-      (!search || card.dataset.name.toLowerCase().includes(search) ||
-                  card.dataset.city.toLowerCase().includes(search)) &&
-      (!co   || card.dataset.country      === co) &&
-      (!st   || card.dataset.state        === st) &&
-      (!ci   || card.dataset.city         === ci) &&
-      (!ar   || card.dataset.aspectRatio  === ar) &&
-      (!pt   || card.dataset.projector    === pt) &&
-      (!cont || card.dataset.continent    === cont) &&
-      (!comm || card.dataset.commercial   === comm)
-    );
+    let visible = cards.filter(card => {
+      if (search && !card.dataset.name.toLowerCase().includes(search) &&
+                    !card.dataset.city.toLowerCase().includes(search)) return false;
+      if (co   && card.dataset.country     !== co)   return false;
+      if (st   && card.dataset.state       !== st)   return false;
+      if (ci   && card.dataset.city        !== ci)   return false;
+      if (ar   && card.dataset.aspectRatio !== ar)   return false;
+      if (pt   && card.dataset.projector   !== pt)   return false;
+      if (cont && card.dataset.continent   !== cont) return false;
+      if (comm && card.dataset.commercial  !== comm) return false;
+      if (mapBounds) {
+        const lat = parseFloat(card.dataset.lat);
+        const lng = parseFloat(card.dataset.lng);
+        if (!lat || !lng) return false;
+        if (!mapBounds.contains([lat, lng])) return false;
+      }
+      return true;
+    });
 
     visible.sort((a, b) => (a.dataset[sortBy] || '').localeCompare(b.dataset[sortBy] || ''));
 
@@ -353,11 +385,14 @@
     document.getElementById('theater-count').textContent =
       `${visible.length} of ${cards.length} IMAX theaters`;
 
-    const bounds = visible
-      .map(c => markers[parseInt(c.id.replace('tc-',''))])
-      .filter(Boolean)
-      .map(m => m.getLatLng());
-    if (bounds.length > 0) map.fitBounds(bounds.map(ll => [ll.lat, ll.lng]), {padding:[30,30]});
+    // Don't fitBounds when viewport filter is active — the map drives the list, not vice versa
+    if (!_viewportFilterActive) {
+      const bounds = visible
+        .map(c => markers[parseInt(c.id.replace('tc-',''))])
+        .filter(Boolean)
+        .map(m => m.getLatLng());
+      if (bounds.length > 0) map.fitBounds(bounds.map(ll => [ll.lat, ll.lng]), {padding:[30,30]});
+    }
   }
 
   function clearFilters() {
@@ -366,6 +401,14 @@
       document.getElementById(id).value = '';
     });
     document.getElementById('filter-sort').value = 'country';
+    // Turn off viewport filter if active
+    if (_viewportFilterActive) {
+      _viewportFilterActive = false;
+      const btn = document.getElementById('btn-viewport');
+      btn.classList.remove('btn-primary');
+      btn.classList.add('btn-ghost');
+      btn.textContent = 'Filter to Map';
+    }
     onCountryChange();  // resets state + city dropdowns then calls applyFilters
   }
 
