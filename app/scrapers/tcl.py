@@ -80,7 +80,7 @@ def _imax_dates(film_screening_dates: list) -> list[str]:
 class TCLScraper(BaseScraper):
     """Scraper for TCL Chinese Theatre IMAX showtimes."""
 
-    chain_name = "TCL Chinese Theatre"
+    chain_name = "TCL"
 
     def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
         if not theater.website:
