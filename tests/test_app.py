@@ -3031,6 +3031,11 @@ class TestPasswordComplexity:
         with app.app_context():
             assert validate_password_strength("Abc1!") is not None
 
+    def test_too_long(self, app):
+        from app.auth import validate_password_strength
+        with app.app_context():
+            assert validate_password_strength("Abcdef1!" * 17) is not None  # 136 chars
+
     def test_missing_uppercase(self, app):
         from app.auth import validate_password_strength
         with app.app_context():

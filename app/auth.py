@@ -26,6 +26,7 @@ auth_bp = Blueprint("auth", __name__)
 # ---------------------------------------------------------------------------
 
 _PW_MIN_LEN = 8
+_PW_MAX_LEN = 128
 _PW_RULES = [
     (r"[A-Z]", "at least one uppercase letter"),
     (r"[a-z]", "at least one lowercase letter"),
@@ -45,6 +46,8 @@ def validate_password_strength(password: str, current_hash: str | None = None) -
 
     if len(password) < _PW_MIN_LEN:
         return f"Password must be at least {_PW_MIN_LEN} characters."
+    if len(password) > _PW_MAX_LEN:
+        return f"Password must be no more than {_PW_MAX_LEN} characters."
     for pattern, description in _PW_RULES:
         if not re.search(pattern, password):
             return f"Password must contain {description}."

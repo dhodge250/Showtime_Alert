@@ -1,6 +1,6 @@
 function checkStrength(val) {
   var rules = [
-    ['rule-len',     val.length >= 8],
+    ['rule-len',     val.length >= 8 && val.length <= 128],
     ['rule-upper',   /[A-Z]/.test(val)],
     ['rule-lower',   /[a-z]/.test(val)],
     ['rule-num',     /[0-9]/.test(val)],
