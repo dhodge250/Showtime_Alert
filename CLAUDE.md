@@ -14,12 +14,11 @@ pip install -r requirements.txt
 **Repo:** `dhodge250/IMAX_Alert` — container: `imax-alert`
 
 1. Cut branch from `develop`: `git checkout -b fix/issue-NNN-description origin/develop`
-2. Commit, push, PR → `develop` with `--reviewer Copilot`
-3. Never merge PRs — create them and let the user approve and merge
-4. Never delete branches after merging
-5. Run only tests for changed code; full suite only when explicitly asked
-
-> **Copilot reviewer:** `--reviewer Copilot` always fails via CLI with a GraphQL error, but the PR is still created successfully. Add Copilot as reviewer manually from the PR page afterward.
+2. Commit, push, PR → `develop`
+3. After creating the PR, rebuild and restart the local container so the user can test immediately: `docker compose down && docker compose build --no-cache && docker compose up -d`
+4. Never merge PRs — create them and let the user approve and merge
+5. Never delete branches after merging
+6. Run only tests for changed code; full suite only when explicitly asked
 
 **Release cycle:**
 1. `git checkout -b release/X.Y.Z origin/develop && git push -u origin release/X.Y.Z`
@@ -62,7 +61,9 @@ docker logs imax-alert -f
 
 **Cloudflare-protected (AMC, Regal):** Playwright headless Chromium for initial page load only. After CF challenge clears, extract cookies via `context.cookies()`, seed a `requests.Session` with them, and make all API calls via `requests` — never `page.evaluate(fetch(...))`, which CF blocks inside Docker.
 
-**Plain HTTP (Cinemark, Cineplex, Royal BC Museum, TCL):** `requests` + `BeautifulSoup` directly. No Playwright.
+**Plain HTTP (Cinemark, Cineplex, Royal BC Museum):** `requests` + `BeautifulSoup` directly. No Playwright.
+
+**Playwright + plain requests (TCL):** Playwright fetches the homepage to bypass Cloudflare and extract the `gasToken` from `__NEXT_DATA__`; browser is closed immediately after. All subsequent OCAPI calls use plain `requests` with the token as a Bearer header.
 
 **`scrape_all()` override:** Playwright scrapers (AMC, Regal) override `scrape_all()` to launch one browser and share it across all theaters. Plain HTTP scrapers rely on the base class `scrape_all()`, which calls `scrape_theater()` per theater. When writing a new Playwright scraper, copy the override pattern from `app/scrapers/regal.py`.
 
@@ -105,13 +106,13 @@ docker logs imax-alert -f
 | v1.13.1 | AMC scraper rebuild: Playwright + GraphQL API (#130) |
 | v1.13.2 | Regal scraper rebuild: Playwright CF handshake + requests.Session (#131) |
 | v1.13.3 | Cinemark scraper rebuild: requests + BeautifulSoup + GetByTheaterId API (#132) |
+| v1.13.4 | TCL Chinese Theatre scraper rebuild: Playwright gasToken + Vista OCAPI (#133) |
 
 ### In Progress & Upcoming
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.13.4 | Scraper Reliability | 🔄 next | #133 TCL Chinese Theatre |
-| v1.14 | Account Security | ⬜ | #22 #24 #73 #80 |
+| v1.14 | Account Security | 🔄 next | #22 #24 #73 #80 |
 | v1.15 | Admin & User Management | ⬜ | #23 #25 #106 #119 |
 | v1.16 | Movies Feature | ⬜ | #29 #30 |
 | v1.17 | Theater Data Infrastructure | ⬜ | #46 #83 |
