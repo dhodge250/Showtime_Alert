@@ -105,18 +105,40 @@ def index():
         for am in a.alert_movies.all()
     }
 
-    # Show only showtimes that match the (theater, movie) pairs in the visible alerts.
-    # This prevents unrelated movies scraped as a side-effect from appearing here.
+    # Build the showtime filter from active alerts PLUS alerts sent in the last 7 days,
+    # so showtimes remain visible on the dashboard after a notification fires.
+    from datetime import timedelta
+    recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    if current_user.role_name == "admin":
+        showtime_alerts = AlertPreference.query.filter(
+            db.or_(
+                AlertPreference.is_active.is_(True),
+                db.and_(
+                    AlertPreference.alert_sent.is_(True),
+                    AlertPreference.alert_sent_at >= recent_cutoff,
+                ),
+            )
+        ).all()
+    else:
+        showtime_alerts = AlertPreference.query.filter(
+            AlertPreference.user_id == current_user.id,
+            db.or_(
+                AlertPreference.is_active.is_(True),
+                db.and_(
+                    AlertPreference.alert_sent.is_(True),
+                    AlertPreference.alert_sent_at >= recent_cutoff,
+                ),
+            )
+        ).all()
+
     showtime_filters = []
-    for alert in alerts:
+    for alert in showtime_alerts:
         t_id = alert.theater_id
         alert_movie_ids = [am.movie_id for am in alert.alert_movies.all()]
         if not alert_movie_ids:
-            # "Any movie" alert — include all showtimes for this theater
             clause = (Showtime.theater_id == t_id) if t_id else db.true()
         else:
-            movie_clauses = [Showtime.movie_id == m for m in alert_movie_ids]
-            movie_clause = db.or_(*movie_clauses)
+            movie_clause = db.or_(*[Showtime.movie_id == m for m in alert_movie_ids])
             clause = db.and_(Showtime.theater_id == t_id, movie_clause) if t_id else movie_clause
         showtime_filters.append(clause)
 
