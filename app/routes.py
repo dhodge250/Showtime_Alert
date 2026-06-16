@@ -87,11 +87,7 @@ def index():
     """Dashboard."""
     theaters = Theater.query.filter_by(is_active=True).all()
     movies = Movie.query.order_by(Movie.title).all()
-    recent_showtimes = (
-        Showtime.query.filter(Showtime.tickets_available.is_(True))
-        .order_by(Showtime.first_seen.desc())
-        .all()
-    )
+
     # Admin sees all alerts; users see only their own
     if current_user.role_name == "admin":
         alerts = AlertPreference.query.filter_by(is_active=True).all()
@@ -108,6 +104,19 @@ def index():
         for a in alerts
         for am in a.alert_movies.all()
     }
+
+    # Show all upcoming scraped showtimes. Showtimes disappear only once their
+    # show_datetime passes — not when an alert closes. The scraper's per-theater
+    # movie scoping (see _get_active_targets) prevents unrelated movies from
+    # being inserted in the first place.
+    now = datetime.now(timezone.utc)
+    recent_showtimes = (
+        Showtime.query
+        .filter(Showtime.tickets_available.is_(True))
+        .filter(Showtime.show_datetime >= now)
+        .order_by(Showtime.show_datetime.asc())
+        .all()
+    )
 
     rows_per_page = _get_setting_int("rows_per_page", 15)
 

@@ -30,34 +30,38 @@ REQUEST_TIMEOUT = 15
 # Alert-driven target resolution
 # ---------------------------------------------------------------------------
 
-def _get_active_targets() -> tuple[set[int], set[int]]:
+def _get_active_targets() -> dict:
     """
-    Return (theater_id_set, movie_id_set) for all active, unsent alerts.
+    Return {theater_id: set[movie_id]} for all active, unsent alerts.
 
-    movie_id_set is built from AlertMovie rows (new model) for prefs that still
-    have unsent movies.  A None sentinel in movie_id_set means "any movie" —
-    present when at least one active pref has zero AlertMovie rows.
+    Keys:
+      theater_id=None  → "any theater" alert; its movie set applies globally.
+      theater_id=N     → specific theater; only those movies should be scraped there.
 
-    theater_id_set: None sentinel = "any theater" (alert has theater_id=None).
+    Values (movie sets):
+      movie_id=None    → "any movie" sentinel (alert has no AlertMovie rows).
+      movie_id=N       → track only this movie at the keyed theater.
+
+    Keeping movies scoped per theater prevents a "any movie at theater A" alert
+    from causing unrelated movies to be recorded at theater B.
     """
     active_prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
 
-    theater_ids: set = set()
-    movie_ids: set = set()
+    targets: dict = {}
 
     for pref in active_prefs:
-        theater_ids.add(pref.theater_id)  # None = any theater
+        tid = pref.theater_id  # None = any theater
+        if tid not in targets:
+            targets[tid] = set()
 
         am_count = pref.alert_movies.count()
         if am_count == 0:
-            # "Any movie" alert — sentinel: scrape everything at this theater
-            movie_ids.add(None)
+            targets[tid].add(None)  # None = any movie sentinel
         else:
-            # Add only unsent movie IDs
             for am in pref.alert_movies.filter_by(alert_sent=False).all():
-                movie_ids.add(am.movie_id)
+                targets[tid].add(am.movie_id)
 
-    return theater_ids, movie_ids
+    return targets
 
 
 class BaseScraper:
@@ -157,24 +161,18 @@ class BaseScraper:
         """
         Scrape theaters for this chain that have at least one active, unsent alert.
 
-        If no active alerts exist at all, no scraping is performed.  This keeps
-        the scraper idle when no users are waiting for notifications, and stops
-        scraping a movie/theater once its alert has been dispatched.
+        Movies are scoped per theater so that an "any movie" alert at theater A
+        does not cause unrelated movies to be recorded at theater B.
         """
-        theater_ids, movie_ids = _get_active_targets()
+        targets = _get_active_targets()
 
-        if not theater_ids and not movie_ids:
+        if not targets:
             logger.debug("%s: no active alerts — skipping scrape", self.chain_name)
             return []
 
-        # Build theater query for this chain
         query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
-
-        # If None is NOT in theater_ids, we have an explicit list to filter by
-        if None not in theater_ids:
-            query = query.filter(Theater.id.in_(theater_ids))
-        # If None IS in theater_ids, at least one alert has no theater filter
-        # meaning any theater might be relevant — scrape all active theaters.
+        if None not in targets:
+            query = query.filter(Theater.id.in_(targets.keys()))
 
         theaters = query.all()
         if not theaters:
@@ -182,6 +180,16 @@ class BaseScraper:
 
         new_showtimes: list[Showtime] = []
         for theater in theaters:
+            # Merge movie sets: any-theater alerts + this-theater-specific alerts
+            movie_ids: set = set()
+            if None in targets:
+                movie_ids |= targets[None]
+            if theater.id in targets:
+                movie_ids |= targets[theater.id]
+
+            if not movie_ids:
+                continue
+
             try:
                 results = self.scrape_theater(theater, movie_ids)
                 new_showtimes.extend(results)
