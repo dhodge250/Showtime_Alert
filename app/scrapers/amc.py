@@ -1,5 +1,70 @@
-from app.scrapers.base import BaseScraper, _parse_time_text
+import logging
+import re
+
+from bs4 import BeautifulSoup
+
+from app import db
+from app.scrapers.base import BaseScraper, _get_active_targets, _parse_time_text
 from app.models import Showtime, Theater
+
+logger = logging.getLogger(__name__)
+
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+_WAIT_MS = 7000
+_IMAX_ARIA = re.compile(r"IMAX", re.I)
+_SECTION_PREFIX = "Showtimes for "
+_SECTION_ARIA = re.compile(r"^Showtimes for ", re.I)
+
+
+def _showtimes_url(website: str) -> str:
+    url = website.rstrip("/")
+    if not url.endswith("/showtimes"):
+        url += "/showtimes"
+    return url
+
+
+def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: "AMCScraper") -> list[Showtime]:
+    new_showtimes: list[Showtime] = []
+
+    for section in soup.find_all("section", attrs={"aria-label": _SECTION_ARIA}):
+        title = section["aria-label"][len(_SECTION_PREFIX):]
+        if not title:
+            continue
+
+        imax_li = section.find("li", attrs={"aria-label": _IMAX_ARIA})
+        if not imax_li:
+            continue
+
+        img = section.find("img", src=re.compile(r"cloudinary\.com|amc-cdn", re.I))
+        image_url = img["src"] if img and img.get("src") else ""
+
+        movie = scraper.get_or_create_movie(title, image_url=image_url)
+        if not scraper._movie_wanted(movie, movie_ids):
+            continue
+
+        showtime_ul = imax_li.find("ul", attrs={"aria-label": "Showtime Group Results"})
+        if not showtime_ul:
+            continue
+
+        for link in showtime_ul.find_all("a"):
+            time_text = link.get_text(strip=True)
+            show_dt = _parse_time_text(time_text)
+            if not show_dt:
+                continue
+            href = link.get("href", "")
+            if href and not href.startswith("http"):
+                href = "https://www.amctheatres.com" + href
+            showtime, is_new = scraper.upsert_showtime(
+                theater, movie, show_dt, tickets_url=href, format_type="IMAX"
+            )
+            if is_new:
+                new_showtimes.append(showtime)
+
+    return new_showtimes
 
 
 class AMCScraper(BaseScraper):
@@ -7,51 +72,83 @@ class AMCScraper(BaseScraper):
 
     chain_name = "AMC"
 
-    def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
-        """Scrape showtimes for one AMC theater and return newly inserted rows."""
+    def scrape_all(self) -> list[Showtime]:
+        """Share one Playwright browser across all AMC theater scrapes."""
+        targets = _get_active_targets()
+        if not targets:
+            logger.debug("AMC: no active alerts — skipping scrape")
+            return []
+
+        query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
+        if None not in targets:
+            query = query.filter(Theater.id.in_(targets.keys()))
+        theaters = query.all()
+        if not theaters:
+            return []
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("AMC scraper requires playwright — skipping")
+            return []
+
         new_showtimes: list[Showtime] = []
-        if not theater.website:
-            return new_showtimes
-
-        soup = self.fetch(theater.website)
-        if not soup:
-            return new_showtimes
-
-        # AMC showtime pages list movies with show dates.
-        # The selector paths below target AMC's public HTML structure.
-        movie_sections = soup.select("div.ShowtimesByDate")
-        if not movie_sections:
-            # Fallback: look for any movie title links
-            movie_sections = soup.select("div[class*='movie']")
-
-        for section in movie_sections:
-            title_tag = section.select_one("h2, h3, [class*='movieTitle']")
-            if not title_tag:
-                continue
-            title = title_tag.get_text(strip=True)
-            if not title:
-                continue
-
-            img_tag = section.select_one("img")
-            image_url = img_tag["src"] if img_tag and img_tag.get("src") else ""
-
-            movie = self.get_or_create_movie(title, image_url=image_url)
-            if not self._movie_wanted(movie, movie_ids):
-                continue
-
-            time_links = section.select("a[class*='showtime'], a[class*='Showtime']")
-            for link in time_links:
-                time_text = link.get_text(strip=True)
-                show_dt = _parse_time_text(time_text)
-                if not show_dt:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=_UA, locale="en-US")
+            for theater in theaters:
+                movie_ids: set = set()
+                if None in targets:
+                    movie_ids |= targets[None]
+                if theater.id in targets:
+                    movie_ids |= targets[theater.id]
+                if not movie_ids:
                     continue
-                tickets_url = link.get("href", "")
-                if tickets_url and not tickets_url.startswith("http"):
-                    tickets_url = "https://www.amctheatres.com" + tickets_url
-                showtime, is_new = self.upsert_showtime(
-                    theater, movie, show_dt, tickets_url=tickets_url, format_type="IMAX"
-                )
-                if is_new:
-                    new_showtimes.append(showtime)
+                try:
+                    new_showtimes.extend(
+                        self._scrape_with_context(theater, movie_ids, context)
+                    )
+                except Exception as exc:
+                    logger.error("Error scraping %s: %s", theater.name, exc)
+            browser.close()
 
+        db.session.commit()
         return new_showtimes
+
+    def _scrape_with_context(self, theater: Theater, movie_ids: set, context) -> list[Showtime]:
+        if not theater.website:
+            return []
+        url = _showtimes_url(theater.website)
+        page = context.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            page.wait_for_timeout(_WAIT_MS)
+            soup = BeautifulSoup(page.content(), "lxml")
+        finally:
+            page.close()
+        return _parse_page(theater, movie_ids, soup, self)
+
+    def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
+        """Single-theater scrape — launches its own browser."""
+        if not theater.website:
+            return []
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("AMC scraper requires playwright — skipping %s", theater.name)
+            return []
+
+        url = _showtimes_url(theater.website)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=_UA, locale="en-US")
+            page = context.new_page()
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                page.wait_for_timeout(_WAIT_MS)
+                soup = BeautifulSoup(page.content(), "lxml")
+            finally:
+                page.close()
+                browser.close()
+
+        return _parse_page(theater, movie_ids, soup, self)

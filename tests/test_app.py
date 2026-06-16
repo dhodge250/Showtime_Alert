@@ -834,16 +834,15 @@ class TestScraper:
 
 class TestScraperAlertTargeting:
     def test_get_active_targets_empty(self, app):
-        """No active alerts → both sets are empty."""
+        """No active alerts → empty dict."""
         from app.scraper import _get_active_targets
 
         with app.app_context():
-            theater_ids, movie_ids = _get_active_targets()
-            assert len(theater_ids) == 0
-            assert len(movie_ids) == 0
+            targets = _get_active_targets()
+            assert targets == {}
 
     def test_get_active_targets_with_alert(self, app, sample_user, sample_theater, sample_movie):
-        """Active unsent alert with AlertMovie row → its theater_id and movie_id appear in targets."""
+        """Active unsent alert → theater_id key with the movie_id in its set."""
         from app.models import AlertMovie, AlertPreference
         from app.scraper import _get_active_targets
 
@@ -860,9 +859,9 @@ class TestScraperAlertTargeting:
             db.session.add(am)
             db.session.commit()
 
-            theater_ids, movie_ids = _get_active_targets()
-            assert sample_theater in theater_ids
-            assert sample_movie in movie_ids
+            targets = _get_active_targets()
+            assert sample_theater in targets
+            assert sample_movie in targets[sample_theater]
 
     def test_get_active_targets_sent_alert_excluded(self, app, sample_user, sample_theater, sample_movie):
         """Sent alert (alert_sent=True) is NOT included in targets."""
@@ -882,9 +881,8 @@ class TestScraperAlertTargeting:
             db.session.add(am)
             db.session.commit()
 
-            theater_ids, movie_ids = _get_active_targets()
-            assert sample_theater not in theater_ids
-            assert sample_movie not in movie_ids
+            targets = _get_active_targets()
+            assert sample_theater not in targets
 
     def test_scrape_all_skips_when_no_alerts(self, app):
         """scrape_all returns [] immediately when there are no active alerts."""
@@ -904,7 +902,12 @@ class TestScraperAlertTargeting:
         from unittest.mock import patch
 
         from app.models import AlertMovie, AlertPreference
-        from app.scraper import AMCScraper
+        from app.scrapers.base import BaseScraper
+
+        class _StubScraper(BaseScraper):
+            chain_name = "AMC"
+            def scrape_theater(self, theater, movie_ids):
+                return []
 
         with app.app_context():
             pref = AlertPreference(
@@ -919,7 +922,7 @@ class TestScraperAlertTargeting:
             db.session.add(am)
             db.session.commit()
 
-            scraper = AMCScraper()
+            scraper = _StubScraper()
             with patch.object(scraper, "scrape_theater", return_value=[]) as mock_scrape:
                 result = scraper.scrape_all()
 
@@ -932,7 +935,12 @@ class TestScraperAlertTargeting:
         from unittest.mock import patch
 
         from app.models import AlertPreference
-        from app.scraper import AMCScraper
+        from app.scrapers.base import BaseScraper
+
+        class _StubScraper(BaseScraper):
+            chain_name = "AMC"
+            def scrape_theater(self, theater, movie_ids):
+                return []
 
         with app.app_context():
             from app.models import Theater as TheaterModel
@@ -961,12 +969,98 @@ class TestScraperAlertTargeting:
             db.session.add(pref)
             db.session.commit()
 
-            scraper = AMCScraper()
+            scraper = _StubScraper()
             with patch.object(scraper, "scrape_theater", return_value=[]) as mock_scrape:
                 scraper.scrape_all()
 
             # Both AMC theaters should have been scraped
             assert mock_scrape.call_count >= 2
+
+
+# ── AMC Scraper ───────────────────────────────────────────────────────
+
+_AMC_SAMPLE_HTML = """
+<main aria-label="Filtered Showtime Results">
+  <section aria-label="Showtimes for Avengers: Secret Wars">
+    <ul aria-label="Test Theater, Avengers: Secret Wars Showtimes by Features and Accesibility">
+      <li role="listitem" aria-label="IMAX at AMC Showtimes">
+        <ul aria-label="Showtime Group Results">
+          <li><div role="group"><a href="/showtimes/111">7:00pm</a></div></li>
+          <li><div role="group"><a href="/showtimes/222">10:00pm</a></div></li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+  <section aria-label="Showtimes for Regular Movie">
+    <ul aria-label="Test Theater, Regular Movie Showtimes by Features and Accesibility">
+      <li role="listitem" aria-label="undefined Showtimes">
+        <ul aria-label="Showtime Group Results">
+          <li><div role="group"><a href="/showtimes/999">5:00pm</a></div></li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+</main>
+"""
+
+
+class TestAMCScraper:
+    def test_showtimes_url_appends_suffix(self):
+        from app.scrapers.amc import _showtimes_url
+
+        assert _showtimes_url("https://www.amctheatres.com/movie-theatres/city/amc-foo-15") == \
+            "https://www.amctheatres.com/movie-theatres/city/amc-foo-15/showtimes"
+
+    def test_showtimes_url_idempotent(self):
+        from app.scrapers.amc import _showtimes_url
+
+        url = "https://www.amctheatres.com/movie-theatres/city/amc-foo-15/showtimes"
+        assert _showtimes_url(url) == url
+
+    def test_parse_page_extracts_imax_showtimes(self, app, sample_theater):
+        from bs4 import BeautifulSoup
+        from app.scrapers.amc import AMCScraper, _parse_page
+
+        soup = BeautifulSoup(_AMC_SAMPLE_HTML, "lxml")
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = AMCScraper()
+            results = _parse_page(theater, {None}, soup, scraper)
+
+        assert len(results) == 2
+        urls = {st.tickets_url for st in results}
+        assert "https://www.amctheatres.com/showtimes/111" in urls
+        assert "https://www.amctheatres.com/showtimes/222" in urls
+        assert all(st.format_type == "IMAX" for st in results)
+
+    def test_parse_page_skips_non_imax(self, app, sample_theater):
+        from bs4 import BeautifulSoup
+        from app.scrapers.amc import AMCScraper, _parse_page
+
+        soup = BeautifulSoup(_AMC_SAMPLE_HTML, "lxml")
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = AMCScraper()
+            results = _parse_page(theater, {None}, soup, scraper)
+            movie_titles = {st.movie.title for st in results}
+
+        assert "Regular Movie" not in movie_titles
+        assert "Avengers: Secret Wars" in movie_titles
+
+    def test_parse_page_deduplicates_on_reparse(self, app, sample_theater):
+        from bs4 import BeautifulSoup
+        from app.scrapers.amc import AMCScraper, _parse_page
+
+        soup = BeautifulSoup(_AMC_SAMPLE_HTML, "lxml")
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = AMCScraper()
+            first = _parse_page(theater, {None}, soup, scraper)
+            db.session.commit()
+            second = _parse_page(theater, {None}, soup, scraper)
+
+        assert len(first) == 2
+        assert len(second) == 0  # already inserted — upsert returns is_new=False
 
 
 # ── Notifications ─────────────────────────────────────────────────────
