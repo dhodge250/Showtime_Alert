@@ -1456,6 +1456,14 @@ class TestTCLScraper:
         dates = _imax_dates(_TCL_SCREENING_DATES[1:])  # only the non-IMAX date
         assert dates == []
 
+    def test_title_prefix_stripped(self):
+        import re
+        from app.scrapers.tcl import _TITLE_PREFIX_RE
+
+        assert _TITLE_PREFIX_RE.sub("", "(IMAX) Disclosure Day") == "Disclosure Day"
+        assert _TITLE_PREFIX_RE.sub("", "(DBOX) The Odyssey") == "The Odyssey"
+        assert _TITLE_PREFIX_RE.sub("", "Regular Movie") == "Regular Movie"
+
     def test_scrape_date_extracts_imax(self, app, sample_theater):
         from unittest.mock import patch, MagicMock
         from app.scrapers.tcl import TCLScraper
@@ -1473,7 +1481,9 @@ class TestTCLScraper:
         assert len(results) == 2
         assert all(st.format_type == "IMAX" for st in results)
         titles = {st.movie.title for st in results}
-        assert "(IMAX) Disclosure Day" in titles
+        # Prefix is stripped: "(IMAX) Disclosure Day" → "Disclosure Day"
+        assert "Disclosure Day" in titles
+        assert "(IMAX) Disclosure Day" not in titles
 
     def test_scrape_date_skips_non_imax(self, app, sample_theater):
         from unittest.mock import patch, MagicMock

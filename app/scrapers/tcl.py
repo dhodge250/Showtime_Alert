@@ -37,6 +37,8 @@ _OCAPI_BASE = "https://digital-api.tclchinesetheatres.com"
 _SITE_PAGE = "https://www.tclchinesetheatres.com/"
 _SITE_ID = "0001"
 _IMAX_ATTR_ID = "0000000009"
+# API titles carry format prefixes like "(IMAX) ", "(DBOX) " — strip before DB lookup
+_TITLE_PREFIX_RE = re.compile(r"^\([^)]+\)\s+")
 _REQUEST_TIMEOUT = 15
 _NEXT_DATA_RE = re.compile(
     r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
@@ -78,7 +80,7 @@ def _imax_dates(film_screening_dates: list) -> list[str]:
 class TCLScraper(BaseScraper):
     """Scraper for TCL Chinese Theatre IMAX showtimes."""
 
-    chain_name = "TCL"
+    chain_name = "TCL Chinese Theatre"
 
     def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
         if not theater.website:
@@ -137,9 +139,11 @@ class TCLScraper(BaseScraper):
             if _IMAX_ATTR_ID not in show.get("attributeIds", []):
                 continue
 
-            title = films.get(show.get("filmId", ""), "")
-            if not title:
+            raw_title = films.get(show.get("filmId", ""), "")
+            if not raw_title:
                 continue
+            # Strip format prefixes like "(IMAX) ", "(DBOX) " so titles match alert movies
+            title = _TITLE_PREFIX_RE.sub("", raw_title)
 
             starts_at_str = (show.get("schedule") or {}).get("startsAt", "")
             if not starts_at_str:
