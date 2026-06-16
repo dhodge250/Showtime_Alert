@@ -62,6 +62,8 @@ docker logs imax-alert -f
 
 ## Release History & Roadmap
 
+> **Maintainer note:** After every release is tagged and deployed, move the version row from "In Progress & Upcoming" into the "Shipped" table and fill in its summary. Keep the "next" label on whichever issue is actively being worked.
+
 ### Shipped
 
 | Version | Summary |
