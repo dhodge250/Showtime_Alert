@@ -664,18 +664,47 @@ class TestAdminTheaterCRUD:
 
 
 class TestAdminUserCRUD:
-    def test_create_user_post(self, auth_client):
+    def test_create_user_post(self, auth_client, app):
         resp = auth_client.post(
             "/admin/users/new",
             data={
                 "name": "New User",
                 "email": "newuser@test.com",
-                "password": "testpass",
+                "password": "ValidPass1!",
                 "is_active": "on",
             },
             follow_redirects=True,
         )
         assert resp.status_code == 200
+        with app.app_context():
+            assert User.query.filter_by(email="newuser@test.com").first() is not None
+
+    def test_create_user_without_password_shows_error(self, auth_client):
+        resp = auth_client.post(
+            "/admin/users/new",
+            data={"name": "No Pass", "email": "nopass@test.com", "is_active": "on"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"password is required" in resp.data.lower()
+        # Confirm no user was created
+        assert b"nopass@test.com" not in resp.data or b"required" in resp.data.lower()
+
+    def test_create_user_weak_password_preserves_form_data(self, auth_client):
+        resp = auth_client.post(
+            "/admin/users/new",
+            data={
+                "name": "Preserved Name",
+                "email": "preserved@test.com",
+                "password": "weak",
+                "is_active": "on",
+            },
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"Password must" in resp.data
+        assert b"Preserved Name" in resp.data
+        assert b"preserved@test.com" in resp.data
 
     def test_edit_user_post(self, auth_client, app, sample_user):
         resp = auth_client.post(
@@ -3127,6 +3156,23 @@ class TestForgotResetPassword:
         resp = client.get(f"/reset-password/{raw}")
         assert resp.status_code == 200
         assert b"invalid" in resp.data.lower() or b"expired" in resp.data.lower()
+
+    def test_second_reset_request_within_cooldown_does_not_overwrite_token(self, app, client):
+        """A second forgot-password request within 2 minutes must not overwrite the first token."""
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            raw = user.generate_reset_token()
+            db.session.commit()
+            first_token_hash = user.reset_token
+
+        # Immediately request again — within the 2-minute cooldown window
+        client.post("/forgot-password", data={"email": "admin"})
+
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            assert user.reset_token == first_token_hash, (
+                "Token was overwritten within the cooldown window"
+            )
 
 
 # ── v1.14: Session ping endpoint (#73) ───────────────────────────────
