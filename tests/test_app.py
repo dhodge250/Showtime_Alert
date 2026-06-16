@@ -1063,6 +1063,124 @@ class TestAMCScraper:
         assert len(second) == 0  # already inserted — upsert returns is_new=False
 
 
+# ── Regal Scraper ─────────────────────────────────────────────────────
+
+_REGAL_SAMPLE_SHOWS = [
+    {
+        "TheatreCode": "1010",
+        "AdvertiseShowDate": "2026-06-16T00:00:00",
+        "UtcDate": "2026-06-16T07:00:00.000Z",
+        "Film": [
+            {
+                "Title": "Avengers: Secret Wars",
+                "MasterMovieCode": "HO00099999",
+                "Performances": [
+                    {
+                        "PerformanceId": 111111,
+                        "PerformanceAttributes": ["CC", "DV", "IMAX", "Laser", "2D"],
+                        "PerformanceGroup": "IMAX",
+                        "CalendarShowTime": "2026-06-16T19:00:00",
+                        "UtcShowTime": "2026-06-17T02:00:00.000Z",
+                        "UnixTime": 1781578800000,
+                        "StopSales": False,
+                    },
+                    {
+                        "PerformanceId": 222222,
+                        "PerformanceAttributes": ["CC", "DV", "IMAX", "Laser", "2D"],
+                        "PerformanceGroup": "IMAX",
+                        "CalendarShowTime": "2026-06-16T22:25:00",
+                        "UtcShowTime": "2026-06-17T05:25:00.000Z",
+                        "UnixTime": 1781590700000,
+                        "StopSales": False,
+                    },
+                ],
+            },
+            {
+                "Title": "Regular Movie",
+                "MasterMovieCode": "HO00088888",
+                "Performances": [
+                    {
+                        "PerformanceId": 999999,
+                        "PerformanceAttributes": ["CC", "DV", "2D", "Stadium"],
+                        "PerformanceGroup": "",
+                        "CalendarShowTime": "2026-06-16T18:00:00",
+                        "UtcShowTime": "2026-06-17T01:00:00.000Z",
+                        "UnixTime": 1781575200000,
+                        "StopSales": False,
+                    },
+                ],
+            },
+        ],
+        "time": 1781570000000,
+    }
+]
+
+
+class TestRegalScraper:
+    def test_theatre_code_from_url(self):
+        from app.scrapers.regal import _theatre_code_from_url
+
+        assert _theatre_code_from_url("https://www.regmovies.com/theatres/regal-irvine-spectrum-1010") == "1010"
+        assert _theatre_code_from_url("https://www.regmovies.com/theatres/regal-goldstream-0601") == "0601"
+
+    def test_parse_utc_showtime(self):
+        from app.scrapers.regal import _parse_utc_showtime
+        from datetime import timezone
+
+        dt = _parse_utc_showtime("2026-06-17T02:00:00.000Z")
+        assert dt is not None
+        assert dt.tzinfo == timezone.utc
+        assert dt.year == 2026
+        assert dt.month == 6
+        assert dt.day == 17
+        assert dt.hour == 2
+
+    def test_parse_utc_showtime_invalid(self):
+        from app.scrapers.regal import _parse_utc_showtime
+
+        assert _parse_utc_showtime("") is None
+        assert _parse_utc_showtime("not-a-date") is None
+
+    def test_parse_shows_extracts_imax(self, app, sample_theater):
+        from app.scrapers.regal import RegalScraper, _parse_shows
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = RegalScraper()
+            results = _parse_shows(scraper, theater, {None}, _REGAL_SAMPLE_SHOWS, "1010")
+
+        assert len(results) == 2
+        assert all(st.format_type == "IMAX" for st in results)
+        urls = {st.tickets_url for st in results}
+        assert any("111111" in u for u in urls)
+        assert any("222222" in u for u in urls)
+
+    def test_parse_shows_skips_non_imax(self, app, sample_theater):
+        from app.scrapers.regal import RegalScraper, _parse_shows
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = RegalScraper()
+            results = _parse_shows(scraper, theater, {None}, _REGAL_SAMPLE_SHOWS, "1010")
+            titles = {st.movie.title for st in results}
+
+        assert "Regular Movie" not in titles
+        assert "Avengers: Secret Wars" in titles
+
+    def test_parse_shows_deduplicates(self, app, sample_theater):
+        from app.scrapers.regal import RegalScraper, _parse_shows
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = RegalScraper()
+            first = _parse_shows(scraper, theater, {None}, _REGAL_SAMPLE_SHOWS, "1010")
+            db.session.commit()
+            second = _parse_shows(scraper, theater, {None}, _REGAL_SAMPLE_SHOWS, "1010")
+
+        assert len(first) == 2
+        assert len(second) == 0
+
+
 # ── Notifications ─────────────────────────────────────────────────────
 
 
