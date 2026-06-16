@@ -201,13 +201,13 @@ def forgot_password():
 
 
 @auth_bp.route("/reset-password/<token>", methods=["GET", "POST"])
+@limiter.limit("10 per minute", error_message="Too many attempts. Please wait a minute and try again.")
 def reset_password(token: str):
     """Allow a user to set a new password using a valid reset token."""
     if current_user.is_authenticated:
         return redirect(url_for("main.index"))
 
     from app.models import User
-    # Find a user whose token matches and has not expired
     user = _find_user_by_token(token)
 
     if user is None:
@@ -218,7 +218,7 @@ def reset_password(token: str):
         new_password = request.form.get("new_password", "")
         confirm = request.form.get("confirm_password", "")
 
-        error = validate_password_strength(new_password)
+        error = validate_password_strength(new_password, current_hash=user.password_hash)
         if error is None and new_password != confirm:
             error = "Passwords do not match."
         if error is None:
@@ -243,9 +243,10 @@ def _find_user_by_token(raw_token: str):
     """Return the User whose stored reset token matches *raw_token*, or None."""
     from app.models import User
     from datetime import datetime, timezone
+    now_naive_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     candidates = User.query.filter(
         User.reset_token.isnot(None),
-        User.reset_token_expiry > datetime.now(timezone.utc),
+        User.reset_token_expiry > now_naive_utc,
     ).all()
     for user in candidates:
         if user.verify_reset_token(raw_token):

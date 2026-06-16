@@ -454,7 +454,7 @@ def admin_user_edit(user_id):
                 error = "Your current password is incorrect. Password was not changed."
             else:
                 from app.auth import validate_password_strength
-                error = validate_password_strength(new_password)
+                error = validate_password_strength(new_password, current_hash=user.password_hash)
 
         if not error:
             user.name = request.form.get("name", user.name).strip()

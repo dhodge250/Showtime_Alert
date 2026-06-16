@@ -614,14 +614,16 @@ class User(db.Model, UserMixin):
         from datetime import timedelta
         raw = secrets.token_urlsafe(32)
         self.reset_token = generate_password_hash(raw)
-        self.reset_token_expiry = datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
+        # Store as naive UTC: SQLAlchemy/SQLite strips timezone info on read-back,
+        # so using naive UTC avoids mismatched comparisons.
+        self.reset_token_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=expiry_hours)
         return raw
 
     def verify_reset_token(self, raw_token: str) -> bool:
         """Return True if *raw_token* matches the stored hash and has not expired."""
         if not self.reset_token or not self.reset_token_expiry:
             return False
-        if datetime.now(timezone.utc) > self.reset_token_expiry.replace(tzinfo=timezone.utc):
+        if datetime.now(timezone.utc).replace(tzinfo=None) > self.reset_token_expiry:
             return False
         return check_password_hash(self.reset_token, raw_token)
 

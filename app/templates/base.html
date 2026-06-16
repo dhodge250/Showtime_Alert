@@ -97,8 +97,8 @@
   (function () {
     var TIMEOUT_MS   = {{ session_timeout_minutes }} * 60 * 1000;
     var WARN_BEFORE  = 2 * 60 * 1000; // show warning 2 min before expiry
-    var PING_EVERY   = 4 * 60 * 1000; // ping server every 4 min while active
-    var idleTimer, warnTimer, countdownInterval;
+    var PING_THROTTLE = 4 * 60 * 1000; // at most one server ping per 4 min while active
+    var idleTimer, warnTimer, countdownInterval, lastPing = 0;
     var overlay = document.getElementById('session-warn-overlay');
     var secsEl  = document.getElementById('session-warn-secs');
 
@@ -110,6 +110,12 @@
       idleTimer = setTimeout(doLogout, TIMEOUT_MS);
       if (TIMEOUT_MS > WARN_BEFORE) {
         warnTimer = setTimeout(showWarning, TIMEOUT_MS - WARN_BEFORE);
+      }
+      // Ping server only on activity, throttled so we don't spam every mousemove
+      var now = Date.now();
+      if (now - lastPing > PING_THROTTLE) {
+        lastPing = now;
+        fetch('/api/session/ping').catch(function () {});
       }
     }
 
@@ -138,14 +144,9 @@
     }
 
     window.sessionExtend = function () {
+      lastPing = Date.now();
       fetch('/api/session/ping').then(function () { resetIdle(); });
     };
-
-    // Ping server periodically while user is active so the server-side session
-    // does not expire while the client idle timer is still running
-    setInterval(function () {
-      fetch('/api/session/ping').catch(function () {});
-    }, PING_EVERY);
 
     ['mousemove','keydown','mousedown','touchstart','scroll'].forEach(function (ev) {
       document.addEventListener(ev, resetIdle, {passive: true});
