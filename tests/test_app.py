@@ -1181,6 +1181,180 @@ class TestRegalScraper:
         assert len(second) == 0
 
 
+# ── Cinemark Scraper ──────────────────────────────────────────────────
+
+_CINEMARK_SAMPLE_HTML = """
+<div id="showTimes">
+  <div id="showtimesInner">
+    <div class="showtimeMovieBlock 109523">
+      <div class="showtimeMovie clearfix">
+        <h3>Avengers: Secret Wars</h3>
+        <div class="movieBlockShowtimes col-xs-12 col-sm-10">
+          <div class="showtimeMovieTimes clearfix">
+            <div class="row" role="list">
+              <div class="showtime" data-print-type-name="IMAX 2D" role="listitem">
+                <p aria-disabled="true" class="off past">12:20pm<span></span></p>
+              </div>
+              <div class="showtime" data-print-type-name="IMAX 2D" role="listitem">
+                <a aria-label="Select 7:10 PM showtime for Monday, June 15, 2026"
+                   class="showtime-link"
+                   data-print-type-name="IMAX 2D"
+                   href="/TicketSeatMap/?TheaterId=444&amp;ShowtimeId=706168&amp;CinemarkMovieId=109523&amp;Showtime=2026-06-15T19:10:00">7:10pm</a>
+              </div>
+              <div class="showtime" data-print-type-name="IMAX 2D" role="listitem">
+                <a aria-label="Select 10:35 PM showtime for Monday, June 15, 2026"
+                   class="showtime-link"
+                   data-print-type-name="IMAX 2D"
+                   href="/TicketSeatMap/?TheaterId=444&amp;ShowtimeId=706169&amp;CinemarkMovieId=109523&amp;Showtime=2026-06-15T22:35:00">10:35pm</a>
+              </div>
+            </div>
+          </div>
+          <div class="showtimeMovieTimes clearfix">
+            <div class="row" role="list">
+              <div class="showtime" data-print-type-name="Standard Format Luxury Lounger" role="listitem">
+                <a class="showtime-link" href="/TicketSeatMap/?TheaterId=444&amp;ShowtimeId=999999">5:00pm</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="showtimeMovieBlock 107529">
+      <div class="showtimeMovie clearfix">
+        <h3>Regular Movie</h3>
+        <div class="movieBlockShowtimes col-xs-12 col-sm-10">
+          <div class="showtimeMovieTimes clearfix">
+            <div class="row" role="list">
+              <div class="showtime" data-print-type-name="Standard Format Luxury Lounger" role="listitem">
+                <a class="showtime-link" href="/TicketSeatMap/?TheaterId=444&amp;ShowtimeId=888888">8:00pm</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+"""
+
+_CINEMARK_MAIN_HTML = """
+<html><body>
+<script>
+  var currentTheaterId = 444;
+  var currentShowdate = "2026-06-15 00:00:00";
+</script>
+<ul class="carousel">
+  <li class="carousel__item carousel__item--showdate item-selected">
+    <a class="showdate-link" data-datevalue="2026-06-15" href="javascript:void(0)">Today</a>
+  </li>
+  <li class="carousel__item carousel__item--showdate">
+    <a class="showdate-link" data-datevalue="2026-06-16" href="javascript:void(0)">Tues 6/16</a>
+  </li>
+  <li class="carousel__item carousel__item--showdate">
+    <a class="showdate-link" data-datevalue="2026-06-17" href="javascript:void(0)">Wed 6/17</a>
+  </li>
+</ul>
+""" + _CINEMARK_SAMPLE_HTML + "</body></html>"
+
+
+class TestCinemarkScraper:
+    def test_extract_theater_id(self):
+        from bs4 import BeautifulSoup
+        from app.scrapers.cinemark import _extract_theater_id
+
+        soup = BeautifulSoup(_CINEMARK_MAIN_HTML, "lxml")
+        assert _extract_theater_id(soup) == "444"
+
+    def test_extract_theater_id_missing(self):
+        from bs4 import BeautifulSoup
+        from app.scrapers.cinemark import _extract_theater_id
+
+        soup = BeautifulSoup("<html><body></body></html>", "lxml")
+        assert _extract_theater_id(soup) == ""
+
+    def test_parse_showtime_dt(self):
+        from app.scrapers.cinemark import _parse_showtime_dt
+        from datetime import timezone
+
+        dt = _parse_showtime_dt("2026-06-15", "7:10pm")
+        assert dt is not None
+        assert dt.tzinfo == timezone.utc
+        assert dt.hour == 19
+        assert dt.minute == 10
+
+        dt2 = _parse_showtime_dt("2026-06-15", "10:35pm")
+        assert dt2 is not None
+        assert dt2.hour == 22
+        assert dt2.minute == 35
+
+    def test_parse_showtime_dt_invalid(self):
+        from app.scrapers.cinemark import _parse_showtime_dt
+
+        assert _parse_showtime_dt("2026-06-15", "") is None
+        assert _parse_showtime_dt("bad-date", "7:10pm") is None
+
+    def test_parse_imax_showtimes_extracts_imax(self, app, sample_theater):
+        from bs4 import BeautifulSoup
+        from app.scrapers.cinemark import CinemarkScraper, _parse_imax_showtimes
+
+        soup = BeautifulSoup(_CINEMARK_SAMPLE_HTML, "lxml")
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = CinemarkScraper()
+            results = _parse_imax_showtimes(scraper, theater, {None}, soup, "2026-06-15")
+
+        assert len(results) == 2
+        assert all(st.format_type == "IMAX" for st in results)
+        urls = {st.tickets_url for st in results}
+        assert any("706168" in u for u in urls)
+        assert any("706169" in u for u in urls)
+
+    def test_parse_imax_showtimes_skips_past(self, app, sample_theater):
+        from bs4 import BeautifulSoup
+        from app.scrapers.cinemark import CinemarkScraper, _parse_imax_showtimes
+
+        soup = BeautifulSoup(_CINEMARK_SAMPLE_HTML, "lxml")
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = CinemarkScraper()
+            results = _parse_imax_showtimes(scraper, theater, {None}, soup, "2026-06-15")
+
+        # 12:20pm is a past showtime (no link) — only 7:10pm and 10:35pm should appear
+        times = {st.show_datetime.hour for st in results}
+        assert 12 not in times
+        assert 19 in times
+        assert 22 in times
+
+    def test_parse_imax_showtimes_skips_non_imax(self, app, sample_theater):
+        from bs4 import BeautifulSoup
+        from app.scrapers.cinemark import CinemarkScraper, _parse_imax_showtimes
+
+        soup = BeautifulSoup(_CINEMARK_SAMPLE_HTML, "lxml")
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = CinemarkScraper()
+            results = _parse_imax_showtimes(scraper, theater, {None}, soup, "2026-06-15")
+            titles = {st.movie.title for st in results}
+
+        assert "Regular Movie" not in titles
+        assert "Avengers: Secret Wars" in titles
+
+    def test_parse_imax_showtimes_deduplicates(self, app, sample_theater):
+        from bs4 import BeautifulSoup
+        from app.scrapers.cinemark import CinemarkScraper, _parse_imax_showtimes
+
+        soup = BeautifulSoup(_CINEMARK_SAMPLE_HTML, "lxml")
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = CinemarkScraper()
+            first = _parse_imax_showtimes(scraper, theater, {None}, soup, "2026-06-15")
+            db.session.commit()
+            second = _parse_imax_showtimes(scraper, theater, {None}, soup, "2026-06-15")
+
+        assert len(first) == 2
+        assert len(second) == 0
+
+
 # ── Notifications ─────────────────────────────────────────────────────
 
 
