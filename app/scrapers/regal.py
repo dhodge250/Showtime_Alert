@@ -14,7 +14,6 @@ _UA = (
     "Chrome/122.0.0.0 Safari/537.36"
 )
 _WAIT_MS = 7000
-_MAX_DAYS = 14
 _THEATRE_CODE_RE = re.compile(r"-(\d{4})$")
 
 
@@ -177,9 +176,7 @@ class RegalScraper(BaseScraper):
 
             # Fetch upcoming dates via /api/getShowtimes (called inside browser context)
             dates_with_shows = props.get("datesWithShows") or []
-            today_iso = (dates_with_shows[0] or "")[:10] if dates_with_shows else ""
-
-            for date_iso in [d[:10] for d in dates_with_shows[1:_MAX_DAYS]]:
+            for date_iso in [d[:10] for d in dates_with_shows[1:]]:
                 shows = self._fetch_date(page, theatre_code, date_iso)
                 all_shows.extend(shows)
 
