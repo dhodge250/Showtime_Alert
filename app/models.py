@@ -584,6 +584,8 @@ class User(db.Model, UserMixin):
     notify_sms = db.Column(db.Boolean, default=False)
     timezone = db.Column(db.String(100), default="UTC")
     force_password_change = db.Column(db.Boolean, default=False)
+    reset_token = db.Column(db.String(256), nullable=True)
+    reset_token_expiry = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     role = db.relationship("Role", back_populates="users")
@@ -605,6 +607,30 @@ class User(db.Model, UserMixin):
         if not self.password_hash:
             return False
         return check_password_hash(self.password_hash, password)
+
+    def generate_reset_token(self, expiry_hours: int = 1) -> str:
+        """Create a secure password-reset token, store its hash, and return the raw token."""
+        import secrets
+        from datetime import timedelta
+        raw = secrets.token_urlsafe(32)
+        self.reset_token = generate_password_hash(raw)
+        # Store as naive UTC: SQLAlchemy/SQLite strips timezone info on read-back,
+        # so using naive UTC avoids mismatched comparisons.
+        self.reset_token_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=expiry_hours)
+        return raw
+
+    def verify_reset_token(self, raw_token: str) -> bool:
+        """Return True if *raw_token* matches the stored hash and has not expired."""
+        if not self.reset_token or not self.reset_token_expiry:
+            return False
+        if datetime.now(timezone.utc).replace(tzinfo=None) > self.reset_token_expiry:
+            return False
+        return check_password_hash(self.reset_token, raw_token)
+
+    def clear_reset_token(self):
+        """Invalidate the reset token after it has been used."""
+        self.reset_token = None
+        self.reset_token_expiry = None
 
     @property
     def role_name(self):

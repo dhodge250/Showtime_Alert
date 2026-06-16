@@ -664,18 +664,47 @@ class TestAdminTheaterCRUD:
 
 
 class TestAdminUserCRUD:
-    def test_create_user_post(self, auth_client):
+    def test_create_user_post(self, auth_client, app):
         resp = auth_client.post(
             "/admin/users/new",
             data={
                 "name": "New User",
                 "email": "newuser@test.com",
-                "password": "testpass",
+                "password": "ValidPass1!",
                 "is_active": "on",
             },
             follow_redirects=True,
         )
         assert resp.status_code == 200
+        with app.app_context():
+            assert User.query.filter_by(email="newuser@test.com").first() is not None
+
+    def test_create_user_without_password_shows_error(self, auth_client):
+        resp = auth_client.post(
+            "/admin/users/new",
+            data={"name": "No Pass", "email": "nopass@test.com", "is_active": "on"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"password is required" in resp.data.lower()
+        # Confirm no user was created
+        assert b"nopass@test.com" not in resp.data or b"required" in resp.data.lower()
+
+    def test_create_user_weak_password_preserves_form_data(self, auth_client):
+        resp = auth_client.post(
+            "/admin/users/new",
+            data={
+                "name": "Preserved Name",
+                "email": "preserved@test.com",
+                "password": "weak",
+                "is_active": "on",
+            },
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"Password must" in resp.data
+        assert b"Preserved Name" in resp.data
+        assert b"preserved@test.com" in resp.data
 
     def test_edit_user_post(self, auth_client, app, sample_user):
         resp = auth_client.post(
@@ -2989,3 +3018,182 @@ class TestAdminLogsTimestamp:
         utc_val = match.group(1)
         # Should be parseable as a datetime (YYYY-MM-DDTHH:MM:SS or similar)
         assert "T" in utc_val, f"Expected ISO datetime with T separator, got: {utc_val}"
+
+
+# ── v1.14: Password complexity (#24) ─────────────────────────────────
+
+
+class TestPasswordComplexity:
+    """Unit tests for the validate_password_strength helper."""
+
+    def test_too_short(self, app):
+        from app.auth import validate_password_strength
+        with app.app_context():
+            assert validate_password_strength("Abc1!") is not None
+
+    def test_too_long(self, app):
+        from app.auth import validate_password_strength
+        with app.app_context():
+            assert validate_password_strength("Abcdef1!" * 17) is not None  # 136 chars
+
+    def test_missing_uppercase(self, app):
+        from app.auth import validate_password_strength
+        with app.app_context():
+            assert validate_password_strength("abc123!!") is not None
+
+    def test_missing_lowercase(self, app):
+        from app.auth import validate_password_strength
+        with app.app_context():
+            assert validate_password_strength("ABC123!!") is not None
+
+    def test_missing_digit(self, app):
+        from app.auth import validate_password_strength
+        with app.app_context():
+            assert validate_password_strength("Abcdef!!") is not None
+
+    def test_missing_special(self, app):
+        from app.auth import validate_password_strength
+        with app.app_context():
+            assert validate_password_strength("Abcdef12") is not None
+
+    def test_valid_password(self, app):
+        from app.auth import validate_password_strength
+        with app.app_context():
+            assert validate_password_strength("Abcdef1!") is None
+
+    def test_reuse_current_password(self, app):
+        from app.auth import validate_password_strength
+        from werkzeug.security import generate_password_hash
+        with app.app_context():
+            h = generate_password_hash("Abcdef1!")
+            assert validate_password_strength("Abcdef1!", current_hash=h) is not None
+
+    def test_different_from_current_password(self, app):
+        from app.auth import validate_password_strength
+        from werkzeug.security import generate_password_hash
+        with app.app_context():
+            h = generate_password_hash("OldPass9@")
+            assert validate_password_strength("NewPass9@", current_hash=h) is None
+
+
+# ── v1.14: Forgot / reset password (#22) ─────────────────────────────
+
+
+class TestForgotResetPassword:
+    def test_forgot_password_page_loads(self, client):
+        resp = client.get("/forgot-password")
+        assert resp.status_code == 200
+        assert b"Reset" in resp.data or b"forgot" in resp.data.lower()
+
+    def test_forgot_password_unknown_email_still_shows_confirmation(self, client):
+        resp = client.post(
+            "/forgot-password",
+            data={"email": "nobody@example.com"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"reset link" in resp.data.lower() or b"inbox" in resp.data.lower()
+
+    def test_forgot_password_known_email_generates_token(self, app, client):
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            assert user.reset_token is None
+        client.post("/forgot-password", data={"email": "admin"})
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            assert user.reset_token is not None
+            assert user.reset_token_expiry is not None
+
+    def test_reset_password_invalid_token_shows_error(self, client):
+        resp = client.get("/reset-password/not-a-real-token")
+        assert resp.status_code == 200
+        assert b"invalid" in resp.data.lower() or b"expired" in resp.data.lower()
+
+    def test_reset_password_valid_token_sets_new_password(self, app, client):
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            raw = user.generate_reset_token()
+            db.session.commit()
+        resp = client.post(
+            f"/reset-password/{raw}",
+            data={"new_password": "NewPass1!", "confirm_password": "NewPass1!"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            assert user.check_password("NewPass1!")
+            assert user.reset_token is None
+
+    def test_reset_password_weak_password_rejected(self, app, client):
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            raw = user.generate_reset_token()
+            db.session.commit()
+        resp = client.post(
+            f"/reset-password/{raw}",
+            data={"new_password": "weak", "confirm_password": "weak"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"Password must" in resp.data
+
+    def test_reset_password_mismatch_rejected(self, app, client):
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            raw = user.generate_reset_token()
+            db.session.commit()
+        resp = client.post(
+            f"/reset-password/{raw}",
+            data={"new_password": "NewPass1!", "confirm_password": "Different1!"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"do not match" in resp.data.lower()
+
+    def test_expired_token_rejected(self, app, client):
+        from datetime import datetime, timedelta, timezone
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            raw = user.generate_reset_token()
+            user.reset_token_expiry = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
+            db.session.commit()
+        resp = client.get(f"/reset-password/{raw}")
+        assert resp.status_code == 200
+        assert b"invalid" in resp.data.lower() or b"expired" in resp.data.lower()
+
+    def test_second_reset_request_within_cooldown_does_not_overwrite_token(self, app, client):
+        """A second forgot-password request within 2 minutes must not overwrite the first token."""
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            raw = user.generate_reset_token()
+            db.session.commit()
+            first_token_hash = user.reset_token
+
+        # Immediately request again — within the 2-minute cooldown window
+        client.post("/forgot-password", data={"email": "admin"})
+
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            assert user.reset_token == first_token_hash, (
+                "Token was overwritten within the cooldown window"
+            )
+
+
+# ── v1.14: Session ping endpoint (#73) ───────────────────────────────
+
+
+class TestSessionPing:
+    def test_ping_unauthenticated_redirects(self, client):
+        resp = client.get("/api/session/ping")
+        assert resp.status_code in (302, 401)
+
+    def test_ping_authenticated_returns_ok(self, auth_client):
+        resp = auth_client.get("/api/session/ping")
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"] is True
+
+    def test_session_timeout_in_settings(self, auth_client):
+        resp = auth_client.get("/admin/settings")
+        assert resp.status_code == 200
+        assert b"session_timeout_minutes" in resp.data or b"idle timeout" in resp.data.lower()

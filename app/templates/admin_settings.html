@@ -88,6 +88,24 @@
       </div>
     </div>
 
+    <!-- Security -->
+    <div class="form-section">
+      <h2 class="form-section-title">Security</h2>
+
+      <div class="form-group">
+        <label for="session_timeout_minutes">Session idle timeout (minutes)</label>
+        <input type="number" id="session_timeout_minutes" name="session_timeout_minutes"
+               min="0" max="1440"
+               value="{{ settings.get('session_timeout_minutes', '60') }}"
+               style="width:120px" />
+        <small class="text-muted" style="font-size:11px;margin-top:2px">
+          Automatically log users out after this many minutes of inactivity.
+          Set to <strong>0</strong> to disable (sessions last until the browser closes or the user logs out).
+          When enabled: Min: 5 min, Max: 1440 min (24 h).
+        </small>
+      </div>
+    </div>
+
     <!-- Email (SMTP) -->
     <div class="form-section">
       <h2 class="form-section-title">Email Notifications (SMTP)</h2>
