@@ -105,53 +105,18 @@ def index():
         for am in a.alert_movies.all()
     }
 
-    # Build the showtime filter from active alerts PLUS alerts sent in the last 7 days,
-    # so showtimes remain visible on the dashboard after a notification fires.
-    from datetime import timedelta
-    recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    if current_user.role_name == "admin":
-        showtime_alerts = AlertPreference.query.filter(
-            db.or_(
-                AlertPreference.is_active.is_(True),
-                db.and_(
-                    AlertPreference.alert_sent.is_(True),
-                    AlertPreference.alert_sent_at >= recent_cutoff,
-                ),
-            )
-        ).all()
-    else:
-        showtime_alerts = AlertPreference.query.filter(
-            AlertPreference.user_id == current_user.id,
-            db.or_(
-                AlertPreference.is_active.is_(True),
-                db.and_(
-                    AlertPreference.alert_sent.is_(True),
-                    AlertPreference.alert_sent_at >= recent_cutoff,
-                ),
-            )
-        ).all()
-
-    showtime_filters = []
-    for alert in showtime_alerts:
-        t_id = alert.theater_id
-        alert_movie_ids = [am.movie_id for am in alert.alert_movies.all()]
-        if not alert_movie_ids:
-            clause = (Showtime.theater_id == t_id) if t_id else db.true()
-        else:
-            movie_clause = db.or_(*[Showtime.movie_id == m for m in alert_movie_ids])
-            clause = db.and_(Showtime.theater_id == t_id, movie_clause) if t_id else movie_clause
-        showtime_filters.append(clause)
-
-    if showtime_filters:
-        recent_showtimes = (
-            Showtime.query
-            .filter(Showtime.tickets_available.is_(True))
-            .filter(db.or_(*showtime_filters))
-            .order_by(Showtime.first_seen.desc())
-            .all()
-        )
-    else:
-        recent_showtimes = []
+    # Show all upcoming scraped showtimes. Showtimes disappear only once their
+    # show_datetime passes — not when an alert closes. The scraper's per-theater
+    # movie scoping (see _get_active_targets) prevents unrelated movies from
+    # being inserted in the first place.
+    now = datetime.now(timezone.utc)
+    recent_showtimes = (
+        Showtime.query
+        .filter(Showtime.tickets_available.is_(True))
+        .filter(Showtime.show_datetime >= now)
+        .order_by(Showtime.show_datetime.asc())
+        .all()
+    )
 
     rows_per_page = _get_setting_int("rows_per_page", 15)
 
