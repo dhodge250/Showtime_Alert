@@ -14,7 +14,7 @@ pip install -r requirements.txt
 **Repo:** `dhodge250/IMAX_Alert` — container: `imax-alert`
 
 1. Cut branch from `develop`: `git checkout -b fix/issue-NNN-description origin/develop`
-2. Commit, push, PR → `develop`
+2. Commit, push, PR → `develop`; no reviewer needed
 3. After creating the PR, rebuild and restart the local container so the user can test immediately: `docker compose down && docker compose build --no-cache && docker compose up -d`
 4. Never merge PRs — create them and let the user approve and merge
 5. Never delete branches after merging
@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 **Release cycle:**
 1. `git checkout -b release/X.Y.Z origin/develop && git push -u origin release/X.Y.Z`
-2. PR `release/X.Y.Z` → `main` with Copilot reviewer
+2. PR `release/X.Y.Z` → `main`
 3. After merge: `git checkout main && git pull origin main && git tag vX.Y.Z && git push origin vX.Y.Z`
 4. Tag push triggers Docker Hub CI/CD
 
