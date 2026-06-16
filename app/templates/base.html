@@ -81,5 +81,79 @@
       });
     })();
   </script>
+
+  {% if current_user.is_authenticated and session_timeout_minutes > 0 %}
+  <!-- Session idle timeout (issue #73) -->
+  <div id="session-warn-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border-radius:8px;padding:28px 32px;max-width:380px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.4)">
+      <p style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--text-primary)">Still there?</p>
+      <p style="font-size:14px;color:var(--text-muted);margin-bottom:20px">
+        You'll be logged out in <strong id="session-warn-secs"></strong> seconds due to inactivity.
+      </p>
+      <button onclick="sessionExtend()" class="btn btn-primary" style="width:100%">Stay Signed In</button>
+    </div>
+  </div>
+  <script>
+  (function () {
+    var TIMEOUT_MS   = {{ session_timeout_minutes }} * 60 * 1000;
+    var WARN_BEFORE  = 2 * 60 * 1000; // show warning 2 min before expiry
+    var PING_EVERY   = 4 * 60 * 1000; // ping server every 4 min while active
+    var idleTimer, warnTimer, countdownInterval;
+    var overlay = document.getElementById('session-warn-overlay');
+    var secsEl  = document.getElementById('session-warn-secs');
+
+    function resetIdle() {
+      clearTimeout(idleTimer);
+      clearTimeout(warnTimer);
+      clearInterval(countdownInterval);
+      if (overlay) overlay.style.display = 'none';
+      idleTimer = setTimeout(doLogout, TIMEOUT_MS);
+      if (TIMEOUT_MS > WARN_BEFORE) {
+        warnTimer = setTimeout(showWarning, TIMEOUT_MS - WARN_BEFORE);
+      }
+    }
+
+    function showWarning() {
+      var remaining = Math.round(WARN_BEFORE / 1000);
+      if (secsEl) secsEl.textContent = remaining;
+      if (overlay) overlay.style.display = 'flex';
+      countdownInterval = setInterval(function () {
+        remaining -= 1;
+        if (secsEl) secsEl.textContent = Math.max(0, remaining);
+        if (remaining <= 0) { clearInterval(countdownInterval); doLogout(); }
+      }, 1000);
+    }
+
+    function doLogout() {
+      // POST to logout route with CSRF token
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '{{ url_for("auth.logout") }}';
+      var csrf = document.createElement('input');
+      csrf.type = 'hidden'; csrf.name = 'csrf_token';
+      csrf.value = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+      form.appendChild(csrf);
+      document.body.appendChild(form);
+      form.submit();
+    }
+
+    window.sessionExtend = function () {
+      fetch('/api/session/ping').then(function () { resetIdle(); });
+    };
+
+    // Ping server periodically while user is active so the server-side session
+    // does not expire while the client idle timer is still running
+    setInterval(function () {
+      fetch('/api/session/ping').catch(function () {});
+    }, PING_EVERY);
+
+    ['mousemove','keydown','mousedown','touchstart','scroll'].forEach(function (ev) {
+      document.addEventListener(ev, resetIdle, {passive: true});
+    });
+
+    resetIdle();
+  })();
+  </script>
+  {% endif %}
 </body>
 </html>

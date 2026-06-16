@@ -452,6 +452,9 @@ def admin_user_edit(user_id):
             admin_pw = request.form.get("admin_current_password", "").strip()
             if not admin_pw or not current_user.check_password(admin_pw):
                 error = "Your current password is incorrect. Password was not changed."
+            else:
+                from app.auth import validate_password_strength
+                error = validate_password_strength(new_password)
 
         if not error:
             user.name = request.form.get("name", user.name).strip()
@@ -554,6 +557,12 @@ def admin_settings():
             new_log_retention = max(1, min(365, int(request.form.get("log_retention_days", old_log_retention))))
         except (ValueError, TypeError):
             new_log_retention = old_log_retention
+        old_session_timeout = _get_setting_int("session_timeout_minutes", 60)
+        try:
+            raw_timeout = int(request.form.get("session_timeout_minutes", old_session_timeout))
+            new_session_timeout = 0 if raw_timeout == 0 else max(5, min(1440, raw_timeout))
+        except (ValueError, TypeError):
+            new_session_timeout = old_session_timeout
 
         # default_max_notifications: optional positive int, blank = delete/clear
         raw_def_max = request.form.get("default_max_notifications", "").strip()
@@ -574,12 +583,13 @@ def admin_settings():
             db.session.delete(setting)
 
         for key, val in (
-            ("scraper_interval_minutes", str(new_scraper)),
-            ("alert_interval_minutes",   str(new_alert)),
+            ("scraper_interval_minutes",  str(new_scraper)),
+            ("alert_interval_minutes",    str(new_alert)),
             ("venue_crawl_interval_days", str(new_crawl)),
-            ("cleanup_interval_hours",   str(new_cleanup)),
-            ("rows_per_page",            str(new_rows_per_page)),
-            ("log_retention_days",       str(new_log_retention)),
+            ("cleanup_interval_hours",    str(new_cleanup)),
+            ("rows_per_page",             str(new_rows_per_page)),
+            ("log_retention_days",        str(new_log_retention)),
+            ("session_timeout_minutes",   str(new_session_timeout)),
         ):
             setting = Settings.query.filter_by(key=key).first()
             if setting:
@@ -671,6 +681,13 @@ def api_test_smtp():
         "success": False,
         "message": err or "Send failed — check credentials and server settings.",
     })
+
+
+@api_bp.route("/session/ping", methods=["GET"])
+@login_required
+def session_ping():
+    """Extend the current session; used by the client-side idle timeout heartbeat."""
+    return jsonify({"ok": True})
 
 
 @main_bp.route("/admin/logs")

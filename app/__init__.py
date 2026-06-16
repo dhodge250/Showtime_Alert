@@ -108,6 +108,16 @@ def create_app(config_name="default"):
             v = 0
         return {"static_v": v}
 
+    @app.context_processor
+    def _session_timeout_ctx():
+        try:
+            from app.models import Settings
+            row = Settings.query.filter_by(key="session_timeout_minutes").first()
+            minutes = int(row.value) if row and row.value else 60
+        except Exception:  # noqa: BLE001
+            minutes = 60
+        return {"session_timeout_minutes": minutes}
+
     # ------------------------------------------------------------------
     # Flask CLI: flask cleanup-chains
     # ------------------------------------------------------------------
@@ -516,6 +526,17 @@ def _run_migrations():
             "ALTER TABLE alert_preferences ADD COLUMN target_date_buffer INTEGER",
             None,
         ),
+        # Password reset token (hashed) and expiry — for self-service forgot-password flow
+        (
+            "reset_token", "users",
+            "ALTER TABLE users ADD COLUMN reset_token VARCHAR(256)",
+            None,
+        ),
+        (
+            "reset_token_expiry", "users",
+            "ALTER TABLE users ADD COLUMN reset_token_expiry DATETIME",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:
@@ -711,6 +732,8 @@ def _seed_default_settings():
         ("log_retention_days", "30"),
         # Alert processor
         ("alert_interval_minutes", "15"),
+        # Session security
+        ("session_timeout_minutes", "60"),
     ]
     for key, default_value in defaults:
         if not Settings.query.filter_by(key=key).first():
