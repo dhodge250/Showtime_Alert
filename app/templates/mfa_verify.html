@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Two-Factor Authentication – IMAX Alert</title>
+  <script>(function(){var t=localStorage.getItem('imax-theme')||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');document.documentElement.setAttribute('data-theme',t);})();</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body class="login-body">
+  <div class="login-split">
+    <div class="login-brand-panel">
+      <div class="login-brand-inner">
+        <h1 class="login-title"><span class="login-title-imax">IMAX</span> ALERT</h1>
+        <p class="login-tagline">Two-factor authentication keeps your account safe even if your password is compromised.</p>
+      </div>
+    </div>
+
+    <div class="login-form-panel">
+      <div class="login-form-inner">
+        <h2 class="login-form-heading">Verify your identity</h2>
+        <p class="login-form-sub" id="mfa-sub">Open your authenticator app and enter the 6-digit code.</p>
+
+        {% if error %}
+          <div class="login-error">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" id="mfa-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="use_recovery" id="use-recovery-flag" value="0">
+
+          <div class="form-group" id="code-group">
+            <label for="code" id="code-label">Authenticator code</label>
+            <input type="text" id="code" name="code" class="form-control"
+                   placeholder="6-digit code" inputmode="numeric" pattern="[0-9 A-Fa-f]{5,10}"
+                   autocomplete="one-time-code" maxlength="10" autofocus required />
+          </div>
+
+          <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px">Verify</button>
+        </form>
+
+        <p style="margin-top:20px;font-size:13px;color:var(--text-muted);text-align:center">
+          Lost your device?
+          <a href="#" onclick="switchToRecovery(); return false;">Use a recovery code</a>
+        </p>
+        <p style="margin-top:8px;font-size:13px;color:var(--text-muted);text-align:center">
+          <a href="{{ url_for('auth.login') }}">Back to login</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function switchToRecovery() {
+      document.getElementById('use-recovery-flag').value = '1';
+      document.getElementById('code-label').textContent = 'Recovery code';
+      document.getElementById('mfa-sub').textContent = 'Enter one of your 8-character recovery codes.';
+      document.getElementById('code').placeholder = 'Recovery code';
+      document.getElementById('code').removeAttribute('pattern');
+      document.getElementById('code').removeAttribute('inputmode');
+      document.getElementById('code').focus();
+    }
+  </script>
+</body>
+</html>

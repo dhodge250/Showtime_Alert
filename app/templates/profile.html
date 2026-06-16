@@ -143,6 +143,33 @@
     </form>
   </div>
 
+  <!-- Security / MFA -->
+  <div class="form-section">
+    <h2 class="form-section-title">Two-Factor Authentication</h2>
+    {% if user.mfa_enabled %}
+    <p style="font-size:13px;color:var(--success);margin-bottom:12px;font-weight:500">&#10003; MFA is enabled on your account.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <a href="{{ url_for('main.profile_mfa_setup') }}" class="btn btn-outline btn-sm">Manage / Reconfigure</a>
+      <form method="POST" action="{{ url_for('main.profile_mfa_disable') }}"
+            onsubmit="return disableMfaConfirm(event)">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="password" id="mfa-disable-pw" name="password" placeholder="Current password"
+               style="display:none;margin-right:6px" class="form-control" autocomplete="current-password" />
+        <button type="button" id="mfa-disable-btn" class="btn btn-danger btn-sm"
+                onclick="document.getElementById('mfa-disable-pw').style.display='inline';document.getElementById('mfa-disable-btn').style.display='none';document.getElementById('mfa-disable-submit').style.display='inline'">
+          Disable MFA
+        </button>
+        <button type="submit" id="mfa-disable-submit" class="btn btn-danger btn-sm" style="display:none">Confirm Disable</button>
+      </form>
+    </div>
+    {% else %}
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+      Add an extra layer of security using an authenticator app like Google Authenticator or Authy.
+    </p>
+    <a href="{{ url_for('main.profile_mfa_setup') }}" class="btn btn-outline btn-sm">Enable MFA</a>
+    {% endif %}
+  </div>
+
   <!-- Location (view-only — edit via admin if needed) -->
   <div class="form-section">
     <h2 class="form-section-title">Your Location</h2>
@@ -176,6 +203,17 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+function disableMfaConfirm(e) {
+  var pw = document.getElementById('mfa-disable-pw');
+  if (!pw || !pw.value.trim()) {
+    e.preventDefault();
+    pw.focus();
+    return false;
+  }
+  return confirm('Disable MFA? You will no longer need a code to log in.');
+}
+</script>
 {% if user.location_lat and user.location_lon %}
 <script>
   const map = L.map('profile-map').setView([{{ user.location_lat }}, {{ user.location_lon }}], 13);

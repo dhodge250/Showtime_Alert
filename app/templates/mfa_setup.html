@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}MFA Setup – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Multi-Factor Authentication</h1>
+  <p class="subtitle">Secure your account with a time-based one-time password (TOTP)</p>
+  <a href="{{ url_for('main.profile') }}" class="back-link">&larr; Back to Profile</a>
+</div>
+
+<div class="card" style="max-width:560px">
+  {% if step == 'begin' %}
+
+    <h2 style="margin-bottom:12px">Set up authenticator</h2>
+    <p style="color:var(--text-muted);margin-bottom:20px;font-size:14px">
+      Use an app like Google Authenticator, Authy, or 1Password to scan the QR code
+      and generate 6-digit codes at login.
+    </p>
+    {% if user.mfa_enabled %}
+      <div class="flash-message flash-warning" style="margin-bottom:16px">
+        MFA is already active on your account. Setting it up again will replace your current authenticator.
+      </div>
+    {% endif %}
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="begin">
+      <button type="submit" class="btn btn-primary">Begin Setup</button>
+    </form>
+
+  {% elif step == 'confirm' %}
+
+    <h2 style="margin-bottom:12px">Scan QR Code</h2>
+    <p style="color:var(--text-muted);margin-bottom:16px;font-size:14px">
+      Scan the code below with your authenticator app, then enter the 6-digit code to confirm.
+    </p>
+
+    <div style="margin:0 auto 20px;width:fit-content;background:#fff;padding:8px;border-radius:var(--radius);border:1px solid var(--border)">
+      <img src="{{ qr_image }}" alt="QR code" width="180" height="180" />
+    </div>
+
+    <details style="margin-bottom:20px;font-size:13px">
+      <summary style="cursor:pointer;color:var(--text-muted)">Can't scan? Enter key manually</summary>
+      <code style="display:block;margin-top:8px;word-break:break-all;background:var(--bg-card-alt);padding:8px;border-radius:var(--radius);font-size:12px;letter-spacing:0.1em">{{ secret }}</code>
+    </details>
+
+    {% if error %}
+      <div class="login-error" style="margin-bottom:12px">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="confirm">
+      <div class="form-group">
+        <label for="totp_code">Enter 6-digit code from app</label>
+        <input type="text" id="totp_code" name="totp_code" class="form-control"
+               placeholder="000000" inputmode="numeric" pattern="[0-9]{6}"
+               maxlength="6" autocomplete="one-time-code" autofocus required />
+      </div>
+      <button type="submit" class="btn btn-primary" style="margin-top:4px">Confirm</button>
+      <a href="{{ url_for('main.profile_mfa_setup') }}" class="btn btn-ghost" style="margin-top:4px">Cancel</a>
+    </form>
+
+  {% elif step == 'done' %}
+
+    <h2 style="margin-bottom:12px">MFA is now active</h2>
+    <p style="color:var(--text-muted);margin-bottom:20px;font-size:14px">
+      Multi-factor authentication is enabled. Save these recovery codes somewhere safe —
+      each code can only be used once and you'll need them if you lose access to your authenticator.
+    </p>
+
+    {% if recovery_codes %}
+    <div style="background:var(--bg-card-alt);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+      <p style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:10px">Recovery codes (save these now)</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;font-family:monospace;font-size:14px;letter-spacing:0.12em">
+        {% for code in recovery_codes %}<span>{{ code }}</span>{% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <form method="POST" style="display:inline-block;margin-right:8px">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="regen_recovery">
+      <button type="submit" class="btn btn-outline btn-sm">Regenerate Recovery Codes</button>
+    </form>
+    <a href="{{ url_for('main.profile') }}" class="btn btn-primary">Done</a>
+
+  {% endif %}
+</div>
+{% endblock %}

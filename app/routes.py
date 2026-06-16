@@ -35,6 +35,7 @@ from app.models import (
     Showtime,
     Theater,
     User,
+    UserInvite,
 )
 
 logger = logging.getLogger(__name__)
@@ -272,6 +273,79 @@ def profile():
     return render_template("profile.html", user=user, saved=saved, unit=user.measurement_unit or "metric")
 
 
+@main_bp.route("/profile/mfa-setup", methods=["GET", "POST"])
+@login_required
+def profile_mfa_setup():
+    """Show QR code and confirm TOTP enrollment."""
+    user = current_user._get_current_object()
+    error = None
+    recovery_codes = None
+
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "begin":
+            user.generate_mfa_secret()
+            db.session.commit()
+            qr_image = _make_qr_data_url(user.mfa_totp_uri())
+            return render_template("mfa_setup.html", user=user, step="confirm",
+                                   qr_image=qr_image, secret=user.mfa_secret)
+        elif action == "confirm":
+            code = request.form.get("totp_code", "").strip()
+            if user.verify_totp(code):
+                user.mfa_enabled = True
+                recovery_codes = user.generate_recovery_codes()
+                db.session.commit()
+                from app.log_utils import write_log
+                write_log("auth", f"MFA enabled by {user.email}", user_id=user.id)
+                return render_template("mfa_setup.html", user=user, step="done",
+                                       recovery_codes=recovery_codes)
+            else:
+                error = "Invalid code — please try again."
+                qr_image = _make_qr_data_url(user.mfa_totp_uri())
+                return render_template("mfa_setup.html", user=user, step="confirm",
+                                       qr_image=qr_image, secret=user.mfa_secret,
+                                       error=error)
+        elif action == "regen_recovery":
+            if not user.mfa_enabled:
+                return redirect(url_for("main.profile"))
+            recovery_codes = user.generate_recovery_codes()
+            db.session.commit()
+            return render_template("mfa_setup.html", user=user, step="done",
+                                   recovery_codes=recovery_codes)
+
+    return render_template("mfa_setup.html", user=user, step="begin")
+
+
+def _make_qr_data_url(uri: str) -> str:
+    """Generate a QR code for *uri* and return it as a base64 PNG data URL."""
+    import base64
+    import io
+    import qrcode
+    img = qrcode.make(uri, box_size=6, border=2)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+@main_bp.route("/profile/mfa-disable", methods=["POST"])
+@login_required
+def profile_mfa_disable():
+    """Disable MFA for the current user after re-authentication."""
+    user = current_user._get_current_object()
+    password = request.form.get("password", "")
+    if not user.check_password(password):
+        from flask import flash
+        flash("Incorrect password. MFA was not disabled.", "error")
+        return redirect(url_for("main.profile"))
+    user.clear_mfa()
+    db.session.commit()
+    from app.log_utils import write_log
+    write_log("auth", f"MFA disabled by {user.email}", user_id=user.id)
+    from flask import flash
+    flash("Multi-factor authentication has been disabled.", "success")
+    return redirect(url_for("main.profile"))
+
+
 # ---------------------------------------------------------------------------
 # Admin: Theater management
 # ---------------------------------------------------------------------------
@@ -394,10 +468,16 @@ def admin_theater_reactivate(theater_id):
 @main_bp.route("/admin/users")
 @require_role("admin")
 def admin_users():
-    """Admin: list all users."""
+    """Admin: list all users and pending invites."""
     users_list = User.query.order_by(User.name).all()
     roles = Role.query.order_by(Role.name).all()
-    return render_template("admin_users.html", users=users_list, roles=roles)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pending_invites = UserInvite.query.filter(
+        UserInvite.accepted_at.is_(None),
+        UserInvite.expires_at > now,
+    ).order_by(UserInvite.created_at.desc()).all()
+    return render_template("admin_users.html", users=users_list, roles=roles,
+                           pending_invites=pending_invites)
 
 
 @main_bp.route("/admin/users/new", methods=["GET", "POST"])
@@ -506,6 +586,100 @@ def admin_user_delete(user_id):
     user.is_active = False
     db.session.commit()
     return redirect(url_for("main.admin_users"))
+
+
+@main_bp.route("/admin/users/<int:user_id>/reset-mfa", methods=["POST"])
+@require_role("admin")
+def admin_user_reset_mfa(user_id):
+    """Admin: clear MFA for a user so they can re-enroll."""
+    user = User.query.get_or_404(user_id)
+    user.clear_mfa()
+    db.session.commit()
+    from app.log_utils import write_log
+    write_log("auth", f"Admin reset MFA for user {user.email}", user_id=current_user.id)
+    return redirect(url_for("main.admin_user_edit", user_id=user_id))
+
+
+# ---------------------------------------------------------------------------
+# Admin: User invites
+# ---------------------------------------------------------------------------
+
+@main_bp.route("/admin/users/invite", methods=["POST"])
+@require_role("admin")
+def admin_user_invite():
+    """Admin: send an email invite to a new user."""
+    email = request.form.get("invite_email", "").strip().lower()
+    role_id = request.form.get("invite_role_id", type=int)
+
+    if not email:
+        from flask import flash
+        flash("Email address is required.", "error")
+        return redirect(url_for("main.admin_users"))
+
+    if User.query.filter(db.func.lower(User.email) == email).first():
+        from flask import flash
+        flash(f"A user with email '{email}' already exists.", "error")
+        return redirect(url_for("main.admin_users"))
+
+    existing = UserInvite.query.filter(
+        db.func.lower(UserInvite.email) == email,
+        UserInvite.accepted_at.is_(None),
+        UserInvite.expires_at > datetime.now(timezone.utc).replace(tzinfo=None),
+    ).first()
+    if existing:
+        from flask import flash
+        flash(f"A pending invite for '{email}' already exists.", "warning")
+        return redirect(url_for("main.admin_users"))
+
+    invite, raw_token = UserInvite.create(email, role_id, current_user.id)
+    db.session.add(invite)
+    db.session.commit()
+
+    try:
+        _send_invite_email(invite, raw_token)
+        from app.log_utils import write_log
+        write_log("auth", f"Invite sent to {email} by {current_user.email}", user_id=current_user.id)
+        from flask import flash
+        flash(f"Invite sent to {email}.", "success")
+    except Exception:
+        logger.exception("Failed to send invite email to %s", email)
+        from flask import flash
+        flash(f"Invite created but email delivery failed for {email}.", "warning")
+
+    return redirect(url_for("main.admin_users"))
+
+
+@main_bp.route("/admin/users/invites/<int:invite_id>/revoke", methods=["POST"])
+@require_role("admin")
+def admin_invite_revoke(invite_id):
+    """Admin: revoke a pending invite."""
+    invite = UserInvite.query.get_or_404(invite_id)
+    db.session.delete(invite)
+    db.session.commit()
+    from app.log_utils import write_log
+    write_log("auth", f"Invite for {invite.email} revoked by {current_user.email}", user_id=current_user.id)
+    return redirect(url_for("main.admin_users"))
+
+
+def _send_invite_email(invite: "UserInvite", raw_token: str):
+    """Send invitation email with signup link."""
+    from app.notifications import send_email
+    signup_url = url_for("auth.accept_invite", token=raw_token, _external=True)
+    subject = "You've been invited to IMAX Alert"
+    body_html = f"""
+<p>You've been invited to join IMAX Alert. Click the link below to create your account:</p>
+<p><a href="{signup_url}">{signup_url}</a></p>
+<p>This invitation expires in 48 hours.</p>
+<p>— IMAX Alert</p>
+"""
+    body_text = (
+        f"You've been invited to join IMAX Alert.\n\n"
+        f"Create your account here:\n{signup_url}\n\n"
+        f"This invitation expires in 48 hours.\n\n— IMAX Alert"
+    )
+    success, err = send_email(current_app.config, invite.email, subject, body_html, body_text)
+    if not success:
+        raise RuntimeError(f"Email delivery failed: {err}")
 
 
 # ---------------------------------------------------------------------------
