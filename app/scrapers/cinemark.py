@@ -1,5 +1,136 @@
-from app.scrapers.base import BaseScraper, _parse_time_text
+"""
+Scraper for Cinemark IMAX showtimes.
+
+Cinemark's website is server-side rendered and accessible via plain requests
+(no Cloudflare or bot protection). Multi-date coverage is achieved by:
+  1. Fetching the theater page once to get the theater ID and all available
+     dates from the showdate carousel.
+  2. Parsing today's IMAX showtimes directly from the main page HTML.
+  3. For each additional date, calling the internal GetByTheaterId endpoint
+     which returns an HTML fragment with that date's showtimes.
+
+No Playwright / headless browser needed.
+"""
+
+import logging
+import re
+from datetime import datetime, timezone
+
+import requests
+from bs4 import BeautifulSoup
+
+from app import db
+from app.scrapers.base import BaseScraper
 from app.models import Showtime, Theater
+
+logger = logging.getLogger(__name__)
+
+_PAGE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_API_HEADERS = {
+    **_PAGE_HEADERS,
+    "Accept": "*/*",
+    "X-Requested-With": "XMLHttpRequest",
+}
+_SHOWTIMES_API = (
+    "https://www.cinemark.com/umbraco/surface/Showtimes/GetByTheaterId"
+)
+_THEATER_ID_RE = re.compile(r"var\s+currentTheaterId\s*=\s*(\d+)")
+_REQUEST_TIMEOUT = 15
+
+
+def _extract_theater_id(soup: BeautifulSoup) -> str:
+    for script in soup.find_all("script"):
+        text = script.string or ""
+        m = _THEATER_ID_RE.search(text)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _parse_showtime_dt(date_iso: str, time_text: str) -> datetime | None:
+    """
+    Combine a YYYY-MM-DD date with a time string like '7:10pm' into a
+    UTC-aware datetime.
+
+    Note: Cinemark stores local theater times — we attach UTC as a
+    consistent timezone marker (matching how other scrapers handle local
+    times). The date + local time combination is what matters for alert
+    matching.
+    """
+    clean = time_text.strip().upper()
+    for fmt in ("%I:%M%p", "%I:%M %p"):
+        try:
+            dt = datetime.strptime(f"{date_iso} {clean}", f"%Y-%m-%d {fmt}")
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_imax_showtimes(
+    scraper: "CinemarkScraper",
+    theater: Theater,
+    movie_ids: set,
+    soup: BeautifulSoup,
+    date_iso: str,
+) -> list[Showtime]:
+    """Extract IMAX showtimes from a Cinemark HTML page or API fragment."""
+    new_showtimes: list[Showtime] = []
+
+    for block in soup.select("div.showtimeMovieBlock"):
+        title_el = block.find("h3") or block.find("h2")
+        if not title_el:
+            continue
+        title = title_el.get_text(strip=True)
+        if not title:
+            continue
+
+        img = block.find("img", class_="img-responsive")
+        image_url = (
+            (img.get("data-srcset") or img.get("src") or "") if img else ""
+        )
+
+        movie = scraper.get_or_create_movie(title, image_url=image_url)
+        if not scraper._movie_wanted(movie, movie_ids):
+            continue
+
+        for show_div in block.select("div.showtime"):
+            ptype = show_div.get("data-print-type-name", "")
+            if "IMAX" not in ptype.upper():
+                continue
+
+            # Past showtimes render as <p class="off past"> with no link
+            link = show_div.find("a", class_="showtime-link")
+            if not link:
+                continue
+
+            time_text = link.get_text(strip=True)
+            show_dt = _parse_showtime_dt(date_iso, time_text)
+            if not show_dt:
+                continue
+
+            href = link.get("href", "")
+            tickets_url = f"https://www.cinemark.com{href}" if href else ""
+
+            showtime, is_new = scraper.upsert_showtime(
+                theater,
+                movie,
+                show_dt,
+                tickets_available=True,
+                tickets_url=tickets_url,
+                format_type="IMAX",
+            )
+            if is_new:
+                new_showtimes.append(showtime)
+
+    return new_showtimes
 
 
 class CinemarkScraper(BaseScraper):
@@ -8,38 +139,63 @@ class CinemarkScraper(BaseScraper):
     chain_name = "Cinemark"
 
     def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
-        """Scrape showtimes for one Cinemark theater and return newly inserted rows."""
-        new_showtimes: list[Showtime] = []
         if not theater.website:
-            return new_showtimes
+            return []
 
-        soup = self.fetch(theater.website)
+        soup = self._fetch_page(theater.website)
         if not soup:
-            return new_showtimes
+            return []
 
-        for film in soup.select("div.movie-container, div[class*='MovieCard']"):
-            title_tag = film.select_one("h2, h3, .movie-title")
-            if not title_tag:
-                continue
-            title = title_tag.get_text(strip=True)
+        theater_id = _extract_theater_id(soup)
+        if not theater_id:
+            logger.warning("Cinemark: could not find theaterId for %s", theater.name)
+            return []
 
-            img_tag = film.select_one("img")
-            image_url = img_tag["src"] if img_tag and img_tag.get("src") else ""
+        date_links = soup.select("a.showdate-link[data-datevalue]")
+        if not date_links:
+            logger.warning("Cinemark: no showdate carousel entries for %s", theater.name)
+            return []
 
-            movie = self.get_or_create_movie(title, image_url=image_url)
-            if not self._movie_wanted(movie, movie_ids):
-                continue
+        dates = [a["data-datevalue"] for a in date_links]
 
-            for time_tag in film.select("button.showtime-btn, a[class*='showtime']"):
-                time_text = time_tag.get_text(strip=True)
-                show_dt = _parse_time_text(time_text)
-                if not show_dt:
-                    continue
-                tickets_url = time_tag.get("href", "")
-                showtime, is_new = self.upsert_showtime(
-                    theater, movie, show_dt, tickets_url=tickets_url, format_type="IMAX"
+        new_showtimes: list[Showtime] = []
+
+        # Today's data is already in the main page
+        new_showtimes.extend(
+            _parse_imax_showtimes(self, theater, movie_ids, soup, dates[0])
+        )
+
+        # Fetch each remaining date via the GetByTheaterId API endpoint
+        for date_iso in dates[1:]:
+            date_soup = self._fetch_date(theater_id, date_iso, theater.website)
+            if date_soup:
+                new_showtimes.extend(
+                    _parse_imax_showtimes(self, theater, movie_ids, date_soup, date_iso)
                 )
-                if is_new:
-                    new_showtimes.append(showtime)
 
         return new_showtimes
+
+    def _fetch_page(self, url: str) -> BeautifulSoup | None:
+        try:
+            r = requests.get(url, headers=_PAGE_HEADERS, timeout=_REQUEST_TIMEOUT)
+            r.raise_for_status()
+            return BeautifulSoup(r.text, "lxml")
+        except requests.RequestException as exc:
+            logger.warning("Cinemark: failed to fetch %s: %s", url, exc)
+            return None
+
+    def _fetch_date(
+        self, theater_id: str, date_iso: str, referer: str
+    ) -> BeautifulSoup | None:
+        url = f"{_SHOWTIMES_API}?theaterId={theater_id}&showDate={date_iso}"
+        headers = {**_API_HEADERS, "Referer": referer}
+        try:
+            r = requests.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
+            r.raise_for_status()
+            return BeautifulSoup(r.text, "lxml")
+        except requests.RequestException as exc:
+            logger.warning(
+                "Cinemark: GetByTheaterId failed for theater %s on %s: %s",
+                theater_id, date_iso, exc,
+            )
+            return None
