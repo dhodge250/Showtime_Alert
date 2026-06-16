@@ -146,13 +146,13 @@
           <a href="{{ url_for('main.theater_detail', theater_id=theater.id) }}" class="btn-sm btn-outline">
             Showtimes
           </a>
+          {% if theater.website %}
+          <a href="{{ theater.website }}" target="_blank" class="btn-sm btn-outline">Website</a>
+          {% endif %}
           {% if current_user.is_authenticated and current_user.role_name in ['admin', 'editor'] %}
-          <a href="{{ url_for('main.admin_theater_edit', theater_id=theater.id) }}" class="btn-sm btn-outline">
+          <a href="{{ url_for('main.admin_theater_edit', theater_id=theater.id) }}" class="btn-sm btn-danger">
             Edit
           </a>
-          {% endif %}
-          {% if theater.website %}
-          <a href="{{ theater.website }}" target="_blank" class="btn-sm btn-ghost">Website</a>
           {% endif %}
         </div>
       </div>

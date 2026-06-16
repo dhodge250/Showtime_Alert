@@ -11,7 +11,7 @@
 <div class="flash-message flash-success">Preferences saved.</div>
 {% endif %}
 
-<div class="form-grid" style="max-width:860px">
+<div class="form-grid" style="max-width:680px;grid-template-columns:1fr">
 
   <!-- Identity (view-only) -->
   <div class="form-section">
@@ -85,7 +85,7 @@
 
       <div class="form-group" style="margin-top:16px">
         <label for="timezone">Timezone</label>
-        <select id="timezone" name="timezone" style="max-width:280px">
+        <select id="timezone" name="timezone">
           {% set _tz = user.timezone or 'UTC' %}
           {% set _tz_groups = [
             ('UTC',         [('UTC', 'UTC')]),
