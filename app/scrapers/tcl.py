@@ -21,6 +21,7 @@ import re
 from datetime import datetime
 
 import requests
+from playwright.sync_api import sync_playwright
 
 from app.scrapers.base import BaseScraper
 from app.models import Showtime, Theater
@@ -46,11 +47,24 @@ _NEXT_DATA_RE = re.compile(
 
 
 def _fetch_gas_token(page_url: str = _SITE_PAGE) -> str:
-    """Return a fresh gasToken from the TCL homepage __NEXT_DATA__."""
+    """
+    Return a fresh gasToken from the TCL homepage __NEXT_DATA__.
+
+    The TCL website is behind Cloudflare, which blocks plain requests from
+    Docker's IP space.  Playwright bypasses the CF challenge for the initial
+    page load; no cookies are needed for subsequent OCAPI calls — only the
+    token itself matters.
+    """
     try:
-        r = requests.get(page_url, headers=_PAGE_HEADERS, timeout=_REQUEST_TIMEOUT)
-        r.raise_for_status()
-        m = _NEXT_DATA_RE.search(r.text)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context(user_agent=_UA, locale="en-US")
+            page = ctx.new_page()
+            page.goto(page_url, wait_until="domcontentloaded", timeout=30_000)
+            page.wait_for_timeout(3_000)
+            html = page.content()
+            browser.close()
+        m = _NEXT_DATA_RE.search(html)
         if not m:
             logger.warning("TCL: __NEXT_DATA__ not found in %s", page_url)
             return ""

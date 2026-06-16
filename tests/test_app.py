@@ -1426,10 +1426,17 @@ class TestTCLScraper:
         from unittest.mock import patch, MagicMock
         from app.scrapers.tcl import _fetch_gas_token
 
-        mock_resp = MagicMock()
-        mock_resp.text = _TCL_NEXT_DATA_HTML
-        mock_resp.raise_for_status = MagicMock()
-        with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
+        mock_page = MagicMock()
+        mock_page.content.return_value = _TCL_NEXT_DATA_HTML
+        mock_ctx = MagicMock()
+        mock_ctx.new_page.return_value = mock_page
+        mock_browser = MagicMock()
+        mock_browser.new_context.return_value = mock_ctx
+        mock_pw = MagicMock()
+        mock_pw.__enter__ = MagicMock(return_value=mock_pw)
+        mock_pw.__exit__ = MagicMock(return_value=False)
+        mock_pw.chromium.launch.return_value = mock_browser
+        with patch("app.scrapers.tcl.sync_playwright", return_value=mock_pw):
             token = _fetch_gas_token()
         assert token == "test-gas-token-abc123"
 
@@ -1437,10 +1444,17 @@ class TestTCLScraper:
         from unittest.mock import patch, MagicMock
         from app.scrapers.tcl import _fetch_gas_token
 
-        mock_resp = MagicMock()
-        mock_resp.text = "<html><body>no next data here</body></html>"
-        mock_resp.raise_for_status = MagicMock()
-        with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
+        mock_page = MagicMock()
+        mock_page.content.return_value = "<html><body>no next data here</body></html>"
+        mock_ctx = MagicMock()
+        mock_ctx.new_page.return_value = mock_page
+        mock_browser = MagicMock()
+        mock_browser.new_context.return_value = mock_ctx
+        mock_pw = MagicMock()
+        mock_pw.__enter__ = MagicMock(return_value=mock_pw)
+        mock_pw.__exit__ = MagicMock(return_value=False)
+        mock_pw.chromium.launch.return_value = mock_browser
+        with patch("app.scrapers.tcl.sync_playwright", return_value=mock_pw):
             token = _fetch_gas_token()
         assert token == ""
 
