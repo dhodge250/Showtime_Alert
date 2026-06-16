@@ -1355,6 +1355,202 @@ class TestCinemarkScraper:
         assert len(second) == 0
 
 
+_TCL_NEXT_DATA_HTML = """
+<html><head>
+<script id="__NEXT_DATA__" type="application/json">
+{"props":{"pageProps":{"environment":{"gasToken":"test-gas-token-abc123","cmsConfig":{"salesChannel":"Web","apiUrl":"https://cms-api-www.tclchinesetheatres.com"},"cloudEnvironment":"live"}}},"page":"/","buildId":"testBuild"}
+</script>
+</head><body></body></html>
+"""
+
+_TCL_SCREENING_DATES = [
+    {
+        "businessDate": "2026-06-16",
+        "filmScreenings": [
+            {"filmId": "HO00001455", "sites": [{"siteId": "0001", "showtimeAttributeIds": ["0000000001", "0000000009"]}]},
+            {"filmId": "HO00001442", "sites": [{"siteId": "0001", "showtimeAttributeIds": ["0000000001", "0000000004"]}]},
+        ],
+    },
+    {
+        "businessDate": "2026-06-17",
+        "filmScreenings": [
+            {"filmId": "HO00001442", "sites": [{"siteId": "0001", "showtimeAttributeIds": ["0000000001", "0000000004"]}]},
+        ],
+    },
+]
+
+_TCL_SHOWTIMES_RESPONSE = {
+    "businessDate": "2026-06-16",
+    "showtimes": [
+        {
+            "id": "0001-75735",
+            "schedule": {"businessDate": "2026-06-16", "startsAt": "2026-06-16T18:30:00-07:00"},
+            "filmId": "HO00001455",
+            "siteId": "0001",
+            "attributeIds": ["0000000001", "0000000009"],
+            "isSoldOut": False,
+        },
+        {
+            "id": "0001-75736",
+            "schedule": {"businessDate": "2026-06-16", "startsAt": "2026-06-16T21:55:00-07:00"},
+            "filmId": "HO00001455",
+            "siteId": "0001",
+            "attributeIds": ["0000000001", "0000000009"],
+            "isSoldOut": True,
+        },
+        {
+            "id": "0001-75700",
+            "schedule": {"businessDate": "2026-06-16", "startsAt": "2026-06-16T14:00:00-07:00"},
+            "filmId": "HO00001442",
+            "siteId": "0001",
+            "attributeIds": ["0000000001", "0000000004"],
+            "isSoldOut": False,
+        },
+    ],
+    "relatedData": {
+        "films": [
+            {"id": "HO00001455", "title": {"text": "(IMAX) Disclosure Day", "translations": []}},
+            {"id": "HO00001442", "title": {"text": "Non-IMAX Film", "translations": []}},
+        ],
+        "attributes": [
+            {"id": "0000000001", "name": {"text": "2D"}},
+            {"id": "0000000004", "name": {"text": "Dolby Atmos"}},
+            {"id": "0000000009", "name": {"text": "IMAX"}},
+        ],
+    },
+}
+
+
+class TestTCLScraper:
+    def test_fetch_gas_token_extracts_token(self):
+        from unittest.mock import patch, MagicMock
+        from app.scrapers.tcl import _fetch_gas_token
+
+        mock_page = MagicMock()
+        mock_page.content.return_value = _TCL_NEXT_DATA_HTML
+        mock_ctx = MagicMock()
+        mock_ctx.new_page.return_value = mock_page
+        mock_browser = MagicMock()
+        mock_browser.new_context.return_value = mock_ctx
+        mock_pw = MagicMock()
+        mock_pw.__enter__ = MagicMock(return_value=mock_pw)
+        mock_pw.__exit__ = MagicMock(return_value=False)
+        mock_pw.chromium.launch.return_value = mock_browser
+        with patch("app.scrapers.tcl.sync_playwright", return_value=mock_pw):
+            token = _fetch_gas_token()
+        assert token == "test-gas-token-abc123"
+
+    def test_fetch_gas_token_missing_next_data(self):
+        from unittest.mock import patch, MagicMock
+        from app.scrapers.tcl import _fetch_gas_token
+
+        mock_page = MagicMock()
+        mock_page.content.return_value = "<html><body>no next data here</body></html>"
+        mock_ctx = MagicMock()
+        mock_ctx.new_page.return_value = mock_page
+        mock_browser = MagicMock()
+        mock_browser.new_context.return_value = mock_ctx
+        mock_pw = MagicMock()
+        mock_pw.__enter__ = MagicMock(return_value=mock_pw)
+        mock_pw.__exit__ = MagicMock(return_value=False)
+        mock_pw.chromium.launch.return_value = mock_browser
+        with patch("app.scrapers.tcl.sync_playwright", return_value=mock_pw):
+            token = _fetch_gas_token()
+        assert token == ""
+
+    def test_imax_dates_filters_correctly(self):
+        from app.scrapers.tcl import _imax_dates
+
+        dates = _imax_dates(_TCL_SCREENING_DATES)
+        assert dates == ["2026-06-16"]
+
+    def test_imax_dates_no_imax(self):
+        from app.scrapers.tcl import _imax_dates
+
+        dates = _imax_dates(_TCL_SCREENING_DATES[1:])  # only the non-IMAX date
+        assert dates == []
+
+    def test_title_prefix_stripped(self):
+        import re
+        from app.scrapers.tcl import _TITLE_PREFIX_RE
+
+        assert _TITLE_PREFIX_RE.sub("", "(IMAX) Disclosure Day") == "Disclosure Day"
+        assert _TITLE_PREFIX_RE.sub("", "(DBOX) The Odyssey") == "The Odyssey"
+        assert _TITLE_PREFIX_RE.sub("", "Regular Movie") == "Regular Movie"
+
+    def test_scrape_date_extracts_imax(self, app, sample_theater):
+        from unittest.mock import patch, MagicMock
+        from app.scrapers.tcl import TCLScraper
+        import json
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = _TCL_SHOWTIMES_RESPONSE
+        mock_resp.raise_for_status = MagicMock()
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = TCLScraper()
+            with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+
+        assert len(results) == 2
+        assert all(st.format_type == "IMAX" for st in results)
+        titles = {st.movie.title for st in results}
+        # Prefix is stripped: "(IMAX) Disclosure Day" → "Disclosure Day"
+        assert "Disclosure Day" in titles
+        assert "(IMAX) Disclosure Day" not in titles
+
+    def test_scrape_date_skips_non_imax(self, app, sample_theater):
+        from unittest.mock import patch, MagicMock
+        from app.scrapers.tcl import TCLScraper
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = _TCL_SHOWTIMES_RESPONSE
+        mock_resp.raise_for_status = MagicMock()
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = TCLScraper()
+            with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+            titles = {st.movie.title for st in results}
+
+        assert "Non-IMAX Film" not in titles
+
+    def test_scrape_date_tickets_available_flag(self, app, sample_theater):
+        from unittest.mock import patch, MagicMock
+        from app.scrapers.tcl import TCLScraper
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = _TCL_SHOWTIMES_RESPONSE
+        mock_resp.raise_for_status = MagicMock()
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = TCLScraper()
+            with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+
+        available = {st.tickets_available for st in results}
+        assert True in available   # 18:30 showtime is not sold out
+        assert False in available  # 21:55 showtime is sold out
+
+    def test_scrape_date_deduplicates(self, app, sample_theater):
+        from unittest.mock import patch, MagicMock
+        from app.scrapers.tcl import TCLScraper
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = _TCL_SHOWTIMES_RESPONSE
+        mock_resp.raise_for_status = MagicMock()
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            scraper = TCLScraper()
+            with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
+                first = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                db.session.commit()
+                second = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+
+        assert len(first) == 2
+        assert len(second) == 0
+
+
 # ── Notifications ─────────────────────────────────────────────────────
 
 
