@@ -107,13 +107,13 @@ docker logs imax-alert -f
 | v1.13.2 | Regal scraper rebuild: Playwright CF handshake + requests.Session (#131) |
 | v1.13.3 | Cinemark scraper rebuild: requests + BeautifulSoup + GetByTheaterId API (#132) |
 | v1.13.4 | TCL Chinese Theatre scraper rebuild: Playwright gasToken + Vista OCAPI (#133) |
+| v1.14.0 | Account Security: password strength/reuse, forgot-password flow, rate limiting, session timeout (#22 #24 #73 #80) |
 
 ### In Progress & Upcoming
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.14 | Account Security | 🔄 next | #22 #24 #73 #80 |
-| v1.15 | Admin & User Management | ⬜ | #23 #25 #106 #119 |
+| v1.15 | Admin & User Management | 🔄 next | #23 #25 #106 #119 |
 | v1.16 | Movies Feature | ⬜ | #29 #30 |
 | v1.17 | Theater Data Infrastructure | ⬜ | #46 #83 |
 | v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
