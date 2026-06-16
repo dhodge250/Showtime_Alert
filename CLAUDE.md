@@ -11,11 +11,15 @@ pip install -r requirements.txt
 
 ## Branching & PR Workflow (Gitflow)
 
+**Repo:** `dhodge250/IMAX_Alert` — container: `imax-alert`
+
 1. Cut branch from `develop`: `git checkout -b fix/issue-NNN-description origin/develop`
-2. Commit, push, PR → `develop`
+2. Commit, push, PR → `develop` with `--reviewer Copilot`
 3. Never merge PRs — create them and let the user approve and merge
 4. Never delete branches after merging
 5. Run only tests for changed code; full suite only when explicitly asked
+
+> **Copilot reviewer:** `--reviewer Copilot` always fails via CLI with a GraphQL error, but the PR is still created successfully. Add Copilot as reviewer manually from the PR page afterward.
 
 **Release cycle:**
 1. `git checkout -b release/X.Y.Z origin/develop && git push -u origin release/X.Y.Z`
@@ -40,6 +44,10 @@ docker logs imax-alert -f
 
 **Alert model:** `AlertPreference` → `AlertMovie` (join table). Zero `AlertMovie` rows = "any movie." `_migrate_legacy_alert_movies()` back-fills on startup.
 
+**`_get_active_targets()`** returns `{theater_id: set[movie_id]}`. `theater_id=None` = "any theater" alert (applies to all theaters of that chain). `movie_id=None` = "any movie" sentinel. Scrapers merge both sets: `movie_ids = targets.get(None, set()) | targets.get(theater.id, set())`.
+
+**Test fixtures** (session-scoped for performance): `app`, `client`, `auth_client` (logged-in admin), `sample_user`, `sample_theater` (returns ID), `sample_movie` (returns ID). Use `Theater.query.get(sample_theater)` inside `app.app_context()` to get the ORM object.
+
 **Scheduler:** APScheduler `BackgroundScheduler` — scraper every 30 min, venue crawl every 7 days, cleanup every 24 hrs. Demand-driven: only scrapes theaters/movies with active unsent alerts.
 
 **Seeding:** `_seed_theaters_from_csv()` loads `seeds/imax_theaters.csv` on first boot.
@@ -55,6 +63,12 @@ docker logs imax-alert -f
 **Cloudflare-protected (AMC, Regal):** Playwright headless Chromium for initial page load only. After CF challenge clears, extract cookies via `context.cookies()`, seed a `requests.Session` with them, and make all API calls via `requests` — never `page.evaluate(fetch(...))`, which CF blocks inside Docker.
 
 **Plain HTTP (Cinemark, Cineplex, Royal BC Museum, TCL):** `requests` + `BeautifulSoup` directly. No Playwright.
+
+**`scrape_all()` override:** Playwright scrapers (AMC, Regal) override `scrape_all()` to launch one browser and share it across all theaters. Plain HTTP scrapers rely on the base class `scrape_all()`, which calls `scrape_theater()` per theater. When writing a new Playwright scraper, copy the override pattern from `app/scrapers/regal.py`.
+
+**Adding a new scraper:** Create `app/scrapers/chain.py`, then register it in `ALL_SCRAPERS` in `app/scrapers/__init__.py`. Without the registration step the scraper is never called.
+
+**Known date volumes:** Regal ~96 dates, Cinemark ~74 dates. Expect multi-second scrape times per theater even with fast HTTP — this is normal.
 
 **Rules:** No `_MAX_DAYS` cap. `upsert_showtime()` deduplicates. `_movie_wanted()` scopes movies per alert.
 
