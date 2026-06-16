@@ -87,11 +87,7 @@ def index():
     """Dashboard."""
     theaters = Theater.query.filter_by(is_active=True).all()
     movies = Movie.query.order_by(Movie.title).all()
-    recent_showtimes = (
-        Showtime.query.filter(Showtime.tickets_available.is_(True))
-        .order_by(Showtime.first_seen.desc())
-        .all()
-    )
+
     # Admin sees all alerts; users see only their own
     if current_user.role_name == "admin":
         alerts = AlertPreference.query.filter_by(is_active=True).all()
@@ -108,6 +104,32 @@ def index():
         for a in alerts
         for am in a.alert_movies.all()
     }
+
+    # Show only showtimes that match the (theater, movie) pairs in the visible alerts.
+    # This prevents unrelated movies scraped as a side-effect from appearing here.
+    showtime_filters = []
+    for alert in alerts:
+        t_id = alert.theater_id
+        alert_movie_ids = [am.movie_id for am in alert.alert_movies.all()]
+        if not alert_movie_ids:
+            # "Any movie" alert — include all showtimes for this theater
+            clause = (Showtime.theater_id == t_id) if t_id else db.true()
+        else:
+            movie_clauses = [Showtime.movie_id == m for m in alert_movie_ids]
+            movie_clause = db.or_(*movie_clauses)
+            clause = db.and_(Showtime.theater_id == t_id, movie_clause) if t_id else movie_clause
+        showtime_filters.append(clause)
+
+    if showtime_filters:
+        recent_showtimes = (
+            Showtime.query
+            .filter(Showtime.tickets_available.is_(True))
+            .filter(db.or_(*showtime_filters))
+            .order_by(Showtime.first_seen.desc())
+            .all()
+        )
+    else:
+        recent_showtimes = []
 
     rows_per_page = _get_setting_int("rows_per_page", 15)
 

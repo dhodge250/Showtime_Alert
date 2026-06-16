@@ -834,16 +834,15 @@ class TestScraper:
 
 class TestScraperAlertTargeting:
     def test_get_active_targets_empty(self, app):
-        """No active alerts → both sets are empty."""
+        """No active alerts → empty dict."""
         from app.scraper import _get_active_targets
 
         with app.app_context():
-            theater_ids, movie_ids = _get_active_targets()
-            assert len(theater_ids) == 0
-            assert len(movie_ids) == 0
+            targets = _get_active_targets()
+            assert targets == {}
 
     def test_get_active_targets_with_alert(self, app, sample_user, sample_theater, sample_movie):
-        """Active unsent alert with AlertMovie row → its theater_id and movie_id appear in targets."""
+        """Active unsent alert → theater_id key with the movie_id in its set."""
         from app.models import AlertMovie, AlertPreference
         from app.scraper import _get_active_targets
 
@@ -860,9 +859,9 @@ class TestScraperAlertTargeting:
             db.session.add(am)
             db.session.commit()
 
-            theater_ids, movie_ids = _get_active_targets()
-            assert sample_theater in theater_ids
-            assert sample_movie in movie_ids
+            targets = _get_active_targets()
+            assert sample_theater in targets
+            assert sample_movie in targets[sample_theater]
 
     def test_get_active_targets_sent_alert_excluded(self, app, sample_user, sample_theater, sample_movie):
         """Sent alert (alert_sent=True) is NOT included in targets."""
@@ -882,9 +881,8 @@ class TestScraperAlertTargeting:
             db.session.add(am)
             db.session.commit()
 
-            theater_ids, movie_ids = _get_active_targets()
-            assert sample_theater not in theater_ids
-            assert sample_movie not in movie_ids
+            targets = _get_active_targets()
+            assert sample_theater not in targets
 
     def test_scrape_all_skips_when_no_alerts(self, app):
         """scrape_all returns [] immediately when there are no active alerts."""

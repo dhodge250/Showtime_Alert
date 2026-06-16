@@ -74,14 +74,14 @@ class AMCScraper(BaseScraper):
 
     def scrape_all(self) -> list[Showtime]:
         """Share one Playwright browser across all AMC theater scrapes."""
-        theater_ids, movie_ids = _get_active_targets()
-        if not theater_ids and not movie_ids:
+        targets = _get_active_targets()
+        if not targets:
             logger.debug("AMC: no active alerts — skipping scrape")
             return []
 
         query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
-        if None not in theater_ids:
-            query = query.filter(Theater.id.in_(theater_ids))
+        if None not in targets:
+            query = query.filter(Theater.id.in_(targets.keys()))
         theaters = query.all()
         if not theaters:
             return []
@@ -97,6 +97,13 @@ class AMCScraper(BaseScraper):
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(user_agent=_UA, locale="en-US")
             for theater in theaters:
+                movie_ids: set = set()
+                if None in targets:
+                    movie_ids |= targets[None]
+                if theater.id in targets:
+                    movie_ids |= targets[theater.id]
+                if not movie_ids:
+                    continue
                 try:
                     new_showtimes.extend(
                         self._scrape_with_context(theater, movie_ids, context)
