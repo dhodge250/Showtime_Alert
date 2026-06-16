@@ -1607,9 +1607,6 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
      positioned dropdown panels (e.g. dashboard ms-panel dropdowns). */
   .card:has(.admin-lookup-table) { overflow-x: auto; }
 
-  /* Theme toggle: always visible in the top nav row on mobile */
-  .theme-toggle { margin-left: auto; margin-right: 4px; }
-  .nav-hamburger { margin-left: 0; }
 }
 
 /* ── Theme toggle button ─────────────────────────────────────────────── */
@@ -1674,7 +1671,9 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   --shadow:       0 2px 12px rgba(0, 0, 0, 0.08);
 }
 
-/* Navbar and admin subnav stay dark in light mode — cinema marquee on black */
+/* Navbar stays dark in light mode — cinema marquee on black */
+/* ALERT wordmark needs explicit white so --text-primary (#0C0E14) doesn't vanish on dark nav */
+[data-theme="light"] .nav-title { color: #fff; }
 [data-theme="light"] .nav-links a {
   color: rgba(255, 255, 255, 0.6);
 }
@@ -1700,13 +1699,13 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 [data-theme="light"] .nav-links a { border-bottom-color: rgba(255, 255, 255, 0.07); }
 [data-theme="light"] .nav-user { border-top-color: rgba(255, 255, 255, 0.1); }
 
-/* Admin subnav also stays dark */
-[data-theme="light"] .admin-subnav a { color: rgba(255, 255, 255, 0.55); }
-[data-theme="light"] .admin-subnav a:hover { color: #fff; }
-[data-theme="light"] .admin-subnav a.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+/* Admin subnav lightens in light mode — it's a utility nav, not the brand bar */
+[data-theme="light"] .admin-subnav {
+  background: var(--bg-card);
+  border-bottom-color: var(--border);
 }
+[data-theme="light"] .admin-subnav a { color: var(--text-muted); }
+[data-theme="light"] .admin-subnav a:hover { color: var(--text-primary); }
 
 /* Table row hovers: dark-bg hover doesn't read on light content */
 [data-theme="light"] .data-table tr:hover td  { background: rgba(0, 0, 0, 0.025); }
