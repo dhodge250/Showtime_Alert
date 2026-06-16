@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}IMAX Alert{% endblock %}</title>
   <meta name="csrf-token" content="{{ csrf_token() }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ static_v }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet.css') }}" />
   <script src="{{ url_for('static', filename='vendor/leaflet.js') }}"></script>
@@ -12,8 +15,7 @@
 <body>
   <nav class="navbar" id="main-navbar">
     <div class="nav-brand">
-      <span class="nav-logo">🎬</span>
-      <span class="nav-title">IMAX Alert</span>
+      <span class="nav-title"><span class="nav-title-imax">IMAX</span> ALERT</span>
     </div>
     <button class="nav-hamburger" id="nav-hamburger" aria-label="Toggle navigation" aria-expanded="false">
       <span></span><span></span><span></span>

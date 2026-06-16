@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="page-header">
-  <h1>🎬 IMAX Alert Dashboard</h1>
+  <h1>IMAX Alert Dashboard</h1>
   <p class="subtitle">Real-time IMAX showtime monitoring and ticket alerts</p>
 </div>
 
@@ -31,7 +31,7 @@
   <!-- Recent Showtimes -->
   <section class="card" id="showtimes-section">
     <div class="card-header">
-      <h2>🕐 Available Showtimes</h2>
+      <h2>Available Showtimes</h2>
       <button class="btn-sm btn-primary" id="refresh-btn" onclick="triggerScrape()">
         ↻ Refresh Now
       </button>
@@ -121,7 +121,7 @@
   <!-- Active Alerts -->
   <section class="card">
     <div class="card-header">
-      <h2>🔔 Active Alerts</h2>
+      <h2>Active Alerts</h2>
       <a href="{{ url_for('main.alerts') }}" class="btn-sm btn-outline">Manage</a>
     </div>
     {% if alerts %}
@@ -177,7 +177,7 @@
 <!-- Scheduler status -->
 <section class="card" style="margin-top:24px">
   <div class="card-header">
-    <h2>⚙️ Scheduler Status</h2>
+    <h2>Scheduler Status</h2>
   </div>
   <div id="scheduler-status">Loading…</div>
 </section>
