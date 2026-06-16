@@ -406,6 +406,7 @@ def admin_user_new():
     """Admin: create a new user."""
     roles = Role.query.order_by(Role.name).all()
     error = None
+    submitted_user = None
     if request.method == "POST":
         email = request.form.get("email", "").strip()
         if User.query.filter_by(email=email).first():
@@ -423,7 +424,9 @@ def admin_user_new():
                 measurement_unit=request.form.get("measurement_unit", "metric"),
             )
             password = request.form.get("password", "")
-            if password:
+            if not password:
+                error = "A temporary password is required."
+            else:
                 from app.auth import validate_password_strength
                 error = validate_password_strength(password)
                 if not error:
@@ -432,8 +435,9 @@ def admin_user_new():
                 db.session.add(user)
                 db.session.commit()
                 return redirect(url_for("main.admin_users"))
+            submitted_user = user  # preserve form data for re-render
 
-    return render_template("admin_user_edit.html", user=None, is_new=True, roles=roles, error=error)
+    return render_template("admin_user_edit.html", user=submitted_user, is_new=True, roles=roles, error=error)
 
 
 @main_bp.route("/admin/users/<int:user_id>/edit", methods=["GET", "POST"])
@@ -609,6 +613,9 @@ def admin_settings():
             _load_settings_into_config(current_app._get_current_object())
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not reload settings into config: %s", exc)
+
+        # Invalidate the cached session timeout so the context processor re-reads it
+        current_app.config["SESSION_TIMEOUT_MINUTES"] = new_session_timeout
 
         # Reschedule live if the values changed
         if new_scraper != old_scraper or new_alert != old_alert or new_crawl != old_crawl or new_cleanup != old_cleanup:

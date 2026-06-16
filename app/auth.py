@@ -187,16 +187,25 @@ def forgot_password():
         ).first()
 
         if user and user.is_active:
-            try:
-                raw_token = user.generate_reset_token(expiry_hours=1)
-                db.session.commit()
-                _send_reset_email(user, raw_token)
-                logger.info("Password reset email sent to %s", user.email)
-                from app.log_utils import write_log
-                write_log("auth", f"Password reset requested: {user.email}", user_id=user.id)
-            except Exception:
-                db.session.rollback()
-                logger.exception("Failed to send password reset email to %s", user.email)
+            from datetime import datetime, timedelta, timezone
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            # Skip regenerating if a token was issued in the last 2 minutes; prevents
+            # multi-IP flooding from continuously invalidating the user's reset link.
+            recently_issued = (
+                user.reset_token_expiry is not None
+                and user.reset_token_expiry > now + timedelta(minutes=58)
+            )
+            if not recently_issued:
+                try:
+                    raw_token = user.generate_reset_token(expiry_hours=1)
+                    db.session.commit()
+                    _send_reset_email(user, raw_token)
+                    logger.info("Password reset email sent to %s", user.email)
+                    from app.log_utils import write_log
+                    write_log("auth", f"Password reset requested: {user.email}", user_id=user.id)
+                except Exception:
+                    db.session.rollback()
+                    logger.exception("Failed to send password reset email to %s", user.email)
 
         # Always show the same confirmation to prevent email enumeration
         sent = True
@@ -227,7 +236,6 @@ def reset_password(token: str):
             error = "Passwords do not match."
         if error is None:
             user.clear_reset_token()
-            db.session.commit()
             user.set_password(new_password)
             user.force_password_change = False
             db.session.commit()

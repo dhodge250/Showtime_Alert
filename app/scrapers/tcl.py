@@ -85,7 +85,7 @@ def _imax_dates(film_screening_dates: list) -> list[str]:
     for entry in film_screening_dates:
         for screening in entry.get("filmScreenings", []):
             sites = screening.get("sites", [])
-            if sites and _IMAX_ATTR_ID in sites[0].get("showtimeAttributeIds", []):
+            if sites and any(_IMAX_ATTR_ID in s.get("showtimeAttributeIds", []) for s in sites):
                 result.append(entry["businessDate"])
                 break
     return result

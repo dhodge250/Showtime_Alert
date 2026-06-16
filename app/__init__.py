@@ -110,12 +110,15 @@ def create_app(config_name="default"):
 
     @app.context_processor
     def _session_timeout_ctx():
-        try:
-            from app.models import Settings
-            row = Settings.query.filter_by(key="session_timeout_minutes").first()
-            minutes = int(row.value) if row and row.value else 60
-        except Exception:  # noqa: BLE001
-            minutes = 60
+        minutes = app.config.get("SESSION_TIMEOUT_MINUTES")
+        if minutes is None:
+            try:
+                from app.models import Settings
+                row = Settings.query.filter_by(key="session_timeout_minutes").first()
+                minutes = int(row.value) if row and row.value else 60
+            except Exception:  # noqa: BLE001
+                minutes = 60
+            app.config["SESSION_TIMEOUT_MINUTES"] = minutes
         return {"session_timeout_minutes": minutes}
 
     # ------------------------------------------------------------------
