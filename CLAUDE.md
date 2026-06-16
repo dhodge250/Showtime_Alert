@@ -60,21 +60,44 @@ docker logs imax-alert -f
 
 **Tests:** HTML/JSON fixtures, test module-level helpers directly, cover IMAX extraction + non-IMAX exclusion + past showtime exclusion + deduplication.
 
-## Release Roadmap
+## Release History & Roadmap
+
+### Shipped
+
+| Version | Summary |
+|---------|---------|
+| v1.0.0 | Initial release |
+| v1.0.1 | Hotfix: Docker multi-stage build missing transitive dependencies |
+| v1.1.0 | Bug fixes: login card centering, dashboard card heights, profile location (#3 #4 #6) |
+| v1.2.0 | Dashboard: multi-select filters, pagination, alert filters (#7 #8 #9 #10) |
+| v1.3.0 | Notification limit, alert detail improvements, cache-busting, Cineplex website fix (#11) |
+| v1.4.0 | Admin settings layout, alert management sort/pagination, theater map/filter fixes (#14 #15 #16 #17 #53) |
+| v1.5.0 | Alert detail pagination, login screen polish, timezone display fix (#18 #19 #20 #31) |
+| v1.6.0 | Structured app-wide logging + log viewer, Trivy CVE scanning in CI (#26 #27 #28 #34) |
+| v1.6.1 | Add scheduled job entries to in-app log viewer |
+| v1.7.0 | Security: fix perl/pip/wheel CVEs, mobile CSRF expiry |
+| v1.8.0 | Mobile responsive layout: hamburger nav, padding, touch targets (#74) |
+| v1.8.1 | Mobile layout follow-up: nav spacing, subnav scroll, table cells |
+| v1.9.0 | Scraper package refactor (#82), Chain field populated for all 1,927 theaters (#100), 113 website URLs added (#83 partial) |
+| v1.10.0 | Geocoding accuracy fix, geocode task logging (#107 #108) |
+| v1.11.0 | Multi-notification deduplication fix, ~25x test speedup via parallel execution (#115) |
+| v1.11.1 | Admin UI: actions dropdown divider, re-seed modal checkbox layout |
+| v1.12.0 | Bug Fixes & Mobile Responsiveness milestone (#117 #118 #120 #126 #127 #128 #129) |
+| v1.12.1 | Activity Log timestamps display in user's local timezone (#161) |
+| v1.12.2 | Alert target date filter (#164), Cineplex scraper fix, log timezone corrections |
+| v1.13.0 | CSV theater data: second website pass, chain normalization, chain root URL population |
+| v1.13.1 | AMC scraper rebuild: Playwright + GraphQL API (#130) |
+| v1.13.2 | Regal scraper rebuild: Playwright CF handshake + requests.Session (#131) |
+| v1.13.3 | Cinemark scraper rebuild: requests + BeautifulSoup + GetByTheaterId API (#132) |
+
+### In Progress & Upcoming
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.12 | Bug Fixes & Mobile Responsiveness | ✅ shipped | #117–#129 |
-| v1.13 | Scraper Reliability | 🔄 in progress | #130 ✅ #131 ✅ #132 ✅ #133 🔄 |
-| v1.14 | Account Security | ⬜ next | #22 #24 #73 #80 |
+| v1.13.4 | Scraper Reliability | 🔄 next | #133 TCL Chinese Theatre |
+| v1.14 | Account Security | ⬜ | #22 #24 #73 #80 |
 | v1.15 | Admin & User Management | ⬜ | #23 #25 #106 #119 |
 | v1.16 | Movies Feature | ⬜ | #29 #30 |
 | v1.17 | Theater Data Infrastructure | ⬜ | #46 #83 |
 | v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
-
-**v1.13 scraper details:**
-- v1.13.1 #130 — AMC: Playwright + GraphQL API
-- v1.13.2 #131 — Regal: Playwright CF handshake + requests.Session
-- v1.13.3 #132 — Cinemark: requests + BeautifulSoup + GetByTheaterId API
-- v1.13.4 #133 — TCL Chinese Theatre: next up
