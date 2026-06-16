@@ -48,7 +48,7 @@ def validate_password_strength(password: str, current_hash: str | None = None) -
     for pattern, description in _PW_RULES:
         if not re.search(pattern, password):
             return f"Password must contain {description}."
-    if current_hash and check_password_hash(current_hash, password):
+    if current_hash is not None and check_password_hash(current_hash, password):
         return "New password must be different from your current password."
     return None
 
@@ -187,12 +187,16 @@ def forgot_password():
         ).first()
 
         if user and user.is_active:
-            raw_token = user.generate_reset_token(expiry_hours=1)
-            db.session.commit()
-            _send_reset_email(user, raw_token)
-            logger.info("Password reset email sent to %s", user.email)
-            from app.log_utils import write_log
-            write_log("auth", f"Password reset requested: {user.email}", user_id=user.id)
+            try:
+                raw_token = user.generate_reset_token(expiry_hours=1)
+                db.session.commit()
+                _send_reset_email(user, raw_token)
+                logger.info("Password reset email sent to %s", user.email)
+                from app.log_utils import write_log
+                write_log("auth", f"Password reset requested: {user.email}", user_id=user.id)
+            except Exception:
+                db.session.rollback()
+                logger.exception("Failed to send password reset email to %s", user.email)
 
         # Always show the same confirmation to prevent email enumeration
         sent = True
@@ -222,8 +226,9 @@ def reset_password(token: str):
         if error is None and new_password != confirm:
             error = "Passwords do not match."
         if error is None:
-            user.set_password(new_password)
             user.clear_reset_token()
+            db.session.commit()
+            user.set_password(new_password)
             user.force_password_change = False
             db.session.commit()
             logger.info("User %s completed password reset.", user.email)

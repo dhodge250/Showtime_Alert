@@ -424,10 +424,14 @@ def admin_user_new():
             )
             password = request.form.get("password", "")
             if password:
-                user.set_password(password)
-            db.session.add(user)
-            db.session.commit()
-            return redirect(url_for("main.admin_users"))
+                from app.auth import validate_password_strength
+                error = validate_password_strength(password)
+                if not error:
+                    user.set_password(password)
+            if not error:
+                db.session.add(user)
+                db.session.commit()
+                return redirect(url_for("main.admin_users"))
 
     return render_template("admin_user_edit.html", user=None, is_new=True, roles=roles, error=error)
 
@@ -1175,6 +1179,10 @@ def api_create_user():
         notify_sms=data.get("notify_sms", False),
     )
     if data.get("password"):
+        from app.auth import validate_password_strength
+        pw_error = validate_password_strength(data["password"])
+        if pw_error:
+            return jsonify({"error": pw_error}), 400
         user.set_password(data["password"])
     db.session.add(user)
     db.session.commit()

@@ -3122,7 +3122,7 @@ class TestForgotResetPassword:
         with app.app_context():
             user = User.query.filter_by(email="admin").first()
             raw = user.generate_reset_token()
-            user.reset_token_expiry = datetime.now(timezone.utc) - timedelta(hours=2)
+            user.reset_token_expiry = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
             db.session.commit()
         resp = client.get(f"/reset-password/{raw}")
         assert resp.status_code == 200
