@@ -2,6 +2,8 @@ import logging
 import re
 from datetime import datetime, timezone
 
+import requests
+
 from app import db
 from app.scrapers.base import BaseScraper, _get_active_targets
 from app.models import Showtime, Theater
@@ -15,6 +17,8 @@ _UA = (
 )
 _WAIT_MS = 7000
 _THEATRE_CODE_RE = re.compile(r"-(\d{4})$")
+_BASE_URL = "https://www.regmovies.com"
+_REQUEST_TIMEOUT = 15
 
 
 def _theatre_code_from_url(website: str) -> str:
@@ -30,7 +34,6 @@ def _parse_utc_showtime(utc_str: str) -> datetime | None:
     """
     if not utc_str:
         return None
-    # Strip trailing .000Z or Z before parsing
     clean = utc_str.rstrip("Z")
     if "." in clean:
         clean = clean.split(".")[0]
@@ -70,13 +73,12 @@ def _parse_shows(
                 if not show_dt:
                     continue
 
-                # Regal ticket URL: /buy-tickets/{hoCode}/{theatreCode}/{perfId}/{MM-DD-YYYY}
                 perf_id = perf.get("PerformanceId", "")
                 tickets_url = ""
                 if perf_id and master_code and show_date:
                     api_date = f"{show_date[5:7]}-{show_date[8:10]}-{show_date[:4]}"
                     tickets_url = (
-                        f"https://www.regmovies.com/buy-tickets"
+                        f"{_BASE_URL}/buy-tickets"
                         f"/{master_code}/{theatre_code}/{perf_id}/{api_date}"
                     )
 
@@ -95,13 +97,36 @@ def _parse_shows(
     return new_showtimes
 
 
+def _make_session(playwright_cookies: list) -> requests.Session:
+    """
+    Build a requests.Session seeded with cookies from a Playwright context.
+
+    Cloudflare's cf_clearance cookie is IP+UA bound, so using the same UA
+    here lets plain HTTP calls reuse the CF clearance earned by the browser.
+    """
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": _UA,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": _BASE_URL,
+    })
+    for cookie in playwright_cookies:
+        session.cookies.set(
+            cookie["name"], cookie["value"], domain=cookie.get("domain", "")
+        )
+    return session
+
+
 class RegalScraper(BaseScraper):
     """
     Scraper for Regal Cinemas IMAX showtimes.
 
-    Uses Playwright (headless Chromium) to bypass Cloudflare bot protection on
-    regmovies.com. After the initial page load, the /api/getShowtimes endpoint
-    is called from within the browser context for each upcoming date.
+    Uses Playwright (headless Chromium) solely to load the theater page and
+    bypass Cloudflare's initial JS challenge.  After the page loads, the
+    Cloudflare cookies are extracted and handed to a requests.Session, which
+    makes all subsequent /api/getShowtimes calls directly — avoiding
+    Cloudflare's stricter blocking of in-browser fetch() inside Docker.
     """
 
     chain_name = "Regal"
@@ -166,48 +191,53 @@ class RegalScraper(BaseScraper):
                 return []
 
             props = nd.get("props", {}).get("pageProps", {})
-            theatre_code = str(props.get("theatreCode") or _theatre_code_from_url(theater.website))
+            theatre_code = str(
+                props.get("theatreCode") or _theatre_code_from_url(theater.website)
+            )
             if not theatre_code:
-                logger.warning("Regal: could not determine theatreCode for %s", theater.name)
+                logger.warning(
+                    "Regal: could not determine theatreCode for %s", theater.name
+                )
                 return []
 
-            # Today's showtimes are embedded in __NEXT_DATA__
             all_shows: list = list(props.get("showtimes") or [])
+            dates_with_shows: list = props.get("datesWithShows") or []
 
-            # Fetch upcoming dates via /api/getShowtimes (called inside browser context)
-            dates_with_shows = props.get("datesWithShows") or []
-            for date_iso in [d[:10] for d in dates_with_shows[1:]]:
-                shows = self._fetch_date(page, theatre_code, date_iso)
-                all_shows.extend(shows)
-
-            return _parse_shows(self, theater, movie_ids, all_shows, theatre_code)
+            # Extract CF cookies before closing the page
+            pw_cookies = context.cookies()
         finally:
             page.close()
 
-    def _fetch_date(self, page, theatre_code: str, date_iso: str) -> list:
-        """Call /api/getShowtimes for one date from within the browser context."""
-        # Convert YYYY-MM-DD to MM-DD-YYYY required by the API
+        # Hand cookies to requests — all date fetches happen outside the browser
+        session = _make_session(pw_cookies)
+        for date_iso in [d[:10] for d in dates_with_shows[1:]]:
+            shows = self._fetch_date(session, theatre_code, date_iso)
+            all_shows.extend(shows)
+
+        return _parse_shows(self, theater, movie_ids, all_shows, theatre_code)
+
+    def _fetch_date(
+        self, session: requests.Session, theatre_code: str, date_iso: str
+    ) -> list:
+        """Call /api/getShowtimes for one date using the CF-authenticated session."""
         parts = date_iso.split("-")
         if len(parts) != 3:
             return []
         api_date = f"{parts[1]}-{parts[2]}-{parts[0]}"
-        api_url = (
-            f"/api/getShowtimes?theatres={theatre_code}"
-            f"&date={api_date}&hoCode=&ignoreCache=false&moviesOnly=false"
+        url = (
+            f"{_BASE_URL}/api/getShowtimes"
+            f"?theatres={theatre_code}&date={api_date}"
+            f"&hoCode=&ignoreCache=false&moviesOnly=false"
         )
         try:
-            result = page.evaluate(
-                f"""
-                async () => {{
-                    const resp = await fetch("{api_url}");
-                    return resp.ok ? await resp.json() : null;
-                }}
-                """
-            )
-            if result:
-                return result.get("shows") or []
+            r = session.get(url, timeout=_REQUEST_TIMEOUT)
+            if r.ok:
+                return r.json().get("shows") or []
         except Exception as exc:
-            logger.warning("Regal: getShowtimes failed for %s on %s: %s", theatre_code, date_iso, exc)
+            logger.warning(
+                "Regal: getShowtimes failed for %s on %s: %s",
+                theatre_code, date_iso, exc,
+            )
         return []
 
     def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
@@ -217,7 +247,9 @@ class RegalScraper(BaseScraper):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
-            logger.warning("Regal scraper requires playwright — skipping %s", theater.name)
+            logger.warning(
+                "Regal scraper requires playwright — skipping %s", theater.name
+            )
             return []
 
         with sync_playwright() as p:
