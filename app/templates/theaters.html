@@ -309,9 +309,11 @@
 
   // ── Viewport filter (always-on: list tracks map bounds) ────────────────
   let _programmaticFit = false;
+  let _userHasPanned   = false;
 
   map.on('moveend', function () {
     if (_programmaticFit) { _programmaticFit = false; return; }
+    _userHasPanned = true;
     applyFilters(false);
   });
 
@@ -327,7 +329,7 @@
     const comm   = document.getElementById('filter-commercial').value;
     const sortBy = document.getElementById('filter-sort').value;
 
-    const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm);
+    const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm || _userHasPanned);
     document.getElementById('btn-clear').disabled = !filtersActive;
 
     const mapBounds = map.getBounds();
@@ -390,6 +392,7 @@
       document.getElementById(id).value = '';
     });
     document.getElementById('filter-sort').value = 'country';
+    _userHasPanned = false;
     onCountryChange();  // resets state + city dropdowns then calls applyFilters
   }
 

@@ -108,18 +108,27 @@ def index():
         for am in a.alert_movies.all()
     }
 
-    # Show all upcoming scraped showtimes. Showtimes disappear only once their
-    # show_datetime passes — not when an alert closes. The scraper's per-theater
-    # movie scoping (see _get_active_targets) prevents unrelated movies from
-    # being inserted in the first place.
+    # Upcoming showtimes scoped to the current user's alerted theaters.
+    # Admins see everything; regular users see only theaters they're watching.
     now = datetime.now(timezone.utc)
-    recent_showtimes = (
+    base_q = (
         Showtime.query
         .filter(Showtime.tickets_available.is_(True))
         .filter(Showtime.show_datetime >= now)
         .order_by(Showtime.show_datetime.asc())
-        .all()
     )
+    if current_user.role_name == "admin":
+        recent_showtimes = base_q.all()
+    elif not alerts:
+        recent_showtimes = []
+    elif any(a.theater_id is None for a in alerts):
+        # At least one "any theater" alert — show everything
+        recent_showtimes = base_q.all()
+    else:
+        alert_theater_ids = [a.theater_id for a in alerts]
+        recent_showtimes = base_q.filter(
+            Showtime.theater_id.in_(alert_theater_ids)
+        ).all()
 
     rows_per_page = _get_setting_int("rows_per_page", 15)
 
