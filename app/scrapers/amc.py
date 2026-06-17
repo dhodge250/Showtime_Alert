@@ -4,7 +4,7 @@ import re
 from bs4 import BeautifulSoup
 
 from app import db
-from app.scrapers.base import BaseScraper, _get_active_targets, _parse_time_text
+from app.scrapers.base import BaseScraper, _get_active_targets, _local_to_utc, _parse_time_text
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -52,9 +52,10 @@ def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: 
 
         for link in showtime_ul.find_all("a"):
             time_text = link.get_text(strip=True)
-            show_dt = _parse_time_text(time_text)
-            if not show_dt:
+            naive_local = _parse_time_text(time_text)
+            if not naive_local:
                 continue
+            show_dt = _local_to_utc(naive_local, theater)
             href = link.get("href", "")
             if href and not href.startswith("http"):
                 href = "https://www.amctheatres.com" + href

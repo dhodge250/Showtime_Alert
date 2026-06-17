@@ -1303,11 +1303,11 @@ class TestCinemarkScraper:
 
     def test_parse_showtime_dt(self):
         from app.scrapers.cinemark import _parse_showtime_dt
-        from datetime import timezone
 
+        # No theater → returns naive local datetime; caller supplies tz conversion
         dt = _parse_showtime_dt("2026-06-15", "7:10pm")
         assert dt is not None
-        assert dt.tzinfo == timezone.utc
+        assert dt.tzinfo is None
         assert dt.hour == 19
         assert dt.minute == 10
 
