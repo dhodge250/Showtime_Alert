@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libxml2-dev \
     libxslt-dev \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a venv so all packages (including transitive deps) are self-contained
