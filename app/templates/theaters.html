@@ -86,6 +86,8 @@
            data-projector="{{ theater.projector_type_name or '' }}"
            data-continent="{{ theater.continent_name or '' }}"
            data-commercial="{{ theater.commercial_films or '' }}"
+           data-lat="{{ theater.latitude or '' }}"
+           data-lng="{{ theater.longitude or '' }}"
            onclick="selectTheater({{ theater.id }}, {{ theater.latitude or 'null' }}, {{ theater.longitude or 'null' }})">
         <div class="theater-card-header">
           {% if theater.chain_name %}
@@ -305,8 +307,19 @@
     applyFilters();
   }
 
+  // ── Viewport filter (always-on: list tracks map bounds) ────────────────
+  let _programmaticFit  = false;
+  let _userHasPanned    = false;
+  let _ignoringViewport = false;
+
+  map.on('moveend', function () {
+    if (_programmaticFit) { _programmaticFit = false; return; }
+    _userHasPanned = true;
+    applyFilters(false);
+  });
+
   // ── Filter / sort (pure — no dropdown rebuilding) ─────────────────────
-  function applyFilters() {
+  function applyFilters(fitBoundsEnabled = true) {
     const search = document.getElementById('filter-search').value.toLowerCase();
     const co     = document.getElementById('filter-country').value;
     const st     = document.getElementById('filter-state').value;
@@ -317,21 +330,29 @@
     const comm   = document.getElementById('filter-commercial').value;
     const sortBy = document.getElementById('filter-sort').value;
 
-    const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm);
+    const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm || _userHasPanned);
     document.getElementById('btn-clear').disabled = !filtersActive;
 
+    const mapBounds = _ignoringViewport ? null : map.getBounds();
+
     const cards = [...document.querySelectorAll('.theater-card')];
-    let visible = cards.filter(card =>
-      (!search || card.dataset.name.toLowerCase().includes(search) ||
-                  card.dataset.city.toLowerCase().includes(search)) &&
-      (!co   || card.dataset.country      === co) &&
-      (!st   || card.dataset.state        === st) &&
-      (!ci   || card.dataset.city         === ci) &&
-      (!ar   || card.dataset.aspectRatio  === ar) &&
-      (!pt   || card.dataset.projector    === pt) &&
-      (!cont || card.dataset.continent    === cont) &&
-      (!comm || card.dataset.commercial   === comm)
-    );
+    let visible = cards.filter(card => {
+      if (search && !card.dataset.name.toLowerCase().includes(search) &&
+                    !card.dataset.city.toLowerCase().includes(search)) return false;
+      if (co   && card.dataset.country     !== co)   return false;
+      if (st   && card.dataset.state       !== st)   return false;
+      if (ci   && card.dataset.city        !== ci)   return false;
+      if (ar   && card.dataset.aspectRatio !== ar)   return false;
+      if (pt   && card.dataset.projector   !== pt)   return false;
+      if (cont && card.dataset.continent   !== cont) return false;
+      if (comm && card.dataset.commercial  !== comm) return false;
+      if (mapBounds) {
+        const lat = parseFloat(card.dataset.lat);
+        const lng = parseFloat(card.dataset.lng);
+        if (isFinite(lat) && isFinite(lng) && !mapBounds.contains([lat, lng])) return false;
+      }
+      return true;
+    });
 
     visible.sort((a, b) => (a.dataset[sortBy] || '').localeCompare(b.dataset[sortBy] || ''));
 
@@ -353,11 +374,16 @@
     document.getElementById('theater-count').textContent =
       `${visible.length} of ${cards.length} IMAX theaters`;
 
-    const bounds = visible
-      .map(c => markers[parseInt(c.id.replace('tc-',''))])
-      .filter(Boolean)
-      .map(m => m.getLatLng());
-    if (bounds.length > 0) map.fitBounds(bounds.map(ll => [ll.lat, ll.lng]), {padding:[30,30]});
+    if (fitBoundsEnabled) {
+      const bounds = visible
+        .map(c => markers[parseInt(c.id.replace('tc-',''))])
+        .filter(Boolean)
+        .map(m => m.getLatLng());
+      if (bounds.length > 0) {
+        _programmaticFit = true;
+        map.fitBounds(bounds.map(ll => [ll.lat, ll.lng]), {padding:[30,30]});
+      }
+    }
   }
 
   function clearFilters() {
@@ -366,7 +392,10 @@
       document.getElementById(id).value = '';
     });
     document.getElementById('filter-sort').value = 'country';
+    _userHasPanned    = false;
+    _ignoringViewport = true;
     onCountryChange();  // resets state + city dropdowns then calls applyFilters
+    _ignoringViewport = false;
   }
 
   // Initial render

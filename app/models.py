@@ -1,5 +1,7 @@
 """Database models for IMAX Alert application."""
-from datetime import datetime, timezone
+import json
+import secrets
+from datetime import datetime, timedelta, timezone
 
 from flask_login import UserMixin
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -586,6 +588,9 @@ class User(db.Model, UserMixin):
     force_password_change = db.Column(db.Boolean, default=False)
     reset_token = db.Column(db.String(256), nullable=True)
     reset_token_expiry = db.Column(db.DateTime, nullable=True)
+    mfa_secret = db.Column(db.String(64), nullable=True)
+    mfa_enabled = db.Column(db.Boolean, default=False)
+    mfa_recovery_codes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     role = db.relationship("Role", back_populates="users")
@@ -632,6 +637,53 @@ class User(db.Model, UserMixin):
         self.reset_token = None
         self.reset_token_expiry = None
 
+    # ── MFA helpers ──────────────────────────────────────────────────────
+
+    def generate_mfa_secret(self) -> str:
+        """Generate and store a new TOTP secret; return the raw base32 secret."""
+        import pyotp
+        self.mfa_secret = pyotp.random_base32()
+        return self.mfa_secret
+
+    def mfa_totp_uri(self, issuer: str = "IMAX Alert") -> str:
+        """Return the otpauth:// URI for QR code generation."""
+        import pyotp
+        return pyotp.totp.TOTP(self.mfa_secret).provisioning_uri(
+            name=self.email, issuer_name=issuer
+        )
+
+    def verify_totp(self, code: str) -> bool:
+        """Return True if *code* is a valid current TOTP for this user's secret."""
+        if not self.mfa_secret:
+            return False
+        import pyotp
+        return pyotp.TOTP(self.mfa_secret).verify(code, valid_window=1)
+
+    def generate_recovery_codes(self, count: int = 8) -> list[str]:
+        """Generate *count* 8-character plaintext recovery codes, store hashed, return plaintext."""
+        raw_codes = [secrets.token_hex(8).upper() for _ in range(count)]
+        hashed = [generate_password_hash(c) for c in raw_codes]
+        self.mfa_recovery_codes = json.dumps(hashed)
+        return raw_codes
+
+    def use_recovery_code(self, code: str) -> bool:
+        """Consume a recovery code — return True and remove it if valid, else False."""
+        if not self.mfa_recovery_codes:
+            return False
+        hashed_list = json.loads(self.mfa_recovery_codes)
+        for i, h in enumerate(hashed_list):
+            if check_password_hash(h, code.upper()):
+                hashed_list.pop(i)
+                self.mfa_recovery_codes = json.dumps(hashed_list)
+                return True
+        return False
+
+    def clear_mfa(self):
+        """Disable MFA and wipe all related fields."""
+        self.mfa_enabled = False
+        self.mfa_secret = None
+        self.mfa_recovery_codes = None
+
     @property
     def role_name(self):
         """Return the user's role name, defaulting to 'user' when no role is set."""
@@ -659,6 +711,52 @@ class User(db.Model, UserMixin):
     def __repr__(self):
         """Return a concise string representation."""
         return f"<User {self.email}>"
+
+
+class UserInvite(db.Model):
+    """Pending email invitation for a new user."""
+
+    __tablename__ = "user_invites"
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(300), nullable=False)
+    role_id = db.Column(db.Integer, db.ForeignKey("roles.id"), nullable=True)
+    token_hash = db.Column(db.String(256), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    accepted_at = db.Column(db.DateTime, nullable=True)
+
+    role = db.relationship("Role")
+    created_by = db.relationship("User", foreign_keys=[created_by_id])
+
+    @staticmethod
+    def create(email: str, role_id: int, created_by_id: int, expiry_hours: int = 48) -> tuple["UserInvite", str]:
+        """Create and return (invite_record, raw_token). Token is NOT stored in DB."""
+        raw = secrets.token_urlsafe(32)
+        invite = UserInvite(
+            email=email,
+            role_id=role_id,
+            token_hash=generate_password_hash(raw),
+            expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=expiry_hours),
+            created_by_id=created_by_id,
+        )
+        return invite, raw
+
+    def is_valid(self) -> bool:
+        """Return True if invite has not expired and has not been accepted."""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        return self.accepted_at is None and now < self.expires_at
+
+    def verify_token(self, raw_token: str) -> bool:
+        return check_password_hash(self.token_hash, raw_token)
+
+    @property
+    def role_name(self) -> str:
+        return self.role.name if self.role else "user"
+
+    def __repr__(self):
+        return f"<UserInvite {self.email}>"
 
 
 class AlertPreference(db.Model):

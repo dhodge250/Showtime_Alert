@@ -540,6 +540,22 @@ def _run_migrations():
             "ALTER TABLE users ADD COLUMN reset_token_expiry DATETIME",
             None,
         ),
+        # MFA / TOTP support
+        (
+            "mfa_secret", "users",
+            "ALTER TABLE users ADD COLUMN mfa_secret VARCHAR(64)",
+            None,
+        ),
+        (
+            "mfa_enabled", "users",
+            "ALTER TABLE users ADD COLUMN mfa_enabled INTEGER DEFAULT 0",
+            None,
+        ),
+        (
+            "mfa_recovery_codes", "users",
+            "ALTER TABLE users ADD COLUMN mfa_recovery_codes TEXT",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:
