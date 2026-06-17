@@ -368,7 +368,10 @@ def _get_matching_showtimes_for_pref(
 
     def _theater_allowed(st: Showtime) -> bool:
         """Return True if this showtime's theater is in scope for pref."""
-        if radius_ids is not None:
+        if pref.radius_km is not None:
+            # Radius alert with no resolvable user location → no theaters qualify.
+            if radius_ids is None:
+                return False
             return st.theater_id in radius_ids
         if pref.theater_id is not None:
             return st.theater_id == pref.theater_id
