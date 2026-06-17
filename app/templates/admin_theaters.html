@@ -89,8 +89,7 @@
 
 {# Geocode status bar — hidden until a job has run or is running #}
 <div id="geocode-status-bar" class="admin-crawl-summary"
-  {% if geocode_status.running %}style="--progress:{{ ((geocode_status.processed / geocode_status.total * 100) | int) if geocode_status.total else 0 }}%"{% endif %}
-  {% if not geocode_status.running and not geocode_status.finished_at %}style="display:none"{% endif %}>
+  style="{% if not geocode_status.running and not geocode_status.finished_at %}display:none{% elif geocode_status.running %}--progress:{{ ((geocode_status.processed / geocode_status.total * 100) | int) if geocode_status.total else 0 }}%{% else %}--progress:100%{% endif %}">
   <span class="bar-text" id="geocode-status-text">
   {% if geocode_status.running %}
     <strong>{% if geocode_status.mode == 'all' %}Re-geocode All{% else %}Geocoding{% endif %} in progress:</strong>
@@ -610,13 +609,24 @@ function triggerScrape(btn) {
   btn.disabled = true; btn.textContent = 'Scraping…';
   const bar = document.getElementById('scrape-status-bar');
   const barText = document.getElementById('scrape-status-text');
-  bar.style.display = ''; bar.style.setProperty('--progress', '0%');
+  bar.classList.remove('is-indeterminate');
+  bar.style.display = '';
+  bar.style.setProperty('--progress', '0%');
+
+  // Asymptotically approach 85% while the request is in-flight so the bar
+  // only ever moves forward; jump to 100% on completion.
+  let pct = 0;
+  const timer = setInterval(() => {
+    pct = Math.min(85, pct + (85 - pct) * 0.04);
+    bar.style.setProperty('--progress', Math.round(pct) + '%');
+  }, 1000);
+
   fetch('/api/scheduler/trigger', {method: 'POST'})
     .then(r => r.json())
     .then(data => {
-      bar.classList.remove('is-indeterminate');
+      clearInterval(timer);
+      bar.style.setProperty('--progress', '100%');
       if (data.status === 'ok') {
-        bar.style.setProperty('--progress', '100%');
         const found = data.new_showtimes || 0;
         const msg = found + ' new showtime' + (found !== 1 ? 's' : '') + ' found';
         barText.textContent = msg;
@@ -629,8 +639,8 @@ function triggerScrape(btn) {
       setTimeout(() => { btn.disabled = false; btn.textContent = 'Scrape Showtimes'; bar.style.display = 'none'; bar.classList.add('is-indeterminate'); }, 4000);
     })
     .catch(() => {
-      bar.classList.remove('is-indeterminate');
-      bar.style.setProperty('--progress', '0%');
+      clearInterval(timer);
+      bar.style.setProperty('--progress', '100%');
       barText.textContent = 'Error';
       btn.textContent = 'Error';
       setTimeout(() => { btn.disabled = false; btn.textContent = 'Scrape Showtimes'; bar.style.display = 'none'; bar.classList.add('is-indeterminate'); }, 3000);
@@ -706,7 +716,7 @@ function updateGeocodeBar(data) {
       data.processed + ' / ' + data.total +
       ' &mdash; ' + data.geocoded + ' geocoded, ' + data.failed + ' failed';
   } else if (data.finished_at) {
-    bar.style.removeProperty('--progress');
+    bar.style.setProperty('--progress', '100%');
     const errPart = data.errors && data.errors.length
       ? ', <span class="text-error">' + data.errors.length + ' error(s)</span>'
       : '';

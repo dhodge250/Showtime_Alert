@@ -151,6 +151,9 @@ def logout():
     from app.log_utils import write_log
     write_log("auth", f"Logout: {current_user.email}", user_id=current_user.id)
     logout_user()
+    next_page = request.form.get("next")
+    if next_page and next_page.startswith("/"):
+        return redirect(next_page)
     return redirect(url_for("auth.login"))
 
 
@@ -373,7 +376,7 @@ def accept_invite(token: str):
     from datetime import datetime, timezone
 
     if current_user.is_authenticated:
-        return redirect(url_for("main.index"))
+        return render_template("accept_invite.html", already_logged_in=True, token=token)
 
     invite = _find_invite_by_token(token)
     if invite is None:

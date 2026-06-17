@@ -26,7 +26,19 @@
 
     <div class="login-form-panel">
       <div class="login-form-inner">
-        {% if invalid %}
+        {% if already_logged_in %}
+          <h2 class="login-form-heading">Already signed in</h2>
+          <p class="login-form-sub">
+            You're currently signed in as <strong>{{ current_user.email }}</strong>.
+            Sign out to accept this invitation and create a new account.
+          </p>
+          <form method="POST" action="{{ url_for('auth.logout') }}" style="margin-top:16px">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="{{ url_for('auth.accept_invite', token=token) }}">
+            <button type="submit" class="btn btn-primary" style="width:100%">Sign out &amp; continue</button>
+          </form>
+          <a href="{{ url_for('main.index') }}" class="btn btn-ghost" style="display:block;text-align:center;margin-top:8px">Back to Dashboard</a>
+        {% elif invalid %}
           <h2 class="login-form-heading">Invite expired</h2>
           <p class="login-form-sub" style="color:var(--danger)">
             This invitation link is invalid or has expired. Please contact an admin to send a new one.

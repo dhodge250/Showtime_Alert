@@ -153,13 +153,15 @@
       <form method="POST" action="{{ url_for('main.profile_mfa_disable') }}"
             onsubmit="return disableMfaConfirm(event)">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="password" id="mfa-disable-pw" name="password" placeholder="Current password"
-               style="display:none;margin-right:6px" class="form-control" autocomplete="current-password" />
         <button type="button" id="mfa-disable-btn" class="btn btn-danger btn-sm"
-                onclick="document.getElementById('mfa-disable-pw').style.display='inline';document.getElementById('mfa-disable-btn').style.display='none';document.getElementById('mfa-disable-submit').style.display='inline'">
+                onclick="document.getElementById('mfa-disable-expand').style.display='flex';this.style.display='none';document.getElementById('mfa-disable-pw').focus()">
           Disable MFA
         </button>
-        <button type="submit" id="mfa-disable-submit" class="btn btn-danger btn-sm" style="display:none">Confirm Disable</button>
+        <div id="mfa-disable-expand" style="display:none;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="password" id="mfa-disable-pw" name="password" placeholder="Current password"
+                 class="form-control" autocomplete="current-password" />
+          <button type="submit" id="mfa-disable-submit" class="btn btn-danger btn-sm">Confirm Disable</button>
+        </div>
       </form>
     </div>
     {% else %}
