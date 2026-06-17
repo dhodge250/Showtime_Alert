@@ -67,7 +67,7 @@
 
 {% if last_summary %}
 <div id="crawl-summary-bar" class="admin-crawl-summary">
-  <span class="bar-text">
+  <span class="bar-text" id="crawl-status-text">
     <strong>Last crawl:</strong>
     {{ last_summary.get('finished_at', '') }} &mdash;
     {% if last_summary.get('error') %}
@@ -615,8 +615,8 @@ function triggerScrape(btn) {
     .then(r => r.json())
     .then(data => {
       bar.classList.remove('is-indeterminate');
-      bar.style.setProperty('--progress', '100%');
       if (data.status === 'ok') {
+        bar.style.setProperty('--progress', '100%');
         const found = data.new_showtimes || 0;
         const msg = found + ' new showtime' + (found !== 1 ? 's' : '') + ' found';
         barText.textContent = msg;

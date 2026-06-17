@@ -121,6 +121,9 @@ def login():
                 session["mfa_remember"] = remember
                 session["mfa_next"] = request.args.get("next")
                 return redirect(url_for("auth.mfa_verify"))
+            session.pop("mfa_pending_user_id", None)
+            session.pop("mfa_remember", None)
+            session.pop("mfa_next", None)
             login_user(user, remember=remember)
             logger.info("User %s logged in.", user.email)
             from app.log_utils import write_log
@@ -323,6 +326,8 @@ def mfa_verify():
     user = User.query.get(user_id)
     if not user or not user.is_active or not user.mfa_enabled:
         session.pop("mfa_pending_user_id", None)
+        session.pop("mfa_remember", None)
+        session.pop("mfa_next", None)
         return redirect(url_for("auth.login"))
 
     error = None

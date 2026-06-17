@@ -13,7 +13,9 @@ from flask import (
     request,
     url_for,
 )
+from flask import flash
 from flask_login import current_user, login_required
+from sqlalchemy.orm import joinedload
 
 from app import db
 from app.auth import require_role
@@ -284,8 +286,9 @@ def profile_mfa_setup():
     if request.method == "POST":
         action = request.form.get("action")
         if action == "begin":
-            user.generate_mfa_secret()
-            db.session.commit()
+            if not user.mfa_secret:  # don't overwrite a secret already being set up
+                user.generate_mfa_secret()
+                db.session.commit()
             qr_image = _make_qr_data_url(user.mfa_totp_uri())
             return render_template("mfa_setup.html", user=user, step="confirm",
                                    qr_image=qr_image, secret=user.mfa_secret)
@@ -336,14 +339,12 @@ def profile_mfa_disable():
     user = current_user._get_current_object()
     password = request.form.get("password", "")
     if not user.check_password(password):
-        from flask import flash
         flash("Incorrect password. MFA was not disabled.", "error")
         return redirect(url_for("main.profile"))
     user.clear_mfa()
     db.session.commit()
     from app.log_utils import write_log
     write_log("auth", f"MFA disabled by {user.email}", user_id=user.id)
-    from flask import flash
     flash("Multi-factor authentication has been disabled.", "success")
     return redirect(url_for("main.profile"))
 
@@ -474,7 +475,9 @@ def admin_users():
     users_list = User.query.order_by(User.name).all()
     roles = Role.query.order_by(Role.name).all()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    pending_invites = UserInvite.query.filter(
+    pending_invites = UserInvite.query.options(
+        joinedload(UserInvite.created_by)
+    ).filter(
         UserInvite.accepted_at.is_(None),
         UserInvite.expires_at > now,
     ).order_by(UserInvite.created_at.desc()).all()
@@ -599,6 +602,7 @@ def admin_user_reset_mfa(user_id):
     db.session.commit()
     from app.log_utils import write_log
     write_log("auth", f"Admin reset MFA for user {user.email}", user_id=current_user.id)
+    flash(f"MFA has been reset for {user.name}.", "success")
     return redirect(url_for("main.admin_user_edit", user_id=user_id))
 
 
@@ -614,12 +618,10 @@ def admin_user_invite():
     role_id = request.form.get("invite_role_id", type=int)
 
     if not email:
-        from flask import flash
         flash("Email address is required.", "error")
         return redirect(url_for("main.admin_users"))
 
     if User.query.filter(db.func.lower(User.email) == email).first():
-        from flask import flash
         flash(f"A user with email '{email}' already exists.", "error")
         return redirect(url_for("main.admin_users"))
 
@@ -629,7 +631,6 @@ def admin_user_invite():
         UserInvite.expires_at > datetime.now(timezone.utc).replace(tzinfo=None),
     ).first()
     if existing:
-        from flask import flash
         flash(f"A pending invite for '{email}' already exists.", "warning")
         return redirect(url_for("main.admin_users"))
 
@@ -641,11 +642,9 @@ def admin_user_invite():
         _send_invite_email(invite, raw_token)
         from app.log_utils import write_log
         write_log("auth", f"Invite sent to {email} by {current_user.email}", user_id=current_user.id)
-        from flask import flash
         flash(f"Invite sent to {email}.", "success")
     except Exception:
         logger.exception("Failed to send invite email to %s", email)
-        from flask import flash
         flash(f"Invite created but email delivery failed for {email}.", "warning")
 
     return redirect(url_for("main.admin_users"))
@@ -656,10 +655,11 @@ def admin_user_invite():
 def admin_invite_revoke(invite_id):
     """Admin: revoke a pending invite."""
     invite = UserInvite.query.get_or_404(invite_id)
+    invite_email = invite.email  # capture before expunge
     db.session.delete(invite)
     db.session.commit()
     from app.log_utils import write_log
-    write_log("auth", f"Invite for {invite.email} revoked by {current_user.email}", user_id=current_user.id)
+    write_log("auth", f"Invite for {invite_email} revoked by {current_user.email}", user_id=current_user.id)
     return redirect(url_for("main.admin_users"))
 
 
