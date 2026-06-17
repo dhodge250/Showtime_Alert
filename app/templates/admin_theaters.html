@@ -625,14 +625,15 @@ function triggerScrape(btn) {
     .then(r => r.json())
     .then(data => {
       clearInterval(timer);
-      bar.style.setProperty('--progress', '100%');
       if (data.status === 'ok') {
+        bar.style.setProperty('--progress', '100%');
         const found = data.new_showtimes || 0;
         const msg = found + ' new showtime' + (found !== 1 ? 's' : '') + ' found';
         barText.textContent = msg;
         btn.textContent = msg;
         showToast(msg + '.');
       } else {
+        bar.style.setProperty('--progress', '0%');
         barText.textContent = 'Error — check logs';
         btn.textContent = 'Error — check logs';
       }
@@ -640,7 +641,7 @@ function triggerScrape(btn) {
     })
     .catch(() => {
       clearInterval(timer);
-      bar.style.setProperty('--progress', '100%');
+      bar.style.setProperty('--progress', '0%');
       barText.textContent = 'Error';
       btn.textContent = 'Error';
       setTimeout(() => { btn.disabled = false; btn.textContent = 'Scrape Showtimes'; bar.style.display = 'none'; bar.classList.add('is-indeterminate'); }, 3000);

@@ -295,7 +295,9 @@ def profile_mfa_setup():
     if request.method == "POST":
         action = request.form.get("action")
         if action == "begin":
-            if not user.mfa_secret or user.mfa_enabled:  # always regenerate when reconfiguring; guard double-click only during initial enrollment
+            if not user.mfa_secret or user.mfa_enabled:
+                if user.mfa_enabled:
+                    user.mfa_enabled = False  # clear flag so login doesn't demand the new unconfirmed secret if reconfiguration is abandoned
                 user.generate_mfa_secret()
                 db.session.commit()
             qr_image = _make_qr_data_url(user.mfa_totp_uri())

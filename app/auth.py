@@ -131,7 +131,7 @@ def login():
             if user.force_password_change:
                 return redirect(url_for("auth.change_password"))
             next_page = request.args.get("next")
-            if next_page and next_page.startswith("/"):
+            if next_page and next_page.startswith("/") and not next_page.startswith("//"):
                 return redirect(next_page)
             return redirect(url_for("main.index"))
         else:
@@ -152,7 +152,7 @@ def logout():
     write_log("auth", f"Logout: {current_user.email}", user_id=current_user.id)
     logout_user()
     next_page = request.form.get("next")
-    if next_page and next_page.startswith("/"):
+    if next_page and next_page.startswith("/") and not next_page.startswith("//"):
         return redirect(next_page)
     return redirect(url_for("auth.login"))
 
@@ -355,7 +355,7 @@ def mfa_verify():
             write_log("auth", f"MFA verified: {user.email}", user_id=user.id)
             if user.force_password_change:
                 return redirect(url_for("auth.change_password"))
-            if next_page and next_page.startswith("/"):
+            if next_page and next_page.startswith("/") and not next_page.startswith("//"):
                 return redirect(next_page)
             return redirect(url_for("main.index"))
         else:
@@ -398,6 +398,7 @@ def accept_invite(token: str):
                 error = "Passwords do not match."
 
         if error is None:
+            from sqlalchemy.exc import IntegrityError
             role = Role.query.get(invite.role_id) if invite.role_id else Role.query.filter_by(name="user").first()
             user = User(
                 name=name,
@@ -411,12 +412,17 @@ def accept_invite(token: str):
             user.set_password(password)
             invite.accepted_at = datetime.now(timezone.utc).replace(tzinfo=None)
             db.session.add(user)
-            db.session.commit()
-            logger.info("New user %s signed up via invite.", user.email)
-            from app.log_utils import write_log
-            write_log("auth", f"Invite accepted: {user.email}", user_id=user.id)
-            login_user(user)
-            return redirect(url_for("main.index"))
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                error = "An account with this email already exists. Please log in."
+            else:
+                logger.info("New user %s signed up via invite.", user.email)
+                from app.log_utils import write_log
+                write_log("auth", f"Invite accepted: {user.email}", user_id=user.id)
+                login_user(user)
+                return redirect(url_for("main.index"))
 
     return render_template("accept_invite.html", invite=invite, token=token, error=error)
 
