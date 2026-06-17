@@ -3535,6 +3535,23 @@ class TestMovieDetail:
         assert b"Upcoming Showtimes" in resp.data
         assert b"Test IMAX Theater" in resp.data
 
+    def test_movie_detail_shows_showtimes_from_any_theater(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        """Showtimes at theaters OTHER than the alerted theater must still appear."""
+        from datetime import datetime, timezone, timedelta
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+            other = Theater(name="Other IMAX", chain="Regal", city="Othertown", state="ON")
+            db.session.add(other)
+            db.session.flush()
+            future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=2)
+            db.session.add(Showtime(theater_id=other.id, movie_id=sample_movie,
+                                   show_datetime=future, format_type="IMAX"))
+            db.session.commit()
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Other IMAX" in resp.data
+
     def test_movie_detail_hides_past_showtimes(self, app, auth_client, sample_movie, sample_theater, sample_user):
         from datetime import datetime, timezone, timedelta
         with app.app_context():

@@ -478,29 +478,13 @@ def movie_detail(movie_id):
     if not has_alert:
         abort(404)
 
-    tracked_theater_ids = [
-        r[0] for r in
-        db.session.query(AlertPreference.theater_id)
-        .join(AlertMovie, AlertMovie.alert_id == AlertPreference.id)
-        .filter(
-            AlertPreference.user_id == current_user.id,
-            AlertPreference.is_active.is_(True),
-            AlertMovie.movie_id == movie_id,
-            AlertPreference.theater_id.isnot(None),
-        )
-        .distinct()
-        .all()
-    ]
-
-    showtimes_q = (
+    showtimes = (
         Showtime.query
         .options(joinedload(Showtime.theater))
         .filter(Showtime.movie_id == movie_id, Showtime.show_datetime >= now)
         .order_by(Showtime.show_datetime)
+        .all()
     )
-    if tracked_theater_ids:
-        showtimes_q = showtimes_q.filter(Showtime.theater_id.in_(tracked_theater_ids))
-    showtimes = showtimes_q.all()
 
     user_alerts = (
         AlertPreference.query
