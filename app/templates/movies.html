@@ -33,7 +33,7 @@
       </div>
       {% if item.next_dt %}
       <div class="movie-next-showtime">
-        Next: {{ item.next_dt.strftime('%b %d, %Y') }}
+        Next: <time class="utc-time" datetime="{{ item.next_dt.isoformat() }}Z" data-fmt="date-only">{{ item.next_dt.strftime('%b %d, %Y') }}</time>
       </div>
       {% else %}
       <div class="movie-next-showtime" style="color:var(--text-muted)">No upcoming showtimes</div>

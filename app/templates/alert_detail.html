@@ -249,7 +249,7 @@
       <tbody>
         {% for st in showtimes %}
         <tr>
-          <td style="white-space:nowrap">{{ st.show_datetime.strftime('%b %d, %Y %I:%M %p') }}</td>
+          <td style="white-space:nowrap"><time class="utc-time" datetime="{{ st.show_datetime.isoformat() }}Z" data-fmt="short">{{ st.show_datetime.strftime('%b %d, %Y %I:%M %p') }}</time></td>
           <td>{{ st.movie.title if st.movie else '–' }}</td>
           <td>
             {{ st.theater.name if st.theater else '–' }}

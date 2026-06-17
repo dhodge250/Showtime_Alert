@@ -92,6 +92,35 @@
 
   {% block scripts %}{% endblock %}
   <script>
+    /* UTC → browser-local time conversion for all <time class="utc-time"> elements.
+       Templates emit naive UTC with a Z suffix; this converts to the user's device timezone. */
+    (function () {
+      var FMTS = {
+        'short':     { month: 'short',  day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
+        'medium':    { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
+        'long':      { weekday: 'long',  month: 'long',  day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
+        'date-only': { month: 'short',  day: 'numeric', year: 'numeric' },
+      };
+      function convertUtcTimes() {
+        document.querySelectorAll('time.utc-time').forEach(function (el) {
+          var dt = new Date(el.getAttribute('datetime'));
+          if (isNaN(dt)) return;
+          var opts = FMTS[el.dataset.fmt] || FMTS['short'];
+          el.textContent = dt.toLocaleString('en-US', opts);
+          /* Keep data-date on the parent row in sync with the local calendar date
+             so the date filter on the dashboard works correctly. */
+          var row = el.closest('[data-date]');
+          if (row) row.dataset.date = dt.toLocaleDateString('sv-SE'); /* sv-SE → YYYY-MM-DD */
+        });
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', convertUtcTimes);
+      } else {
+        convertUtcTimes();
+      }
+    })();
+  </script>
+  <script>
     /* Theme toggle */
     (function () {
       var STORAGE_KEY = 'imax-theme';

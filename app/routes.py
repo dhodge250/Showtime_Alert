@@ -1906,6 +1906,9 @@ def api_reset_alert(pref_id):
     pref.alert_sent = False
     pref.alert_sent_at = None
     pref.is_active = True
+    pref.notifications_fired = 0
+    if pref.radius_km is not None:
+        pref.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.commit()
     from app.log_utils import write_log
     write_log("alert", f"Alert reset (id={pref_id})", user_id=current_user.id,
@@ -1927,6 +1930,8 @@ def api_reset_alert_movie(pref_id, movie_id):
     pref.alert_sent = False
     pref.alert_sent_at = None
     pref.is_active = True
+    if pref.radius_km is not None:
+        pref.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.commit()
     return jsonify(am.to_dict())
 
