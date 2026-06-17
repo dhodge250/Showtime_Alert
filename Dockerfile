@@ -9,8 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxslt-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a venv so all packages (including transitive deps) are self-contained
-RUN python -m venv /venv
+# Use virtualenv (bundles pip, bypasses ensurepip) — python:3.11-slim on Trixie
+# has no python3.11-venv apt package, so ensurepip fails with plain `python -m venv`.
+RUN pip install --no-cache-dir virtualenv && virtualenv /venv
 
 # Upgrade pip and wheel to patched versions (CVE-2026-24049, CVE-2025-8869 et al.)
 RUN /venv/bin/pip install --upgrade "pip==26.1" "wheel==0.46.2"
@@ -29,7 +30,9 @@ COPY --from=builder /venv /venv
 # 1. Let Playwright install Chromium and all its system dependencies
 # 2. Add runtime shared libraries for lxml
 # 3. Purge perl (no upstream fix — CVE-2026-42496 CRITICAL et al.)
-# 4. Upgrade system pip/wheel (CVE-2026-24049, CVE-2025-8869 et al.)
+# 4. Remove system pip/wheel — app uses /venv exclusively; uninstalling eliminates
+#    CVE-2026-24049 / CVE-2025-8869 flags without the segfault that `pip install`
+#    triggers on Trixie after playwright's --with-deps modifies the system state.
 # All in one layer to minimise final image size.
 RUN /venv/bin/playwright install chromium --with-deps \
     && apt-get install -y --no-install-recommends \
@@ -38,7 +41,7 @@ RUN /venv/bin/playwright install chromium --with-deps \
     && apt-get purge -y --allow-remove-essential perl perl-base \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --upgrade "pip>=26.1" "wheel>=0.46.2"
+    && pip uninstall -y pip wheel setuptools 2>/dev/null || true
 
 COPY . .
 

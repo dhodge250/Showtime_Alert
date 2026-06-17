@@ -9,10 +9,72 @@
       <p class="subtitle">{{ users|length }} total user(s)</p>
     </div>
     <div class="page-header-actions">
+      <button class="btn btn-outline" onclick="document.getElementById('invite-panel').style.display=document.getElementById('invite-panel').style.display==='none'?'':'none'">Invite User</button>
       <a href="{{ url_for('main.admin_user_new') }}" class="btn btn-primary">+ Add User</a>
     </div>
   </div>
 </div>
+
+<!-- Invite panel -->
+<div id="invite-panel" class="card" style="display:none;margin-bottom:20px;max-width:480px">
+  <h2 style="margin-bottom:12px">Send Invitation</h2>
+  <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+    The invitee will receive an email with a signup link that expires in 48 hours.
+  </p>
+  <form method="POST" action="{{ url_for('main.admin_user_invite') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-group">
+      <label for="invite_email">Email address</label>
+      <input type="email" id="invite_email" name="invite_email" class="form-control" placeholder="user@example.com" required />
+    </div>
+    <div class="form-group">
+      <label for="invite_role_id">Role</label>
+      <select id="invite_role_id" name="invite_role_id" class="form-control">
+        {% for r in roles %}
+        <option value="{{ r.id }}"{% if r.name == 'user' %} selected{% endif %}>{{ r.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Send Invite</button>
+    <button type="button" class="btn btn-ghost" onclick="document.getElementById('invite-panel').style.display='none'">Cancel</button>
+  </form>
+</div>
+
+{% if pending_invites %}
+<div class="card" style="margin-bottom:20px">
+  <h2 style="margin-bottom:12px">Pending Invites ({{ pending_invites|length }})</h2>
+  <div class="admin-table-wrap">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>Email</th>
+          <th>Role</th>
+          <th>Invited By</th>
+          <th>Expires</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in pending_invites %}
+        <tr>
+          <td>{{ inv.email }}</td>
+          <td><span class="role-badge role-{{ inv.role_name }}">{{ inv.role_name }}</span></td>
+          <td>{{ inv.created_by.name if inv.created_by else '—' }}</td>
+          <td>{{ inv.expires_at.strftime('%Y-%m-%d %H:%M') }} UTC</td>
+          <td class="admin-actions">
+            <form method="POST" action="{{ url_for('main.admin_invite_revoke', invite_id=inv.id) }}"
+                  style="display:inline" onsubmit="return confirm('Revoke invite for ' + {{ inv.email | tojson }} + '?')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn-sm btn-danger">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 <!-- Filter bar -->
 <div class="admin-filter-bar">
@@ -73,7 +135,7 @@
           {% if u.is_active and u.id != current_user.id %}
           <form method="post" action="{{ url_for('main.admin_user_delete', user_id=u.id) }}"
                 style="display:inline"
-                onsubmit="return confirm('Deactivate {{ u.name }}?')">
+                onsubmit="return confirm('Deactivate ' + {{ u.name | tojson }} + '?')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn-sm btn-danger">Deactivate</button>
           </form>

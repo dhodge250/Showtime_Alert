@@ -103,6 +103,7 @@ def require_role(*roles):
 def login():
     """Login page."""
     from app.models import User
+    from flask import session
 
     if current_user.is_authenticated:
         return redirect(url_for("main.index"))
@@ -115,6 +116,14 @@ def login():
 
         user = User.query.filter_by(email=email).first()
         if user and user.is_active and user.check_password(password):
+            if user.mfa_enabled:
+                session["mfa_pending_user_id"] = user.id
+                session["mfa_remember"] = remember
+                session["mfa_next"] = request.args.get("next")
+                return redirect(url_for("auth.mfa_verify"))
+            session.pop("mfa_pending_user_id", None)
+            session.pop("mfa_remember", None)
+            session.pop("mfa_next", None)
             login_user(user, remember=remember)
             logger.info("User %s logged in.", user.email)
             from app.log_utils import write_log
@@ -122,7 +131,7 @@ def login():
             if user.force_password_change:
                 return redirect(url_for("auth.change_password"))
             next_page = request.args.get("next")
-            if next_page and next_page.startswith("/"):
+            if next_page and next_page.startswith("/") and not next_page.startswith("//"):
                 return redirect(next_page)
             return redirect(url_for("main.index"))
         else:
@@ -142,6 +151,9 @@ def logout():
     from app.log_utils import write_log
     write_log("auth", f"Logout: {current_user.email}", user_id=current_user.id)
     logout_user()
+    next_page = request.form.get("next")
+    if next_page and next_page.startswith("/") and not next_page.startswith("//"):
+        return redirect(next_page)
     return redirect(url_for("auth.login"))
 
 
@@ -294,3 +306,137 @@ def _send_reset_email(user, raw_token: str):
     )
     if not success:
         logger.warning("Failed to send reset email to %s: %s", user.email, err)
+
+
+# ---------------------------------------------------------------------------
+# MFA verification (after successful password login)
+# ---------------------------------------------------------------------------
+
+@auth_bp.route("/mfa-verify", methods=["GET", "POST"])
+@limiter.limit("10 per minute", error_message="Too many attempts. Please wait a minute.")
+def mfa_verify():
+    """Second factor verification step — called after password auth succeeds."""
+    from flask import session
+    from app.models import User
+
+    if current_user.is_authenticated:
+        return redirect(url_for("main.index"))
+
+    user_id = session.get("mfa_pending_user_id")
+    if not user_id:
+        return redirect(url_for("auth.login"))
+
+    user = User.query.get(user_id)
+    if not user or not user.is_active or not user.mfa_enabled:
+        session.pop("mfa_pending_user_id", None)
+        session.pop("mfa_remember", None)
+        session.pop("mfa_next", None)
+        return redirect(url_for("auth.login"))
+
+    error = None
+    if request.method == "POST":
+        code = request.form.get("code", "").strip().replace(" ", "")
+        use_recovery = request.form.get("use_recovery") == "1"
+
+        verified = False
+        if use_recovery:
+            verified = user.use_recovery_code(code)
+        else:
+            verified = user.verify_totp(code)
+
+        if verified:
+            db.session.commit()
+            remember = session.pop("mfa_remember", False)
+            next_page = session.pop("mfa_next", None)
+            session.pop("mfa_pending_user_id", None)
+            login_user(user, remember=remember)
+            logger.info("User %s passed MFA.", user.email)
+            from app.log_utils import write_log
+            write_log("auth", f"MFA verified: {user.email}", user_id=user.id)
+            if user.force_password_change:
+                return redirect(url_for("auth.change_password"))
+            if next_page and next_page.startswith("/") and not next_page.startswith("//"):
+                return redirect(next_page)
+            return redirect(url_for("main.index"))
+        else:
+            error = "Invalid code. Please try again."
+
+    return render_template("mfa_verify.html", error=error)
+
+
+# ---------------------------------------------------------------------------
+# Accept invite — new user sign-up via invite link
+# ---------------------------------------------------------------------------
+
+@auth_bp.route("/accept-invite/<token>", methods=["GET", "POST"])
+@limiter.limit("20 per minute", error_message="Too many attempts.")
+def accept_invite(token: str):
+    """New user signup via invite link."""
+    from app.models import User, UserInvite, Role
+    from datetime import datetime, timezone
+
+    if current_user.is_authenticated:
+        return render_template("accept_invite.html", already_logged_in=True, token=token)
+
+    invite = _find_invite_by_token(token)
+    if invite is None:
+        return render_template("accept_invite.html", invalid=True, token=token)
+
+    error = None
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        password = request.form.get("password", "")
+        confirm = request.form.get("confirm_password", "")
+
+        if not name:
+            error = "Name is required."
+        elif User.query.filter(db.func.lower(User.email) == invite.email.lower()).first():
+            error = "An account with this email already exists. Please log in."
+        else:
+            error = validate_password_strength(password)
+            if error is None and password != confirm:
+                error = "Passwords do not match."
+
+        if error is None:
+            from sqlalchemy.exc import IntegrityError
+            role = Role.query.get(invite.role_id) if invite.role_id else Role.query.filter_by(name="user").first()
+            user = User(
+                name=name,
+                email=invite.email,
+                role_id=role.id if role else None,
+                is_active=True,
+                notify_email=True,
+                notify_sms=False,
+                measurement_unit="metric",
+            )
+            user.set_password(password)
+            invite.accepted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.session.add(user)
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                error = "An account with this email already exists. Please log in."
+            else:
+                logger.info("New user %s signed up via invite.", user.email)
+                from app.log_utils import write_log
+                write_log("auth", f"Invite accepted: {user.email}", user_id=user.id)
+                login_user(user)
+                return redirect(url_for("main.index"))
+
+    return render_template("accept_invite.html", invite=invite, token=token, error=error)
+
+
+def _find_invite_by_token(raw_token: str):
+    """Return a valid UserInvite matching *raw_token*, or None."""
+    from app.models import UserInvite
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    candidates = UserInvite.query.filter(
+        UserInvite.accepted_at.is_(None),
+        UserInvite.expires_at > now,
+    ).all()
+    for invite in candidates:
+        if invite.verify_token(raw_token):
+            return invite
+    return None
