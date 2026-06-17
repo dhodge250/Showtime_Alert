@@ -349,8 +349,7 @@
       if (mapBounds) {
         const lat = parseFloat(card.dataset.lat);
         const lng = parseFloat(card.dataset.lng);
-        if (!isFinite(lat) || !isFinite(lng)) return false;
-        if (!mapBounds.contains([lat, lng])) return false;
+        if (isFinite(lat) && isFinite(lng) && !mapBounds.contains([lat, lng])) return false;
       }
       return true;
     });

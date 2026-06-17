@@ -66,7 +66,7 @@
 </div>
 
 {% if last_summary %}
-<div id="crawl-summary-bar" class="admin-crawl-summary">
+<div id="crawl-summary-bar" class="admin-crawl-summary" style="--progress:0%">
   <span class="bar-text" id="crawl-status-text">
     <strong>Last crawl:</strong>
     {{ last_summary.get('finished_at', '') }} &mdash;
@@ -89,7 +89,7 @@
 
 {# Geocode status bar — hidden until a job has run or is running #}
 <div id="geocode-status-bar" class="admin-crawl-summary"
-  style="{% if not geocode_status.running and not geocode_status.finished_at %}display:none{% elif geocode_status.running %}--progress:{{ ((geocode_status.processed / geocode_status.total * 100) | int) if geocode_status.total else 0 }}%{% else %}--progress:100%{% endif %}">
+  style="{% if not geocode_status.running and not geocode_status.finished_at %}display:none{% elif geocode_status.running %}--progress:{{ ((geocode_status.processed / geocode_status.total * 100) | int) if geocode_status.total else 0 }}%{% else %}--progress:0%{% endif %}">
   <span class="bar-text" id="geocode-status-text">
   {% if geocode_status.running %}
     <strong>{% if geocode_status.mode == 'all' %}Re-geocode All{% else %}Geocoding{% endif %} in progress:</strong>
@@ -716,7 +716,7 @@ function updateGeocodeBar(data) {
       data.processed + ' / ' + data.total +
       ' &mdash; ' + data.geocoded + ' geocoded, ' + data.failed + ' failed';
   } else if (data.finished_at) {
-    bar.style.setProperty('--progress', '100%');
+    bar.style.setProperty('--progress', '0%');
     const errPart = data.errors && data.errors.length
       ? ', <span class="text-error">' + data.errors.length + ' error(s)</span>'
       : '';
