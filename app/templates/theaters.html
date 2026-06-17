@@ -308,8 +308,9 @@
   }
 
   // ── Viewport filter (always-on: list tracks map bounds) ────────────────
-  let _programmaticFit = false;
-  let _userHasPanned   = false;
+  let _programmaticFit  = false;
+  let _userHasPanned    = false;
+  let _ignoringViewport = false;
 
   map.on('moveend', function () {
     if (_programmaticFit) { _programmaticFit = false; return; }
@@ -332,7 +333,7 @@
     const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm || _userHasPanned);
     document.getElementById('btn-clear').disabled = !filtersActive;
 
-    const mapBounds = map.getBounds();
+    const mapBounds = _ignoringViewport ? null : map.getBounds();
 
     const cards = [...document.querySelectorAll('.theater-card')];
     let visible = cards.filter(card => {
@@ -392,8 +393,10 @@
       document.getElementById(id).value = '';
     });
     document.getElementById('filter-sort').value = 'country';
-    _userHasPanned = false;
+    _userHasPanned    = false;
+    _ignoringViewport = true;
     onCountryChange();  // resets state + city dropdowns then calls applyFilters
+    _ignoringViewport = false;
   }
 
   // Initial render
