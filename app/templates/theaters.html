@@ -346,10 +346,12 @@
       if (pt   && card.dataset.projector   !== pt)   return false;
       if (cont && card.dataset.continent   !== cont) return false;
       if (comm && card.dataset.commercial  !== comm) return false;
-      if (mapBounds) {
+      if (mapBounds && _userHasPanned) {
         const lat = parseFloat(card.dataset.lat);
         const lng = parseFloat(card.dataset.lng);
-        if (isFinite(lat) && isFinite(lng) && !mapBounds.contains([lat, lng])) return false;
+        // Theaters with no coordinates are not on the map — exclude them when zoomed
+        if (!isFinite(lat) || !isFinite(lng)) return false;
+        if (!mapBounds.contains([lat, lng])) return false;
       }
       return true;
     });

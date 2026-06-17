@@ -185,7 +185,11 @@
             <span class="text-muted">–</span>
             {% endif %}
           </td>
-          <td style="font-weight:600">{{ am.movie.title if am.movie else 'Unknown' }}</td>
+          <td style="font-weight:600">
+            {% if am.movie %}
+            <a href="{{ url_for('main.movie_detail', movie_id=am.movie.id) }}">{{ am.movie.title }}</a>
+            {% else %}Unknown{% endif %}
+          </td>
           <td style="font-size:12px;color:var(--text-muted)">
             {% if am.movie and am.movie.release_date %}
               {{ am.movie.release_date.strftime('%b %d, %Y') }}

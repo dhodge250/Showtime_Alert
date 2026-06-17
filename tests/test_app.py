@@ -3435,7 +3435,8 @@ class TestMoviesTab:
         assert resp.status_code == 302
         assert "/login" in resp.headers["Location"]
 
-    def test_movies_page_hides_inactive_alerts(self, app, auth_client, sample_movie, sample_theater, sample_user):
+    def test_movies_page_persists_after_alert_fires(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        """Movies must remain visible even after the alert fires (is_active=False)."""
         with app.app_context():
             pref = AlertPreference(user_id=sample_user, theater_id=sample_theater, is_active=False)
             db.session.add(pref)
@@ -3445,7 +3446,7 @@ class TestMoviesTab:
 
         resp = auth_client.get("/movies")
         assert resp.status_code == 200
-        assert b"Interstellar IMAX" not in resp.data
+        assert b"Interstellar IMAX" in resp.data
 
     def test_movies_page_excludes_any_movie_alerts(self, app, auth_client, sample_theater, sample_user):
         """An alert with no AlertMovies (any-movie) should not appear on the movies tab."""
@@ -3561,3 +3562,16 @@ class TestMovieDetail:
         assert resp.status_code == 200
         assert b"Your Alerts" in resp.data
         assert b"Test IMAX Theater" in resp.data
+
+    def test_movie_detail_accessible_after_alert_fires(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        """Detail page must remain accessible after an alert fires (is_active=False)."""
+        with app.app_context():
+            pref = AlertPreference(user_id=sample_user, theater_id=sample_theater, is_active=False)
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Interstellar IMAX" in resp.data

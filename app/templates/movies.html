@@ -27,7 +27,9 @@
       </div>
       <div class="movie-stats">
         <span class="movie-stat"><strong>{{ item.alert_count }}</strong> alert{{ 's' if item.alert_count != 1 else '' }}</span>
+        {% if item.theater_count %}
         <span class="movie-stat"><strong>{{ item.theater_count }}</strong> theater{{ 's' if item.theater_count != 1 else '' }}</span>
+        {% endif %}
       </div>
       {% if item.next_dt %}
       <div class="movie-next-showtime">

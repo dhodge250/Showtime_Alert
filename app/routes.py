@@ -368,16 +368,14 @@ def profile_mfa_disable():
 @main_bp.route("/movies")
 @login_required
 def movies():
-    """Movies tab — lists all movies the current user has active alerts for."""
+    """Movies tab — all movies the user has ever had an alert for, regardless of alert status."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
+    # Include movies from fired/deleted alerts so tiles persist beyond the alert lifecycle
     rows = (
         db.session.query(AlertMovie.movie_id, func.count(AlertMovie.id).label("alert_count"))
         .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
-        .filter(
-            AlertPreference.user_id == current_user.id,
-            AlertPreference.is_active.is_(True),
-        )
+        .filter(AlertPreference.user_id == current_user.id)
         .group_by(AlertMovie.movie_id)
         .all()
     )
@@ -397,13 +395,19 @@ def movies():
     )
     next_dt_map = {r.movie_id: r.next_dt for r in next_dt_rows}
 
+    # Count distinct theaters the user has configured alerts for (not showtime theaters)
     theater_count_rows = (
         db.session.query(
-            Showtime.movie_id,
-            func.count(func.distinct(Showtime.theater_id)).label("cnt"),
+            AlertMovie.movie_id,
+            func.count(func.distinct(AlertPreference.theater_id)).label("cnt"),
         )
-        .filter(Showtime.movie_id.in_(movie_ids), Showtime.show_datetime >= now)
-        .group_by(Showtime.movie_id)
+        .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
+        .filter(
+            AlertMovie.movie_id.in_(movie_ids),
+            AlertPreference.user_id == current_user.id,
+            AlertPreference.theater_id.isnot(None),
+        )
+        .group_by(AlertMovie.movie_id)
         .all()
     )
     theater_counts = {r.movie_id: r.cnt for r in theater_count_rows}
@@ -438,13 +442,12 @@ def movie_detail(movie_id):
     movie = Movie.query.get_or_404(movie_id)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # Only show movies the current user is actively tracking
+    # Allow access to any movie the user has ever tracked, regardless of alert status
     has_alert = (
         db.session.query(AlertMovie.id)
         .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
         .filter(
             AlertPreference.user_id == current_user.id,
-            AlertPreference.is_active.is_(True),
             AlertMovie.movie_id == movie_id,
         )
         .first()
