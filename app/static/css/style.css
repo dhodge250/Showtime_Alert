@@ -1725,6 +1725,8 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 /* Navbar stays dark in light mode — cinema marquee on black */
 /* ALERT wordmark needs explicit white so --text-primary (#0C0E14) doesn't vanish on dark nav */
 [data-theme="light"] .nav-title { color: #fff; }
+/* Login brand panel has a hardcoded dark gradient — keep title white in light mode */
+[data-theme="light"] .login-brand-panel .login-title { color: #FFFFFF; }
 [data-theme="light"] .nav-links a {
   color: rgba(255, 255, 255, 0.6);
 }

@@ -3575,3 +3575,77 @@ class TestMovieDetail:
         resp = auth_client.get(f"/movies/{sample_movie}")
         assert resp.status_code == 200
         assert b"Interstellar IMAX" in resp.data
+
+
+class TestRadiusAlert:
+    """Tests for radius-based alert creation and target resolution."""
+
+    def _set_user_location(self, user_id, lat, lng):
+        user = User.query.get(user_id)
+        user.location_lat = lat
+        user.location_lon = lng
+        db.session.commit()
+
+    def test_create_radius_alert_requires_location(self, app, auth_client, sample_user, sample_movie):
+        """API rejects radius alert when user has no saved location."""
+        resp = auth_client.post("/api/alerts", json={
+            "user_id": sample_user,
+            "radius_km": 100.0,
+            "movie_ids": [],
+        })
+        assert resp.status_code == 400
+        assert b"location" in resp.data.lower()
+
+    def test_create_radius_alert_succeeds_with_location(self, app, auth_client, sample_user, sample_movie):
+        """Radius alert is created when user has a saved location."""
+        # Set location directly in the active fixture context (no nested context push)
+        self._set_user_location(sample_user, 34.05, -118.24)
+        resp = auth_client.post("/api/alerts", json={
+            "user_id": sample_user,
+            "radius_km": 200.0,
+            "tmdb_ids": [],
+        })
+        assert resp.status_code == 201, resp.get_json()
+        data = resp.get_json()
+        assert data["radius_km"] == 200.0
+        assert data["theater_id"] is None
+
+    def test_create_radius_alert_invalid_radius(self, app, auth_client, sample_user):
+        """API rejects non-positive radius."""
+        self._set_user_location(sample_user, 34.05, -118.24)
+        resp = auth_client.post("/api/alerts", json={
+            "user_id": sample_user,
+            "radius_km": -5.0,
+        })
+        assert resp.status_code == 400
+
+    def test_get_active_targets_includes_nearby_theater(self, app, sample_user, sample_theater, sample_movie):
+        """_get_active_targets expands a radius alert into specific theater IDs."""
+        from app.scrapers.base import _get_active_targets
+        # Theater is at (34.05, -118.24); put user at same location → 0 km away
+        with app.app_context():
+            self._set_user_location(sample_user, 34.05, -118.24)
+            pref = AlertPreference(user_id=sample_user, radius_km=50.0, is_active=True, alert_sent=False)
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+            targets = _get_active_targets()
+
+        assert sample_theater in targets
+        assert sample_movie in targets[sample_theater]
+
+    def test_get_active_targets_excludes_far_theater(self, app, sample_user, sample_theater, sample_movie):
+        """_get_active_targets does not include theaters outside the radius."""
+        from app.scrapers.base import _get_active_targets
+        # Put user far away (New York area) so theater in LA is outside 50 km
+        with app.app_context():
+            self._set_user_location(sample_user, 40.71, -74.01)
+            pref = AlertPreference(user_id=sample_user, radius_km=50.0, is_active=True, alert_sent=False)
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+            targets = _get_active_targets()
+
+        assert sample_theater not in targets

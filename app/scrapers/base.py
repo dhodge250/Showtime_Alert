@@ -3,6 +3,7 @@ Base scraper class, shared helpers, and maintenance utilities.
 """
 import json
 import logging
+import math
 import re
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -11,7 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from app import db
-from app.models import AlertMovie, AlertPreference, Movie, Showtime, Theater
+from app.models import AlertMovie, AlertPreference, Movie, Showtime, Theater, User
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,16 @@ REQUEST_TIMEOUT = 15
 # Alert-driven target resolution
 # ---------------------------------------------------------------------------
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lat/lng points."""
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 def _get_active_targets() -> dict:
     """
     Return {theater_id: set[movie_id]} for all active, unsent alerts.
@@ -42,6 +53,8 @@ def _get_active_targets() -> dict:
       movie_id=None    → "any movie" sentinel (alert has no AlertMovie rows).
       movie_id=N       → track only this movie at the keyed theater.
 
+    Radius alerts expand into their covered theater IDs at resolution time.
+    Theaters without geocoded coordinates are excluded from radius matching.
     Keeping movies scoped per theater prevents a "any movie at theater A" alert
     from causing unrelated movies to be recorded at theater B.
     """
@@ -50,6 +63,30 @@ def _get_active_targets() -> dict:
     targets: dict = {}
 
     for pref in active_prefs:
+        # --- radius-based alert ---
+        if pref.radius_km is not None:
+            user = User.query.get(pref.user_id)
+            if user is None or user.location_lat is None or user.location_lon is None:
+                continue
+            theaters_in_radius = [
+                t for t in Theater.query.filter_by(is_active=True).all()
+                if t.latitude is not None and t.longitude is not None
+                and _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= pref.radius_km
+            ]
+            movie_ids: set = set()
+            am_count = pref.alert_movies.count()
+            if am_count == 0:
+                movie_ids.add(None)
+            else:
+                for am in pref.alert_movies.filter_by(alert_sent=False).all():
+                    movie_ids.add(am.movie_id)
+            for theater in theaters_in_radius:
+                if theater.id not in targets:
+                    targets[theater.id] = set()
+                targets[theater.id] |= movie_ids
+            continue
+
+        # --- specific or any-theater alert ---
         tid = pref.theater_id  # None = any theater
         if tid not in targets:
             targets[tid] = set()
