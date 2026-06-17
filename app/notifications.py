@@ -537,10 +537,15 @@ def process_new_showtimes(app, new_showtimes: list[Showtime]) -> int:
     if not new_showtimes:
         return 0
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    future_showtimes = [st for st in new_showtimes if st.show_datetime >= now]
+    if not future_showtimes:
+        return 0
+
     prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
     sent = 0
     for pref in prefs:
-        matching = _get_matching_showtimes_for_pref(pref, new_showtimes)
+        matching = _get_matching_showtimes_for_pref(pref, future_showtimes)
         if matching:
             sent += _notify_for_alert(app, pref, matching)
     return sent
@@ -558,9 +563,10 @@ def process_pending_alerts(app) -> int:
     if not prefs:
         return 0
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     sent = 0
     for pref in prefs:
-        q = Showtime.query
+        q = Showtime.query.filter(Showtime.show_datetime >= now)
         if pref.radius_km is not None:
             nearby = _radius_theater_ids(pref)
             if not nearby:
