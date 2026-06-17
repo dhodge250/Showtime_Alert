@@ -563,9 +563,20 @@ def process_pending_alerts(app) -> int:
     if not prefs:
         return 0
 
+    from datetime import timedelta
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Radius alerts fired by process_pending_alerts (existing DB data) before the
+    # scraper has visited every in-radius theater produce incomplete notifications.
+    # Give radius alerts a 35-minute grace period so the 30-minute scraper cycle
+    # has time to collect fresh data from all in-radius theaters first.
+    # process_new_showtimes handles genuinely new showtimes without this delay.
+    _RADIUS_GRACE = timedelta(minutes=35)
     sent = 0
     for pref in prefs:
+        if pref.radius_km is not None and pref.created_at is not None:
+            age = now - pref.created_at.replace(tzinfo=None)
+            if age < _RADIUS_GRACE:
+                continue
         q = Showtime.query.filter(Showtime.show_datetime >= now)
         if pref.radius_km is not None:
             nearby = _radius_theater_ids(pref)
