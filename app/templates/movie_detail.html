@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}{{ movie.title }} – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('main.movies') }}" class="back-link">← Back to Movies</a>
+  <h1>{{ movie.title }}</h1>
+  {% if tmdb_extra.tagline %}
+  <p class="subtitle">{{ tmdb_extra.tagline }}</p>
+  {% endif %}
+</div>
+
+<div class="detail-grid" style="margin-bottom:24px">
+  <!-- ── Movie Info card ──────────────────────────────────────────────── -->
+  <section class="card movie-detail-info">
+    <div class="movie-detail-header">
+      {% set poster = tmdb_extra.poster_url or movie.poster_url %}
+      {% if poster %}
+      <img class="movie-detail-poster" src="{{ poster }}" alt="{{ movie.title }} poster">
+      {% else %}
+      <div class="movie-detail-poster movie-poster-placeholder">&#127916;</div>
+      {% endif %}
+      <div class="movie-detail-meta">
+        <div class="info-grid">
+          {% if movie.release_date %}
+          <div class="info-item">
+            <span class="info-label">Release Date</span>
+            <span class="info-value">{{ movie.release_date.strftime('%B %d, %Y') }}</span>
+          </div>
+          {% endif %}
+          {% if movie.runtime_minutes or tmdb_extra.runtime %}
+          <div class="info-item">
+            <span class="info-label">Runtime</span>
+            <span class="info-value">{{ movie.runtime_minutes or tmdb_extra.runtime }} min</span>
+          </div>
+          {% endif %}
+          {% if tmdb_extra.genres %}
+          <div class="info-item">
+            <span class="info-label">Genres</span>
+            <span class="info-value">{{ tmdb_extra.genres | join(', ') }}</span>
+          </div>
+          {% elif movie.genre %}
+          <div class="info-item">
+            <span class="info-label">Genre</span>
+            <span class="info-value">{{ movie.genre }}</span>
+          </div>
+          {% endif %}
+          {% if movie.rating %}
+          <div class="info-item">
+            <span class="info-label">Rating</span>
+            <span class="info-value">{{ movie.rating }}</span>
+          </div>
+          {% endif %}
+          {% if tmdb_extra.vote_average %}
+          <div class="info-item">
+            <span class="info-label">TMDB Score</span>
+            <span class="info-value">{{ "%.1f"|format(tmdb_extra.vote_average) }} / 10</span>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% set overview = movie.description or tmdb_extra.overview %}
+    {% if overview %}
+    <p class="movie-detail-overview">{{ overview }}</p>
+    {% endif %}
+
+    {% if movie.tmdb_id or tmdb_extra.imdb_id %}
+    <div class="movie-detail-links">
+      {% if movie.tmdb_id %}
+      <a href="https://www.themoviedb.org/movie/{{ movie.tmdb_id }}" target="_blank" rel="noopener" class="btn btn-outline btn-sm">TMDB</a>
+      {% endif %}
+      {% if tmdb_extra.imdb_id %}
+      <a href="https://www.imdb.com/title/{{ tmdb_extra.imdb_id }}/" target="_blank" rel="noopener" class="btn btn-outline btn-sm">IMDb</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- ── Alerts card ──────────────────────────────────────────────────── -->
+  <section class="card">
+    <h2>Your Alerts</h2>
+    {% if user_alerts %}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr><th>Theater</th><th>Status</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+          {% for pref in user_alerts %}
+          <tr>
+            <td>
+              {% if pref.theater %}
+              <strong>{{ pref.theater.name }}</strong>
+              {% else %}
+              <span class="text-muted">Any Theater</span>
+              {% endif %}
+            </td>
+            <td>
+              {% set am = pref.alert_movies.filter_by(movie_id=movie.id).first() %}
+              {% if am and am.alert_sent %}
+              <span class="status-badge status-active">Sent</span>
+              {% else %}
+              <span class="status-badge" style="background:rgba(0,212,255,0.12);color:var(--accent)">Watching</span>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{{ url_for('main.alert_detail', pref_id=pref.id) }}" class="btn btn-ghost btn-sm">View</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted">No active alerts for this movie.</p>
+    {% endif %}
+  </section>
+</div>
+
+<!-- ── Showtimes card ────────────────────────────────────────────────── -->
+<section class="card">
+  <h2>Upcoming Showtimes</h2>
+  {% if showtimes %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Theater</th>
+          <th>Format</th>
+          <th>Date / Time <span class="text-muted" style="font-size:11px;font-weight:400">(local theater time)</span></th>
+          <th>Tickets</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for st in showtimes %}
+        <tr>
+          <td>
+            <strong>{{ st.theater.name if st.theater else '–' }}</strong>
+            {% if st.theater and (st.theater.city or st.theater.state) %}
+            <div class="text-muted" style="font-size:12px">
+              {{ [st.theater.city, st.theater.state] | select | join(', ') }}
+            </div>
+            {% endif %}
+          </td>
+          <td><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
+          <td>{{ st.show_datetime.strftime('%a, %b %d, %Y at %I:%M %p') }}</td>
+          <td>
+            {% if st.tickets_url %}
+            <a href="{{ st.tickets_url }}" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Buy</a>
+            {% else %}
+            <span class="text-muted">–</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted">No upcoming showtimes found at your tracked theaters.</p>
+  {% endif %}
+</section>
+{% endblock %}

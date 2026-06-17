@@ -3401,3 +3401,163 @@ class TestUserInvite:
         assert resp.status_code == 200
         with app.app_context():
             assert UserInvite.query.get(invite_id) is None
+
+
+# ── Movies tab (#29) ──────────────────────────────────────────────────
+
+
+class TestMoviesTab:
+    def _make_alert_with_movie(self, app, user_id, theater_id, movie_id):
+        """Helper: create an active AlertPreference with one AlertMovie."""
+        pref = AlertPreference(user_id=user_id, theater_id=theater_id, is_active=True)
+        db.session.add(pref)
+        db.session.flush()
+        am = AlertMovie(alert_id=pref.id, movie_id=movie_id)
+        db.session.add(am)
+        db.session.commit()
+        return pref.id
+
+    def test_movies_page_loads_empty(self, auth_client):
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        assert b"No tracked movies" in resp.data or b"My Movies" in resp.data
+
+    def test_movies_page_shows_tracked_movie(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        assert b"Interstellar IMAX" in resp.data
+
+    def test_movies_page_unauthenticated_redirects(self, client):
+        resp = client.get("/movies")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
+
+    def test_movies_page_hides_inactive_alerts(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        with app.app_context():
+            pref = AlertPreference(user_id=sample_user, theater_id=sample_theater, is_active=False)
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        assert b"Interstellar IMAX" not in resp.data
+
+    def test_movies_page_excludes_any_movie_alerts(self, app, auth_client, sample_theater, sample_user):
+        """An alert with no AlertMovies (any-movie) should not appear on the movies tab."""
+        with app.app_context():
+            pref = AlertPreference(user_id=sample_user, theater_id=sample_theater, is_active=True)
+            db.session.add(pref)
+            db.session.commit()
+
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        # Page loads fine; no movie rows since no AlertMovie rows exist
+        assert b"No tracked movies" in resp.data or b"My Movies" in resp.data
+
+    def test_movies_page_shows_next_showtime(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        from datetime import datetime, timezone, timedelta
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+            future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=5)
+            st = Showtime(
+                theater_id=sample_theater,
+                movie_id=sample_movie,
+                show_datetime=future,
+                tickets_available=True,
+                format_type="IMAX",
+            )
+            db.session.add(st)
+            db.session.commit()
+
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        assert b"Next:" in resp.data
+
+
+# ── Movie detail page (#30) ───────────────────────────────────────────
+
+
+class TestMovieDetail:
+    def _make_alert_with_movie(self, app, user_id, theater_id, movie_id):
+        pref = AlertPreference(user_id=user_id, theater_id=theater_id, is_active=True)
+        db.session.add(pref)
+        db.session.flush()
+        am = AlertMovie(alert_id=pref.id, movie_id=movie_id)
+        db.session.add(am)
+        db.session.commit()
+        return pref.id
+
+    def test_movie_detail_loads(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Interstellar IMAX" in resp.data
+
+    def test_movie_detail_404_not_tracked(self, auth_client, sample_movie):
+        # Movie exists but user has no alert for it
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 404
+
+    def test_movie_detail_404_unknown_movie(self, auth_client):
+        resp = auth_client.get("/movies/9999")
+        assert resp.status_code == 404
+
+    def test_movie_detail_unauthenticated_redirects(self, client, sample_movie):
+        resp = client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
+
+    def test_movie_detail_shows_showtimes(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        from datetime import datetime, timezone, timedelta
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+            future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=3)
+            st = Showtime(
+                theater_id=sample_theater,
+                movie_id=sample_movie,
+                show_datetime=future,
+                tickets_available=True,
+                format_type="IMAX",
+            )
+            db.session.add(st)
+            db.session.commit()
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Upcoming Showtimes" in resp.data
+        assert b"Test IMAX Theater" in resp.data
+
+    def test_movie_detail_hides_past_showtimes(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        from datetime import datetime, timezone, timedelta
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+            past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+            st = Showtime(
+                theater_id=sample_theater,
+                movie_id=sample_movie,
+                show_datetime=past,
+                tickets_available=True,
+                format_type="IMAX",
+            )
+            db.session.add(st)
+            db.session.commit()
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"No upcoming showtimes" in resp.data
+
+    def test_movie_detail_shows_alerts_section(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Your Alerts" in resp.data
+        assert b"Test IMAX Theater" in resp.data

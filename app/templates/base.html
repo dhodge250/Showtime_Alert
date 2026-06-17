@@ -31,8 +31,9 @@
     <ul class="nav-links">
       <li><a href="{{ url_for('main.index') }}" {% if request.endpoint == 'main.index' %}class="active"{% endif %}>Dashboard</a></li>
       <li><a href="{{ url_for('main.theaters') }}" {% if request.endpoint in ['main.theaters','main.theater_detail'] %}class="active"{% endif %}>Theaters</a></li>
-      <li><a href="{{ url_for('main.alerts') }}" {% if request.endpoint == 'main.alerts' %}class="active"{% endif %}>Alerts</a></li>
-      <li><a href="{{ url_for('main.profile') }}" {% if request.endpoint == 'main.profile' %}class="active"{% endif %}>Profile</a></li>
+      <li><a href="{{ url_for('main.alerts') }}" {% if request.endpoint in ['main.alerts','main.alert_detail'] %}class="active"{% endif %}>Alerts</a></li>
+      <li><a href="{{ url_for('main.movies') }}" {% if request.endpoint in ['main.movies','main.movie_detail'] %}class="active"{% endif %}>Movies</a></li>
+      <li><a href="{{ url_for('main.profile') }}" {% if request.endpoint in ['main.profile','main.profile_mfa_setup'] %}class="active"{% endif %}>Profile</a></li>
       {% if current_user.is_authenticated and current_user.role_name in ['admin', 'editor'] %}
       <li><a href="{{ url_for('main.admin_theaters') }}" {% if request.endpoint and request.endpoint.startswith('main.admin') %}class="active"{% endif %}>Admin</a></li>
       {% endif %}

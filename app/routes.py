@@ -15,6 +15,7 @@ from flask import (
 )
 from flask import flash
 from flask_login import current_user, login_required
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from app import db
@@ -358,6 +359,146 @@ def profile_mfa_disable():
     write_log("auth", f"MFA disabled by {user.email}", user_id=user.id)
     flash("Multi-factor authentication has been disabled.", "success")
     return redirect(url_for("main.profile"))
+
+
+# ---------------------------------------------------------------------------
+# Movies: user-scoped tracked movie list and detail
+# ---------------------------------------------------------------------------
+
+@main_bp.route("/movies")
+@login_required
+def movies():
+    """Movies tab — lists all movies the current user has active alerts for."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    rows = (
+        db.session.query(AlertMovie.movie_id, func.count(AlertMovie.id).label("alert_count"))
+        .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
+        .filter(
+            AlertPreference.user_id == current_user.id,
+            AlertPreference.is_active.is_(True),
+        )
+        .group_by(AlertMovie.movie_id)
+        .all()
+    )
+
+    if not rows:
+        return render_template("movies.html", movie_list=[])
+
+    movie_ids = [r.movie_id for r in rows]
+    alert_counts = {r.movie_id: r.alert_count for r in rows}
+    movies_map = {m.id: m for m in Movie.query.filter(Movie.id.in_(movie_ids)).all()}
+
+    next_dt_rows = (
+        db.session.query(Showtime.movie_id, func.min(Showtime.show_datetime).label("next_dt"))
+        .filter(Showtime.movie_id.in_(movie_ids), Showtime.show_datetime >= now)
+        .group_by(Showtime.movie_id)
+        .all()
+    )
+    next_dt_map = {r.movie_id: r.next_dt for r in next_dt_rows}
+
+    theater_count_rows = (
+        db.session.query(
+            Showtime.movie_id,
+            func.count(func.distinct(Showtime.theater_id)).label("cnt"),
+        )
+        .filter(Showtime.movie_id.in_(movie_ids), Showtime.show_datetime >= now)
+        .group_by(Showtime.movie_id)
+        .all()
+    )
+    theater_counts = {r.movie_id: r.cnt for r in theater_count_rows}
+
+    movie_list = []
+    for mid in movie_ids:
+        movie = movies_map.get(mid)
+        if not movie:
+            continue
+        movie_list.append({
+            "movie": movie,
+            "alert_count": alert_counts.get(mid, 0),
+            "theater_count": theater_counts.get(mid, 0),
+            "next_dt": next_dt_map.get(mid),
+        })
+
+    movie_list.sort(key=lambda x: (
+        x["next_dt"] is None,
+        x["next_dt"] or datetime.max,
+        x["movie"].title.lower(),
+    ))
+
+    return render_template("movies.html", movie_list=movie_list)
+
+
+@main_bp.route("/movies/<int:movie_id>")
+@login_required
+def movie_detail(movie_id):
+    """Movie detail page — showtimes and alerts for one tracked movie."""
+    from app import tmdb as tmdb_mod
+
+    movie = Movie.query.get_or_404(movie_id)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Only show movies the current user is actively tracking
+    has_alert = (
+        db.session.query(AlertMovie.id)
+        .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
+        .filter(
+            AlertPreference.user_id == current_user.id,
+            AlertPreference.is_active.is_(True),
+            AlertMovie.movie_id == movie_id,
+        )
+        .first()
+    )
+    if not has_alert:
+        abort(404)
+
+    tracked_theater_ids = [
+        r[0] for r in
+        db.session.query(AlertPreference.theater_id)
+        .join(AlertMovie, AlertMovie.alert_id == AlertPreference.id)
+        .filter(
+            AlertPreference.user_id == current_user.id,
+            AlertPreference.is_active.is_(True),
+            AlertMovie.movie_id == movie_id,
+            AlertPreference.theater_id.isnot(None),
+        )
+        .distinct()
+        .all()
+    ]
+
+    showtimes_q = (
+        Showtime.query
+        .options(joinedload(Showtime.theater))
+        .filter(Showtime.movie_id == movie_id, Showtime.show_datetime >= now)
+        .order_by(Showtime.show_datetime)
+    )
+    if tracked_theater_ids:
+        showtimes_q = showtimes_q.filter(Showtime.theater_id.in_(tracked_theater_ids))
+    showtimes = showtimes_q.all()
+
+    user_alerts = (
+        AlertPreference.query
+        .join(AlertMovie, AlertMovie.alert_id == AlertPreference.id)
+        .filter(
+            AlertPreference.user_id == current_user.id,
+            AlertPreference.is_active.is_(True),
+            AlertMovie.movie_id == movie_id,
+        )
+        .options(joinedload(AlertPreference.theater))
+        .all()
+    )
+
+    tmdb_extra = {}
+    if movie.tmdb_id and tmdb_mod.is_configured():
+        tmdb_extra = tmdb_mod.get_movie_details(movie.tmdb_id)
+
+    return render_template(
+        "movie_detail.html",
+        movie=movie,
+        showtimes=showtimes,
+        user_alerts=user_alerts,
+        tmdb_extra=tmdb_extra,
+    )
 
 
 # ---------------------------------------------------------------------------

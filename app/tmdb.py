@@ -140,9 +140,11 @@ def get_movie_details(tmdb_id: int) -> dict:
         )
         return {}
 
+    genres = [g["name"] for g in data.get("genres", [])]
     return {
         "title": data.get("title", ""),
         "overview": data.get("overview", ""),
+        "tagline": data.get("tagline", ""),
         "release_date": data.get("release_date"),
         "runtime": data.get("runtime"),
         # NOTE: MPAA certification requires append_to_response=release_dates.
@@ -152,6 +154,9 @@ def get_movie_details(tmdb_id: int) -> dict:
             (TMDB_IMG + data["poster_path"]) if data.get("poster_path") else ""
         ),
         "tmdb_id": data.get("id"),
+        "imdb_id": data.get("imdb_id", ""),
+        "vote_average": data.get("vote_average"),
+        "genres": genres,
     }
 
 
