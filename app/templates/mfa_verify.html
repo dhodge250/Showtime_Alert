@@ -35,8 +35,8 @@
           <div class="form-group" id="code-group">
             <label for="code" id="code-label">Authenticator code</label>
             <input type="text" id="code" name="code" class="form-control"
-                   placeholder="6-digit code" inputmode="numeric" pattern="[0-9 A-Fa-f]{5,10}"
-                   autocomplete="one-time-code" maxlength="10" autofocus required />
+                   placeholder="6-digit code" inputmode="numeric" pattern="[0-9]{6}"
+                   autocomplete="one-time-code" maxlength="6" autofocus required />
           </div>
 
           <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px">Verify</button>
@@ -55,13 +55,16 @@
 
   <script>
     function switchToRecovery() {
+      var input = document.getElementById('code');
       document.getElementById('use-recovery-flag').value = '1';
       document.getElementById('code-label').textContent = 'Recovery code';
       document.getElementById('mfa-sub').textContent = 'Enter one of your 8-character recovery codes.';
-      document.getElementById('code').placeholder = 'Recovery code';
-      document.getElementById('code').removeAttribute('pattern');
-      document.getElementById('code').removeAttribute('inputmode');
-      document.getElementById('code').focus();
+      input.placeholder = '8-character recovery code';
+      input.pattern = '[0-9A-Fa-f]{8}';
+      input.maxLength = 8;
+      input.removeAttribute('inputmode');
+      input.autocomplete = 'off';
+      input.focus();
     }
   </script>
 </body>

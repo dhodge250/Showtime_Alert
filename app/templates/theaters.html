@@ -340,7 +340,7 @@
     const comm   = document.getElementById('filter-commercial').value;
     const sortBy = document.getElementById('filter-sort').value;
 
-    const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm);
+    const filtersActive = !!(search || co || st || ci || ar || pt || cont || comm || _viewportFilterActive);
     document.getElementById('btn-clear').disabled = !filtersActive;
 
     const mapBounds = _viewportFilterActive ? map.getBounds() : null;
@@ -359,7 +359,7 @@
       if (mapBounds) {
         const lat = parseFloat(card.dataset.lat);
         const lng = parseFloat(card.dataset.lng);
-        if (!lat || !lng) return false;
+        if (!isFinite(lat) || !isFinite(lng)) return false;
         if (!mapBounds.contains([lat, lng])) return false;
       }
       return true;

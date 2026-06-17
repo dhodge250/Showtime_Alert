@@ -63,7 +63,7 @@
           <td>{{ inv.expires_at.strftime('%Y-%m-%d %H:%M') }} UTC</td>
           <td class="admin-actions">
             <form method="POST" action="{{ url_for('main.admin_invite_revoke', invite_id=inv.id) }}"
-                  style="display:inline" onsubmit="return confirm('Revoke invite for {{ inv.email }}?')">
+                  style="display:inline" onsubmit="return confirm('Revoke invite for ' + {{ inv.email | tojson }} + '?')">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="btn-sm btn-danger">Revoke</button>
             </form>
@@ -135,7 +135,7 @@
           {% if u.is_active and u.id != current_user.id %}
           <form method="post" action="{{ url_for('main.admin_user_delete', user_id=u.id) }}"
                 style="display:inline"
-                onsubmit="return confirm('Deactivate {{ u.name }}?')">
+                onsubmit="return confirm('Deactivate ' + {{ u.name | tojson }} + '?')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn-sm btn-danger">Deactivate</button>
           </form>

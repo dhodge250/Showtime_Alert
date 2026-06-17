@@ -2,7 +2,7 @@
 import pytest
 
 from app import create_app, db
-from app.models import AlertMovie, AlertPreference, Movie, Notification, Role, Settings, Showtime, Theater, User
+from app.models import AlertMovie, AlertPreference, Movie, Notification, Role, Settings, Showtime, Theater, User, UserInvite
 
 
 @pytest.fixture(scope="session")
@@ -3197,3 +3197,207 @@ class TestSessionPing:
         resp = auth_client.get("/admin/settings")
         assert resp.status_code == 200
         assert b"session_timeout_minutes" in resp.data or b"idle timeout" in resp.data.lower()
+
+
+# ── v1.16: MFA (TOTP) flows (#25) ────────────────────────────────────
+
+
+class TestMFA:
+    def test_mfa_verify_page_requires_pending_session(self, client):
+        resp = client.get("/mfa-verify", follow_redirects=False)
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
+
+    def test_login_with_mfa_enabled_redirects_to_verify(self, app, client):
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            user.generate_mfa_secret()
+            user.mfa_enabled = True
+            db.session.commit()
+
+        resp = client.post(
+            "/login",
+            data={"email": "admin", "password": "admin"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert "/mfa-verify" in resp.headers["Location"]
+
+    def test_mfa_verify_valid_totp_completes_login(self, app, client):
+        import pyotp
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            secret = user.generate_mfa_secret()
+            user.mfa_enabled = True
+            user.force_password_change = False
+            db.session.commit()
+
+        client.post("/login", data={"email": "admin", "password": "admin"})
+        code = pyotp.TOTP(secret).now()
+        resp = client.post("/mfa-verify", data={"code": code, "use_recovery": "0"},
+                           follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"Dashboard" in resp.data or b"Theaters" in resp.data or b"Alerts" in resp.data
+
+    def test_mfa_verify_invalid_code_shows_error(self, app, client):
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            user.generate_mfa_secret()
+            user.mfa_enabled = True
+            db.session.commit()
+
+        client.post("/login", data={"email": "admin", "password": "admin"})
+        resp = client.post("/mfa-verify", data={"code": "000000", "use_recovery": "0"},
+                           follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"Invalid" in resp.data
+
+    def test_mfa_verify_valid_recovery_code_completes_login(self, app, client):
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            user.generate_mfa_secret()
+            user.mfa_enabled = True
+            user.force_password_change = False
+            raw_codes = user.generate_recovery_codes()
+            db.session.commit()
+            first_code = raw_codes[0]
+
+        client.post("/login", data={"email": "admin", "password": "admin"})
+        resp = client.post(
+            "/mfa-verify",
+            data={"code": first_code, "use_recovery": "1"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert b"Dashboard" in resp.data or b"Theaters" in resp.data or b"Alerts" in resp.data
+
+        # Recovery code must be consumed — using same code again must fail
+        client.post("/logout")
+        client.post("/login", data={"email": "admin", "password": "admin"})
+        resp2 = client.post(
+            "/mfa-verify",
+            data={"code": first_code, "use_recovery": "1"},
+            follow_redirects=True,
+        )
+        assert b"Invalid" in resp2.data
+
+    def test_mfa_setup_page_loads(self, auth_client):
+        resp = auth_client.get("/profile/mfa-setup")
+        assert resp.status_code == 200
+        assert b"authenticator" in resp.data.lower() or b"MFA" in resp.data
+
+    def test_mfa_disable_requires_correct_password(self, app, auth_client):
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            user.generate_mfa_secret()
+            user.mfa_enabled = True
+            db.session.commit()
+
+        resp = auth_client.post(
+            "/profile/mfa-disable",
+            data={"password": "wrongpassword"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            assert user.mfa_enabled is True
+
+    def test_mfa_disable_with_correct_password(self, app, auth_client):
+        # Setup in the outer session (same session the route will use) to avoid
+        # stale identity-map state caused by Flask-SQLAlchemy's per-AppContext scoping.
+        user = User.query.filter_by(email="admin").first()
+        user.generate_mfa_secret()
+        user.mfa_enabled = True
+        db.session.commit()
+
+        resp = auth_client.post(
+            "/profile/mfa-disable",
+            data={"password": "admin"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        with app.app_context():
+            user = User.query.filter_by(email="admin").first()
+            assert not user.mfa_enabled
+            assert user.mfa_secret is None
+
+
+# ── v1.16: User invite flows (#23) ───────────────────────────────────
+
+
+class TestUserInvite:
+    def test_accept_invite_invalid_token_shows_expired(self, client):
+        resp = client.get("/accept-invite/notarealtoken")
+        assert resp.status_code == 200
+        assert b"invalid" in resp.data.lower() or b"expired" in resp.data.lower()
+
+    def test_accept_invite_valid_token_shows_form(self, app, client):
+        with app.app_context():
+            role = Role.query.filter_by(name="user").first()
+            invite, raw_token = UserInvite.create(
+                email="newuser@example.com", role_id=role.id, created_by_id=None
+            )
+            db.session.add(invite)
+            db.session.commit()
+
+        resp = client.get(f"/accept-invite/{raw_token}")
+        assert resp.status_code == 200
+        assert b"newuser@example.com" in resp.data
+
+    def test_accept_invite_creates_user(self, app, client):
+        with app.app_context():
+            role = Role.query.filter_by(name="user").first()
+            invite, raw_token = UserInvite.create(
+                email="invited@example.com", role_id=role.id, created_by_id=None
+            )
+            db.session.add(invite)
+            db.session.commit()
+
+        resp = client.post(
+            f"/accept-invite/{raw_token}",
+            data={
+                "name": "New User",
+                "password": "Invite1!Pass",
+                "confirm_password": "Invite1!Pass",
+            },
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        with app.app_context():
+            user = User.query.filter_by(email="invited@example.com").first()
+            assert user is not None
+            assert user.name == "New User"
+            invite_db = UserInvite.query.filter_by(email="invited@example.com").first()
+            assert invite_db.accepted_at is not None
+
+    def test_accept_invite_expired_token_rejected(self, app, client):
+        from datetime import datetime, timedelta, timezone
+        with app.app_context():
+            role = Role.query.filter_by(name="user").first()
+            invite, raw_token = UserInvite.create(
+                email="expired@example.com", role_id=role.id, created_by_id=None
+            )
+            invite.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+            db.session.add(invite)
+            db.session.commit()
+
+        resp = client.get(f"/accept-invite/{raw_token}")
+        assert resp.status_code == 200
+        assert b"invalid" in resp.data.lower() or b"expired" in resp.data.lower()
+
+    def test_admin_invite_revoke(self, app, auth_client):
+        with app.app_context():
+            role = Role.query.filter_by(name="user").first()
+            invite, _ = UserInvite.create(
+                email="torevoke@example.com", role_id=role.id, created_by_id=None
+            )
+            db.session.add(invite)
+            db.session.commit()
+            invite_id = invite.id
+
+        resp = auth_client.post(f"/admin/users/invites/{invite_id}/revoke",
+                                follow_redirects=True)
+        assert resp.status_code == 200
+        with app.app_context():
+            assert UserInvite.query.get(invite_id) is None

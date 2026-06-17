@@ -290,6 +290,8 @@ def profile_mfa_setup():
             return render_template("mfa_setup.html", user=user, step="confirm",
                                    qr_image=qr_image, secret=user.mfa_secret)
         elif action == "confirm":
+            if not user.mfa_secret:
+                return redirect(url_for("main.profile_mfa_setup"))
             code = request.form.get("totp_code", "").strip()
             if user.verify_totp(code):
                 user.mfa_enabled = True

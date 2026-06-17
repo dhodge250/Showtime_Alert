@@ -660,8 +660,8 @@ class User(db.Model, UserMixin):
         return pyotp.TOTP(self.mfa_secret).verify(code, valid_window=1)
 
     def generate_recovery_codes(self, count: int = 8) -> list[str]:
-        """Generate *count* plaintext recovery codes, store hashed, return plaintext."""
-        raw_codes = [secrets.token_hex(5).upper() for _ in range(count)]
+        """Generate *count* 8-character plaintext recovery codes, store hashed, return plaintext."""
+        raw_codes = [secrets.token_hex(4).upper() for _ in range(count)]
         hashed = [generate_password_hash(c) for c in raw_codes]
         self.mfa_recovery_codes = json.dumps(hashed)
         return raw_codes

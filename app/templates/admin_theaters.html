@@ -66,7 +66,7 @@
 </div>
 
 {% if last_summary %}
-<div id="crawl-summary-bar" class="admin-crawl-summary" style="--progress:100%">
+<div id="crawl-summary-bar" class="admin-crawl-summary">
   <span class="bar-text">
     <strong>Last crawl:</strong>
     {{ last_summary.get('finished_at', '') }} &mdash;
@@ -706,7 +706,7 @@ function updateGeocodeBar(data) {
       data.processed + ' / ' + data.total +
       ' &mdash; ' + data.geocoded + ' geocoded, ' + data.failed + ' failed';
   } else if (data.finished_at) {
-    bar.style.setProperty('--progress', '100%');
+    bar.style.removeProperty('--progress');
     const errPart = data.errors && data.errors.length
       ? ', <span class="text-error">' + data.errors.length + ' error(s)</span>'
       : '';
