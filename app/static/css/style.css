@@ -59,7 +59,9 @@ a:hover { color: var(--accent-hover); }
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-primary);
+  text-decoration: none;
 }
+.nav-title:hover { color: var(--text-primary); opacity: 0.85; }
 .nav-title-imax { color: var(--accent); }
 .nav-links {
   list-style: none;
@@ -438,6 +440,8 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
 .actions-dropdown-item:hover:not(:disabled) { background: rgba(0,136,255,0.08); color: var(--accent); }
 .actions-dropdown-item:disabled { color: var(--text-muted); cursor: default; }
 .actions-dropdown-item--pre-divider { border-bottom: none; }
+.actions-dropdown-item--danger { color: var(--danger); }
+.actions-dropdown-item--danger:hover:not(:disabled) { background: rgba(239,83,80,0.08); color: var(--danger); }
 .actions-dropdown-divider { display: block; height: 1px; background: var(--border); margin: 0; }
 .checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 #reseed-columns .checkbox-label { display: block; min-width: 0; overflow-wrap: break-word; }
@@ -545,6 +549,20 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
 }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 600px) { .form-row { grid-template-columns: 1fr; } }
+/* Theater targeting radio group */
+.targeting-options {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.targeting-options label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
 .checkbox-row { display: flex; gap: 24px; }
 .checkbox-label {
   display: flex; align-items: center; gap: 8px;
@@ -787,6 +805,8 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
   grid-template-columns: 1fr 1fr;
   gap: 24px;
 }
+/* Prevent grid children from overflowing their cell (allows inner table-wrap to scroll) */
+.detail-grid > * { min-width: 0; }
 @media (max-width: 800px) { .detail-grid { grid-template-columns: 1fr; } }
 .info-grid { display: flex; flex-direction: column; gap: 12px; }
 .info-item { display: flex; flex-direction: column; gap: 2px; }
@@ -1072,6 +1092,9 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 /* ── Nav user area ───────────────────────────────────────────────────── */
 .nav-user { display: flex; align-items: center; gap: 8px; }
 .nav-user-name { font-size: 13px; color: var(--text-muted); }
+/* Theme toggle wrapper — label hidden on desktop, shown in mobile hamburger */
+.nav-theme-row { display: flex; align-items: center; gap: 8px; }
+.nav-theme-label { display: none; font-size: 15px; color: var(--text-primary); }
 
 /* ── Flash messages ──────────────────────────────────────────────────── */
 .flash-message {
@@ -1657,6 +1680,35 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
      its boundary. Uses :has() to avoid affecting cards with absolutely-
      positioned dropdown panels (e.g. dashboard ms-panel dropdowns). */
   .card:has(.admin-lookup-table) { overflow-x: auto; }
+
+  /* Theater targeting radios: stack vertically with tap-friendly height */
+  .targeting-options {
+    flex-direction: column;
+    gap: 0;
+    margin-bottom: 12px;
+  }
+  .targeting-options label {
+    min-height: 44px;
+    padding: 0 4px;
+    border-bottom: 1px solid var(--border);
+    gap: 10px;
+    font-size: 15px;
+  }
+  .targeting-options label:last-child { border-bottom: none; }
+
+  /* Theme toggle row: full-width labeled row inside hamburger menu */
+  .nav-theme-row {
+    width: 100%;
+    justify-content: space-between;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-theme-label { display: block; color: rgba(255, 255, 255, 0.85); }
+  /* Larger toggle pill on mobile */
+  .theme-toggle { width: 56px; height: 30px; border-radius: 15px; }
+  .theme-toggle-knob { width: 22px; height: 22px; top: 3px; left: 3px; }
+  [data-theme="light"] .theme-toggle-knob { transform: translateX(26px); }
+  .theme-toggle-knob svg { width: 11px; height: 11px; }
 
 }
 

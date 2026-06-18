@@ -110,14 +110,16 @@ docker logs imax-alert -f
 | v1.14.0 | Account Security: password strength/reuse, forgot-password flow, rate limiting, session timeout (#22 #24 #73 #80) |
 | v1.15.0 | Frontend Design & UX: IMAX visual identity, light/dark toggle, button hover reactions, Profile/Settings layout (#182–#191 #194) |
 | v1.16.0 | Admin & User Management: MFA/TOTP, user invites, admin user list/edit, dashboard showtime scoping, theater map viewport filter, security fixes (#23 #25 #106 #119) |
+| v1.17.0 | Movies Feature: Movies tab, movie detail page, radius-based alerts, UTC showtime storage + browser-local display, notification reliability fixes (#29 #30) |
 
 ### In Progress & Upcoming
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.17 | Movies Feature | 🔄 next | #29 #30 |
-| v1.18 | Theater Data Infrastructure | ⬜ | #46 #83 |
-| v1.18 | Theater Data Infrastructure | ⬜ | #46 #83 |
+| v1.18 | UX Polish & Mobile Fixes | 🔄 next | #205 #206 #207 #208 #209 #210 |
+| v1.19 | Theater Data Infrastructure | ⬜ | #46 #83 |
+| v1.20 | Settings & Navigation Redesign | ⬜ | #211 |
 | v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
+| v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 |
 
