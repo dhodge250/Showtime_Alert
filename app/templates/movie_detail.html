@@ -91,7 +91,10 @@
           {% for pref in user_alerts %}
           <tr>
             <td>
-              {% if pref.theater %}
+              {% if pref.radius_km %}
+              {%- set _u = current_user.measurement_unit or 'metric' -%}
+              <strong>Within {{ (pref.radius_km / 1.60934) | round(0) | int if _u == 'imperial' else pref.radius_km | round(0) | int }} {{ 'mi' if _u == 'imperial' else 'km' }}</strong>
+              {% elif pref.theater %}
               <strong>{{ pref.theater.name }}</strong>
               {% else %}
               <span class="text-muted">Any Theater</span>
