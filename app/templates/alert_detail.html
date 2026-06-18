@@ -84,6 +84,19 @@
             &mdash; matches {{ date_from.strftime('%b %d') }} &ndash; {{ date_to.strftime('%b %d') }}
           </span>
         {% endif %}
+        {% if pref.target_date_buffer %}
+        <div class="text-muted" style="font-size:12px;margin-top:4px">
+          Notifications only fire for showtimes between
+          <strong>{{ date_from.strftime('%b %d') }}</strong> and
+          <strong>{{ date_to.strftime('%b %d') }}</strong>.
+          Other dates shown below are stored for display only.
+        </div>
+        {% else %}
+        <div class="text-muted" style="font-size:12px;margin-top:4px">
+          Only showtimes on this date will trigger notifications.
+          Other dates are stored for display only.
+        </div>
+        {% endif %}
       </dd>
       {% endif %}
 

@@ -116,7 +116,10 @@ docker logs imax-alert -f
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.18 | Theater Data Infrastructure | 🔄 next | #46 #83 |
+| v1.18 | UX Polish & Mobile Fixes | 🔄 next | #205 #206 #207 #208 #209 #210 |
+| v1.19 | Theater Data Infrastructure | ⬜ | #46 #83 |
+| v1.20 | Settings & Navigation Redesign | ⬜ | #211 |
 | v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
+| v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 |
 

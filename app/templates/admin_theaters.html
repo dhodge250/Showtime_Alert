@@ -51,11 +51,13 @@
                   onclick="closeActionsDropdown(); openReseedModal()">
             Re-seed from CSV
           </button>
+          <div class="actions-dropdown-divider"></div>
+          <button class="actions-dropdown-item actions-dropdown-item--danger" id="clear-btn"
+                  onclick="closeActionsDropdown(); openClearModal()">
+            Clear Showtimes
+          </button>
         </div>
       </div>
-      <button id="clear-btn" class="btn btn-danger" onclick="openClearModal()">
-        Clear Showtimes
-      </button>
     </div>
   </div>
 </div>
