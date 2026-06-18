@@ -14,13 +14,13 @@ No Playwright / headless browser needed.
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
 
 from app import db
-from app.scrapers.base import BaseScraper
+from app.scrapers.base import BaseScraper, _local_to_utc
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -54,21 +54,21 @@ def _extract_theater_id(soup: BeautifulSoup) -> str:
     return ""
 
 
-def _parse_showtime_dt(date_iso: str, time_text: str) -> datetime | None:
+def _parse_showtime_dt(
+    date_iso: str, time_text: str, theater: "Theater | None" = None
+) -> datetime | None:
     """
-    Combine a YYYY-MM-DD date with a time string like '7:10pm' into a
-    UTC-aware datetime.
+    Combine a YYYY-MM-DD local date+time string and return naive UTC.
 
-    Note: Cinemark stores local theater times — we attach UTC as a
-    consistent timezone marker (matching how other scrapers handle local
-    times). The date + local time combination is what matters for alert
-    matching.
+    When theater is provided its state/country is used to determine the local
+    timezone for the UTC conversion.  When None the naive local time is
+    returned as-is (UTC assumed — only used in tests without a theater object).
     """
     clean = time_text.strip().upper()
     for fmt in ("%I:%M%p", "%I:%M %p"):
         try:
-            dt = datetime.strptime(f"{date_iso} {clean}", f"%Y-%m-%d {fmt}")
-            return dt.replace(tzinfo=timezone.utc)
+            naive_local = datetime.strptime(f"{date_iso} {clean}", f"%Y-%m-%d {fmt}")
+            return _local_to_utc(naive_local, theater) if theater is not None else naive_local
         except ValueError:
             continue
     return None
@@ -112,7 +112,7 @@ def _parse_imax_showtimes(
                 continue
 
             time_text = link.get_text(strip=True)
-            show_dt = _parse_showtime_dt(date_iso, time_text)
+            show_dt = _parse_showtime_dt(date_iso, time_text, theater)
             if not show_dt:
                 continue
 

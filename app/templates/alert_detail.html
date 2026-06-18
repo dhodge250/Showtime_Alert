@@ -13,7 +13,10 @@
         Any Movie
       {% endif %}
       &nbsp;@&nbsp;
-      {% if pref.theater %}{{ pref.theater.name }}{% else %}Any Theater{% endif %}
+      {% if pref.radius_km %}
+        {%- set _unit = (pref.user.measurement_unit if pref.user else 'metric') -%}
+        Within {{ (pref.radius_km / 1.60934) | round(0) | int if _unit == 'imperial' else pref.radius_km | round(0) | int }} {{ 'mi' if _unit == 'imperial' else 'km' }}
+      {% elif pref.theater %}{{ pref.theater.name }}{% else %}Any Theater{% endif %}
     </p>
   </div>
   <a href="{{ url_for('main.alerts') }}" class="btn btn-ghost btn-sm">&larr; Back to Alerts</a>
@@ -49,7 +52,10 @@
 
       <dt>Theater</dt>
       <dd>
-        {% if pref.theater %}
+        {% if pref.radius_km %}
+          {%- set _unit = (pref.user.measurement_unit if pref.user else 'metric') -%}
+          <div style="font-weight:600">Within {{ (pref.radius_km / 1.60934) | round(0) | int if _unit == 'imperial' else pref.radius_km | round(0) | int }} {{ 'mi' if _unit == 'imperial' else 'km' }} of your saved location</div>
+        {% elif pref.theater %}
           <div style="font-weight:600">{{ pref.theater.name }}</div>
           {% if pref.theater.city or pref.theater.state %}
           <div class="text-muted" style="font-size:12px">
@@ -185,7 +191,11 @@
             <span class="text-muted">–</span>
             {% endif %}
           </td>
-          <td style="font-weight:600">{{ am.movie.title if am.movie else 'Unknown' }}</td>
+          <td style="font-weight:600">
+            {% if am.movie %}
+            <a href="{{ url_for('main.movie_detail', movie_id=am.movie.id) }}">{{ am.movie.title }}</a>
+            {% else %}Unknown{% endif %}
+          </td>
           <td style="font-size:12px;color:var(--text-muted)">
             {% if am.movie and am.movie.release_date %}
               {{ am.movie.release_date.strftime('%b %d, %Y') }}
@@ -239,7 +249,7 @@
       <tbody>
         {% for st in showtimes %}
         <tr>
-          <td style="white-space:nowrap">{{ st.show_datetime.strftime('%b %d, %Y %I:%M %p') }}</td>
+          <td style="white-space:nowrap"><time class="utc-time" datetime="{{ st.show_datetime.isoformat() }}Z" data-fmt="short">{{ st.show_datetime.strftime('%b %d, %Y %I:%M %p') }}</time></td>
           <td>{{ st.movie.title if st.movie else '–' }}</td>
           <td>
             {{ st.theater.name if st.theater else '–' }}

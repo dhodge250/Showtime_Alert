@@ -1,11 +1,11 @@
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from urllib.parse import quote
 
 import requests
 
-from app.scrapers.base import BaseScraper, _parse_time_text
+from app.scrapers.base import BaseScraper, _local_to_utc, _parse_time_text
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -135,9 +135,10 @@ class CineplexScraper(BaseScraper):
                             if session.get("isInThePast"):
                                 continue
                             start = session.get("showStartDateTime", "")
-                            show_dt = _parse_time_text(start)
-                            if not show_dt:
+                            naive_local = _parse_time_text(start)
+                            if not naive_local:
                                 continue
+                            show_dt = _local_to_utc(naive_local, theater)
                             movie_obj = self.get_or_create_movie(title)
                             if not self._movie_wanted(movie_obj, movie_ids):
                                 continue
