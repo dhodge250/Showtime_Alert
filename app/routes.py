@@ -214,7 +214,9 @@ def alerts():
 
     rows_per_page = _get_setting_int("rows_per_page", 15)
     default_max_notifications = _get_setting_int("default_max_notifications", 0) or None
-    user_has_location = bool(current_user.location_lat and current_user.location_lon)
+    user_has_location = (
+        current_user.location_lat is not None and current_user.location_lon is not None
+    )
     unit = current_user.measurement_unit or "imperial"
     theaters_coords = [
         {"id": t.id, "name": t.name, "lat": t.latitude, "lng": t.longitude}
