@@ -1,9 +1,9 @@
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
-from app.scrapers.base import BaseScraper
+from app.scrapers.base import BaseScraper, _local_to_utc
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -26,22 +26,23 @@ class RoyalBCMuseumScraper(BaseScraper):
     chain_name = "Royal BC Museum"
     BASE_URL = "https://sales.royalbcmuseum.bc.ca"
 
-    def _parse_atms_dt(self, text: str) -> Optional[datetime]:
+    def _parse_atms_dt(self, text: str, theater: Theater) -> Optional[datetime]:
         """
-        Parse ATMS date+time strings into a UTC-aware datetime.
+        Parse ATMS date+time strings and return naive UTC.
 
-        Two formats are encountered:
-        - Calendar page  data-scheduleDate : "Friday June 5, 2026 - 7:15 PM"
-        - Listing page   link text         : "7:15 PM - May 28, 2026"
+        Formats:
+        - Calendar: "Friday June 5, 2026 - 7:15 PM"
+        - Listing:  "7:15 PM - May 28, 2026"
         """
         text = text.strip()
         for fmt in (
-            "%A %B %d, %Y - %I:%M %p",   # calendar: "Friday June 5, 2026 - 7:15 PM"
-            "%I:%M %p - %b %d, %Y",       # listing:  "7:15 PM - May 28, 2026"
-            "%I:%M %p - %B %d, %Y",       # listing:  "7:15 PM - May 28, 2026" (full month)
+            "%A %B %d, %Y - %I:%M %p",
+            "%I:%M %p - %b %d, %Y",
+            "%I:%M %p - %B %d, %Y",
         ):
             try:
-                return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+                naive_local = datetime.strptime(text, fmt)
+                return _local_to_utc(naive_local, theater)
             except ValueError:
                 continue
         return None
@@ -61,7 +62,7 @@ class RoyalBCMuseumScraper(BaseScraper):
             if not ticket_a:
                 continue
             date_str = ticket_a.get("data-scheduledate", "")
-            show_dt = self._parse_atms_dt(date_str)
+            show_dt = self._parse_atms_dt(date_str, theater)
             if not show_dt:
                 logger.debug("RoyalBCMuseum: could not parse calendar date %r", date_str)
                 continue
@@ -80,7 +81,7 @@ class RoyalBCMuseumScraper(BaseScraper):
         for link in button_links:
             href = link.get("href", "")
             link_text = link.get_text(strip=True)
-            show_dt = self._parse_atms_dt(link_text)
+            show_dt = self._parse_atms_dt(link_text, theater)
             if not show_dt:
                 logger.debug("RoyalBCMuseum: could not parse inline date %r", link_text)
                 continue

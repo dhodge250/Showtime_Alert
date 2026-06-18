@@ -15,6 +15,7 @@ from flask import (
 )
 from flask import flash
 from flask_login import current_user, login_required
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from app import db
@@ -213,15 +214,29 @@ def alerts():
 
     rows_per_page = _get_setting_int("rows_per_page", 15)
     default_max_notifications = _get_setting_int("default_max_notifications", 0) or None
+    user_has_location = (
+        current_user.location_lat is not None and current_user.location_lon is not None
+    )
+    unit = current_user.measurement_unit or "imperial"
+    theaters_coords = [
+        {"id": t.id, "name": t.name, "lat": t.latitude, "lng": t.longitude}
+        for t in theaters_list
+        if t.latitude is not None and t.longitude is not None
+    ]
     return render_template(
         "alerts.html",
         theaters=theaters_list,
         theaters_json=[{"id": t.id, "name": t.name, "city": t.city or "", "state": t.state or ""} for t in theaters_list],
+        theaters_coords_json=theaters_coords,
         movies=movies_list,
         users=users_list,
         preferences=prefs,
         rows_per_page=rows_per_page,
         default_max_notifications=default_max_notifications,
+        user_has_location=user_has_location,
+        user_lat=current_user.location_lat,
+        user_lng=current_user.location_lon,
+        unit=unit,
     )
 
 
@@ -235,7 +250,18 @@ def alert_detail(pref_id):
 
     # Matching showtimes — scope by AlertMovie movie IDs (or any-movie)
     q = Showtime.query
-    if pref.theater_id:
+    if pref.radius_km is not None:
+        # Radius alert: limit to theaters within radius of user's saved location
+        from app.scrapers.base import _haversine_km
+        alert_user = User.query.get(pref.user_id)
+        if alert_user and alert_user.location_lat is not None and alert_user.location_lon is not None:
+            nearby_ids = [
+                t.id for t in Theater.query.filter_by(is_active=True).all()
+                if t.latitude is not None and t.longitude is not None
+                and _haversine_km(alert_user.location_lat, alert_user.location_lon, t.latitude, t.longitude) <= pref.radius_km
+            ]
+            q = q.filter(Showtime.theater_id.in_(nearby_ids))
+    elif pref.theater_id:
         q = q.filter_by(theater_id=pref.theater_id)
     if not pref.is_any_movie:
         movie_ids = [am.movie_id for am in pref.alert_movies.all()]
@@ -358,6 +384,133 @@ def profile_mfa_disable():
     write_log("auth", f"MFA disabled by {user.email}", user_id=user.id)
     flash("Multi-factor authentication has been disabled.", "success")
     return redirect(url_for("main.profile"))
+
+
+# ---------------------------------------------------------------------------
+# Movies: user-scoped tracked movie list and detail
+# ---------------------------------------------------------------------------
+
+@main_bp.route("/movies")
+@login_required
+def movies():
+    """Movies tab — all movies the user has ever had an alert for, regardless of alert status."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Include movies from fired/deleted alerts so tiles persist beyond the alert lifecycle
+    rows = (
+        db.session.query(AlertMovie.movie_id, func.count(AlertMovie.id).label("alert_count"))
+        .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
+        .filter(AlertPreference.user_id == current_user.id)
+        .group_by(AlertMovie.movie_id)
+        .all()
+    )
+
+    if not rows:
+        return render_template("movies.html", movie_list=[])
+
+    movie_ids = [r.movie_id for r in rows]
+    alert_counts = {r.movie_id: r.alert_count for r in rows}
+    movies_map = {m.id: m for m in Movie.query.filter(Movie.id.in_(movie_ids)).all()}
+
+    next_dt_rows = (
+        db.session.query(Showtime.movie_id, func.min(Showtime.show_datetime).label("next_dt"))
+        .filter(Showtime.movie_id.in_(movie_ids), Showtime.show_datetime >= now)
+        .group_by(Showtime.movie_id)
+        .all()
+    )
+    next_dt_map = {r.movie_id: r.next_dt for r in next_dt_rows}
+
+    # Count distinct theaters the user has configured alerts for (not showtime theaters)
+    theater_count_rows = (
+        db.session.query(
+            AlertMovie.movie_id,
+            func.count(func.distinct(AlertPreference.theater_id)).label("cnt"),
+        )
+        .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
+        .filter(
+            AlertMovie.movie_id.in_(movie_ids),
+            AlertPreference.user_id == current_user.id,
+            AlertPreference.theater_id.isnot(None),
+        )
+        .group_by(AlertMovie.movie_id)
+        .all()
+    )
+    theater_counts = {r.movie_id: r.cnt for r in theater_count_rows}
+
+    movie_list = []
+    for mid in movie_ids:
+        movie = movies_map.get(mid)
+        if not movie:
+            continue
+        movie_list.append({
+            "movie": movie,
+            "alert_count": alert_counts.get(mid, 0),
+            "theater_count": theater_counts.get(mid, 0),
+            "next_dt": next_dt_map.get(mid),
+        })
+
+    movie_list.sort(key=lambda x: (
+        x["next_dt"] is None,
+        x["next_dt"] or datetime.max,
+        x["movie"].title.lower(),
+    ))
+
+    return render_template("movies.html", movie_list=movie_list)
+
+
+@main_bp.route("/movies/<int:movie_id>")
+@login_required
+def movie_detail(movie_id):
+    """Movie detail page — showtimes and alerts for one tracked movie."""
+    from app import tmdb as tmdb_mod
+
+    movie = Movie.query.get_or_404(movie_id)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Allow access to any movie the user has ever tracked, regardless of alert status
+    has_alert = (
+        db.session.query(AlertMovie.id)
+        .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
+        .filter(
+            AlertPreference.user_id == current_user.id,
+            AlertMovie.movie_id == movie_id,
+        )
+        .first()
+    )
+    if not has_alert:
+        abort(404)
+
+    showtimes = (
+        Showtime.query
+        .options(joinedload(Showtime.theater))
+        .filter(Showtime.movie_id == movie_id, Showtime.show_datetime >= now)
+        .order_by(Showtime.show_datetime)
+        .all()
+    )
+
+    user_alerts = (
+        AlertPreference.query
+        .join(AlertMovie, AlertMovie.alert_id == AlertPreference.id)
+        .filter(
+            AlertPreference.user_id == current_user.id,
+            AlertPreference.is_active.is_(True),
+            AlertMovie.movie_id == movie_id,
+        )
+        .options(joinedload(AlertPreference.theater))
+        .all()
+    )
+
+    tmdb_extra = {}
+    if movie.tmdb_id and tmdb_mod.is_configured():
+        tmdb_extra = tmdb_mod.get_movie_details(movie.tmdb_id)
+
+    return render_template(
+        "movie_detail.html",
+        movie=movie,
+        showtimes=showtimes,
+        user_alerts=user_alerts,
+        tmdb_extra=tmdb_extra,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1225,30 +1378,29 @@ def api_movies():
 @api_bp.route("/movies/search")
 @login_required
 def api_movies_search():
-    """Search movies — local DB first, TMDB fallback for movies not yet in DB.
+    """Search movies — always queries both local DB and TMDB, merges results.
 
-    Local DB results always carry a local ``id`` so callers (e.g. the Clear
-    Showtimes modal) can use it as a filter key.  TMDB results only appear when
-    nothing matched locally; they carry ``tmdb_id`` but no ``id``.
+    Local DB results appear first (they already have a local ``id`` and poster).
+    TMDB results for titles not yet in the DB follow, deduplicated by tmdb_id.
     """
     q = request.args.get("q", "").strip()
     if not q:
         return jsonify([])
 
-    # Always search local DB first — movies with showtimes live here.
     local_movies = Movie.query.filter(Movie.title.ilike(f"%{q}%")).order_by(Movie.title).limit(20).all()
-    if local_movies:
-        return jsonify([m.to_dict() for m in local_movies])
+    results = [m.to_dict() for m in local_movies]
+    local_tmdb_ids = {m.tmdb_id for m in local_movies if m.tmdb_id}
 
-    # No local match — fall back to TMDB so users can search upcoming films.
     try:
         from app.tmdb import is_configured, search_movies
         if is_configured():
-            return jsonify(search_movies(q))
+            for r in search_movies(q):
+                if r.get("tmdb_id") not in local_tmdb_ids:
+                    results.append(r)
     except Exception as exc:  # noqa: BLE001
         logger.warning("TMDB search failed: %s", exc)
 
-    return jsonify([])
+    return jsonify(results[:20])
 
 
 # ---------------------------------------------------------------------------
@@ -1436,6 +1588,22 @@ def api_create_alert():
 
     theater_id = data.get("theater_id") or None
 
+    # ── Radius alert ──────────────────────────────────────────────────────
+    radius_km = None
+    raw_radius = data.get("radius_km")
+    if raw_radius is not None and raw_radius != "":
+        try:
+            radius_km = float(raw_radius)
+            if radius_km <= 0:
+                return jsonify({"error": "radius_km must be positive"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "radius_km must be a number"}), 400
+        # Radius alerts are not bound to a specific theater
+        theater_id = None
+        # Require the user to have a saved location for radius alerts
+        if user.location_lat is None or user.location_lon is None:
+            return jsonify({"error": "Your profile location must be set before creating a radius alert"}), 400
+
     # ── Resolve movies ────────────────────────────────────────────────────
     # Accept both plural (new) and singular (backward compat) fields.
     raw_movie_ids  = data.get("movie_ids") or (
@@ -1520,8 +1688,9 @@ def api_create_alert():
     # alert unless that movie's AlertMovie row has already fired.
     # Different target_dates on the same movie/theater are allowed (e.g. same
     # film on June 21 and June 28 are independent alerts).
+    # Radius alerts bypass the theater-keyed duplicate check.
     conflicting_titles: list[str] = []
-    for m in resolved_movies:
+    for m in resolved_movies if not radius_km else []:
         conflict = (
             AlertMovie.query
             .join(AlertPreference)
@@ -1582,6 +1751,7 @@ def api_create_alert():
         max_notifications=max_notifications,
         target_date=target_date,
         target_date_buffer=target_date_buffer,
+        radius_km=radius_km,
     )
     db.session.add(pref)
     db.session.flush()  # get pref.id
@@ -1738,6 +1908,9 @@ def api_reset_alert(pref_id):
     pref.alert_sent = False
     pref.alert_sent_at = None
     pref.is_active = True
+    pref.notifications_fired = 0
+    if pref.radius_km is not None:
+        pref.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.commit()
     from app.log_utils import write_log
     write_log("alert", f"Alert reset (id={pref_id})", user_id=current_user.id,
@@ -1759,6 +1932,8 @@ def api_reset_alert_movie(pref_id, movie_id):
     pref.alert_sent = False
     pref.alert_sent_at = None
     pref.is_active = True
+    if pref.radius_km is not None:
+        pref.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.commit()
     return jsonify(am.to_dict())
 

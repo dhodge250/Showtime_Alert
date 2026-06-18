@@ -3,17 +3,123 @@ Base scraper class, shared helpers, and maintenance utilities.
 """
 import json
 import logging
+import math
 import re
 from datetime import date, datetime, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from bs4 import BeautifulSoup
 
 from app import db
-from app.models import AlertMovie, AlertPreference, Movie, Showtime, Theater
+from app.models import AlertMovie, AlertPreference, Movie, Showtime, Theater, User
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Theater timezone helpers
+# ---------------------------------------------------------------------------
+
+_REGION_TZ: dict[str, str] = {
+    # US states (full names)
+    "Alabama": "America/Chicago",
+    "Alaska": "America/Anchorage",
+    "Arizona": "America/Phoenix",
+    "Arkansas": "America/Chicago",
+    "California": "America/Los_Angeles",
+    "Colorado": "America/Denver",
+    "Connecticut": "America/New_York",
+    "Delaware": "America/New_York",
+    "District of Columbia": "America/New_York",
+    "Florida": "America/New_York",
+    "Georgia": "America/New_York",
+    "Hawaii": "Pacific/Honolulu",
+    "Idaho": "America/Denver",
+    "Illinois": "America/Chicago",
+    "Indiana": "America/Indiana/Indianapolis",
+    "Iowa": "America/Chicago",
+    "Kansas": "America/Chicago",
+    "Kentucky": "America/New_York",
+    "Louisiana": "America/Chicago",
+    "Maine": "America/New_York",
+    "Maryland": "America/New_York",
+    "Massachusetts": "America/New_York",
+    "Michigan": "America/New_York",
+    "Minnesota": "America/Chicago",
+    "Mississippi": "America/Chicago",
+    "Missouri": "America/Chicago",
+    "Montana": "America/Denver",
+    "Nebraska": "America/Chicago",
+    "Nevada": "America/Los_Angeles",
+    "New Hampshire": "America/New_York",
+    "New Jersey": "America/New_York",
+    "New Mexico": "America/Denver",
+    "New York": "America/New_York",
+    "North Carolina": "America/New_York",
+    "North Dakota": "America/Chicago",
+    "Ohio": "America/New_York",
+    "Oklahoma": "America/Chicago",
+    "Oregon": "America/Los_Angeles",
+    "Pennsylvania": "America/New_York",
+    "Rhode Island": "America/New_York",
+    "South Carolina": "America/New_York",
+    "South Dakota": "America/Chicago",
+    "Tennessee": "America/Chicago",
+    "Texas": "America/Chicago",
+    "Utah": "America/Denver",
+    "Vermont": "America/New_York",
+    "Virginia": "America/New_York",
+    "Washington": "America/Los_Angeles",
+    "West Virginia": "America/New_York",
+    "Wisconsin": "America/Chicago",
+    "Wyoming": "America/Denver",
+    # Canadian provinces (full names and common abbreviations)
+    "Alberta": "America/Edmonton",         "AB": "America/Edmonton",
+    "British Columbia": "America/Vancouver", "BC": "America/Vancouver",
+    "Manitoba": "America/Winnipeg",         "MB": "America/Winnipeg",
+    "New Brunswick": "America/Halifax",     "NB": "America/Halifax",
+    "Newfoundland": "America/St_Johns",     "NL": "America/St_Johns",
+    "Nova Scotia": "America/Halifax",       "NS": "America/Halifax",
+    "Ontario": "America/Toronto",           "ON": "America/Toronto",
+    "Prince Edward Island": "America/Halifax", "PE": "America/Halifax",
+    "Quebec": "America/Montreal",           "QC": "America/Montreal",
+    "Saskatchewan": "America/Regina",       "SK": "America/Regina",
+    # Other regions encountered in the theater dataset
+    "Mecca Province": "Asia/Riyadh",
+    "Rio Grande do Sul": "America/Sao_Paulo",
+}
+
+_COUNTRY_TZ: dict[str, str] = {
+    "Brazil":         "America/Sao_Paulo",
+    "Chile":          "America/Santiago",
+    "Germany":        "Europe/Berlin",
+    "Panama":         "America/Panama",
+    "Saudi Arabia":   "Asia/Riyadh",
+    "United Kingdom": "Europe/London",
+}
+
+
+def _theater_tz(theater: Theater) -> ZoneInfo:
+    """Return the IANA ZoneInfo for a theater's local timezone."""
+    name = _REGION_TZ.get(theater.state or "") or _COUNTRY_TZ.get(theater.country or "")
+    if name:
+        try:
+            return ZoneInfo(name)
+        except ZoneInfoNotFoundError:
+            pass
+    return ZoneInfo("UTC")
+
+
+def _local_to_utc(naive_local: datetime, theater: Theater) -> datetime:
+    """
+    Convert a naive local-theater datetime to a naive UTC datetime.
+
+    All showtime rows are stored as naive UTC so comparisons against
+    datetime.utcnow() are consistent regardless of the scraper source.
+    """
+    tz = _theater_tz(theater)
+    return naive_local.replace(tzinfo=tz).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
 HEADERS = {
     "User-Agent": (
@@ -30,6 +136,16 @@ REQUEST_TIMEOUT = 15
 # Alert-driven target resolution
 # ---------------------------------------------------------------------------
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lat/lng points."""
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 def _get_active_targets() -> dict:
     """
     Return {theater_id: set[movie_id]} for all active, unsent alerts.
@@ -42,6 +158,8 @@ def _get_active_targets() -> dict:
       movie_id=None    → "any movie" sentinel (alert has no AlertMovie rows).
       movie_id=N       → track only this movie at the keyed theater.
 
+    Radius alerts expand into their covered theater IDs at resolution time.
+    Theaters without geocoded coordinates are excluded from radius matching.
     Keeping movies scoped per theater prevents a "any movie at theater A" alert
     from causing unrelated movies to be recorded at theater B.
     """
@@ -49,7 +167,33 @@ def _get_active_targets() -> dict:
 
     targets: dict = {}
 
+    active_theaters = Theater.query.filter_by(is_active=True).all()
+
     for pref in active_prefs:
+        # --- radius-based alert ---
+        if pref.radius_km is not None:
+            user = User.query.get(pref.user_id)
+            if user is None or user.location_lat is None or user.location_lon is None:
+                continue
+            theaters_in_radius = [
+                t for t in active_theaters
+                if t.latitude is not None and t.longitude is not None
+                and _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= pref.radius_km
+            ]
+            movie_ids: set = set()
+            am_count = pref.alert_movies.count()
+            if am_count == 0:
+                movie_ids.add(None)
+            else:
+                for am in pref.alert_movies.filter_by(alert_sent=False).all():
+                    movie_ids.add(am.movie_id)
+            for theater in theaters_in_radius:
+                if theater.id not in targets:
+                    targets[theater.id] = set()
+                targets[theater.id] |= movie_ids
+            continue
+
+        # --- specific or any-theater alert ---
         tid = pref.theater_id  # None = any theater
         if tid not in targets:
             targets[tid] = set()
@@ -248,19 +392,18 @@ def _enrich_movie_from_tmdb(movie: Movie) -> None:
 
 def _parse_time_text(text: str) -> Optional[datetime]:
     """
-    Attempt to parse a showtime text string into a datetime.
+    Parse a showtime text string into a **naive** datetime in local theater time.
 
-    Tries multiple common formats used by theater chains.
-    Returns None if parsing fails.
+    Returns None if parsing fails.  Callers are responsible for converting to
+    UTC via _local_to_utc(dt, theater) before storing — do NOT label the result
+    as UTC directly, because the source is always a local-time display string.
     """
     text = text.strip().upper()
-    # Formats that include a date component
     date_formats = [
         "%m/%d/%Y %I:%M %p",
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%d %H:%M",
     ]
-    # Formats that have only a time component (no year/month/day)
     time_only_formats = [
         "%I:%M %p",
         "%I:%M%p",
@@ -271,19 +414,14 @@ def _parse_time_text(text: str) -> Optional[datetime]:
 
     for fmt in date_formats:
         try:
-            parsed = datetime.strptime(text, fmt)
-            return parsed.replace(tzinfo=timezone.utc)
+            return datetime.strptime(text, fmt)  # naive local
         except ValueError:
             continue
 
     for fmt in time_only_formats:
         try:
             parsed = datetime.strptime(text, fmt)
-            # Attach today's date and UTC timezone
-            parsed = parsed.replace(
-                year=today.year, month=today.month, day=today.day, tzinfo=timezone.utc
-            )
-            return parsed
+            return parsed.replace(year=today.year, month=today.month, day=today.day)  # naive local
         except ValueError:
             continue
 

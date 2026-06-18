@@ -18,12 +18,12 @@ Strategy:
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 from playwright.sync_api import sync_playwright
 
-from app.scrapers.base import BaseScraper
+from app.scrapers.base import BaseScraper, _local_to_utc
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -163,10 +163,16 @@ class TCLScraper(BaseScraper):
             if not starts_at_str:
                 continue
             try:
-                show_dt = datetime.fromisoformat(starts_at_str)
+                parsed = datetime.fromisoformat(starts_at_str)
             except ValueError:
                 logger.warning("TCL: bad startsAt value %r", starts_at_str)
                 continue
+            if parsed.tzinfo is not None:
+                # API returned a tz-aware string → convert to naive UTC
+                show_dt = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            else:
+                # Naive local time → convert via theater timezone
+                show_dt = _local_to_utc(parsed, theater)
 
             show_id = show.get("id", "")
             tickets_url = (

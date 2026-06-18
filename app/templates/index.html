@@ -84,11 +84,11 @@
               data-theater="{{ (st.theater.name if st.theater else '') | lower }}"
               data-format="{{ (st.format_type or 'IMAX') | lower }}"
               data-date="{{ st.show_datetime.strftime('%Y-%m-%d') }}"
-              data-datetime="{{ st.show_datetime.isoformat() }}">
+              data-datetime="{{ st.show_datetime.isoformat() }}Z">
             <td><strong>{{ st.movie.title if st.movie else '–' }}</strong></td>
             <td>{{ st.theater.name if st.theater else '–' }}</td>
             <td><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
-            <td>{{ st.show_datetime.strftime('%b %d, %Y %I:%M %p') }}</td>
+            <td><time class="utc-time" datetime="{{ st.show_datetime.isoformat() }}Z" data-fmt="short">{{ st.show_datetime.strftime('%b %d, %Y %I:%M %p') }}</time></td>
             <td>
               {% if st.tickets_available %}
                 {% if st.tickets_url %}

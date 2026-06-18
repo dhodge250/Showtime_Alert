@@ -556,6 +556,11 @@ def _run_migrations():
             "ALTER TABLE users ADD COLUMN mfa_recovery_codes TEXT",
             None,
         ),
+        (
+            "radius_km", "alert_preferences",
+            "ALTER TABLE alert_preferences ADD COLUMN radius_km REAL",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:

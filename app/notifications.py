@@ -16,7 +16,7 @@ from email.mime.text import MIMEText
 from typing import Optional
 
 from app import db
-from app.models import AlertMovie, AlertPreference, Notification, Showtime, User
+from app.models import AlertMovie, AlertPreference, Notification, Showtime, Theater, User
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +316,26 @@ def _build_sms_body(user: User, showtime: Showtime) -> str:
 # Core notification logic
 # ---------------------------------------------------------------------------
 
+def _radius_theater_ids(pref: AlertPreference) -> Optional[set[int]]:
+    """
+    Return the set of theater IDs within pref.radius_km of the alert owner's
+    saved location, or None if the pref is not a radius alert or the user has
+    no saved coordinates.  Used to scope both candidate queries and per-showtime
+    filtering for radius-based alerts.
+    """
+    if pref.radius_km is None:
+        return None
+    user = User.query.get(pref.user_id)
+    if user is None or user.location_lat is None or user.location_lon is None:
+        return None
+    from app.scrapers.base import _haversine_km
+    return {
+        t.id for t in Theater.query.filter_by(is_active=True).all()
+        if t.latitude is not None and t.longitude is not None
+        and _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= pref.radius_km
+    }
+
+
 def _get_matching_showtimes_for_pref(
     pref: AlertPreference,
     candidates: list[Showtime],
@@ -343,15 +363,28 @@ def _get_matching_showtimes_for_pref(
             if date_from <= st.show_datetime.date() <= date_to
         ]
 
+    # Resolve radius theater set once (None when not a radius alert).
+    radius_ids: Optional[set[int]] = _radius_theater_ids(pref) if pref.radius_km is not None else None
+
+    def _theater_allowed(st: Showtime) -> bool:
+        """Return True if this showtime's theater is in scope for pref."""
+        if pref.radius_km is not None:
+            # Radius alert with no resolvable user location → no theaters qualify.
+            if radius_ids is None:
+                return False
+            return st.theater_id in radius_ids
+        if pref.theater_id is not None:
+            return st.theater_id == pref.theater_id
+        return True  # any-theater alert
+
     result: list[Showtime] = []
 
     if pref.is_any_movie:
         if pref.max_notifications:
             # Cap mode: re-notify on every alert cycle until the cap is reached.
             for st in candidates:
-                if pref.theater_id is not None and pref.theater_id != st.theater_id:
-                    continue
-                result.append(st)
+                if _theater_allowed(st):
+                    result.append(st)
         else:
             # One-shot mode: skip showtimes already covered by a prior notification.
             notified_ids: set[int] = set()
@@ -364,9 +397,7 @@ def _get_matching_showtimes_for_pref(
                 elif n.showtime_id is not None:
                     notified_ids.add(n.showtime_id)
             for st in candidates:
-                if pref.theater_id is not None and pref.theater_id != st.theater_id:
-                    continue
-                if st.id not in notified_ids:
+                if _theater_allowed(st) and st.id not in notified_ids:
                     result.append(st)
     else:
         unsent_movie_ids: set[int] = {
@@ -374,9 +405,7 @@ def _get_matching_showtimes_for_pref(
             for am in pref.alert_movies.filter_by(alert_sent=False).all()
         }
         for st in candidates:
-            if pref.theater_id is not None and pref.theater_id != st.theater_id:
-                continue
-            if st.movie_id in unsent_movie_ids:
+            if _theater_allowed(st) and st.movie_id in unsent_movie_ids:
                 result.append(st)
 
     return result
@@ -511,10 +540,15 @@ def process_new_showtimes(app, new_showtimes: list[Showtime]) -> int:
     if not new_showtimes:
         return 0
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    future_showtimes = [st for st in new_showtimes if st.show_datetime >= now]
+    if not future_showtimes:
+        return 0
+
     prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
     sent = 0
     for pref in prefs:
-        matching = _get_matching_showtimes_for_pref(pref, new_showtimes)
+        matching = _get_matching_showtimes_for_pref(pref, future_showtimes)
         if matching:
             sent += _notify_for_alert(app, pref, matching)
     return sent
@@ -532,10 +566,27 @@ def process_pending_alerts(app) -> int:
     if not prefs:
         return 0
 
+    from datetime import timedelta
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Radius alerts fired by process_pending_alerts (existing DB data) before the
+    # scraper has visited every in-radius theater produce incomplete notifications.
+    # Give radius alerts a 35-minute grace period so the 30-minute scraper cycle
+    # has time to collect fresh data from all in-radius theaters first.
+    # process_new_showtimes handles genuinely new showtimes without this delay.
+    _RADIUS_GRACE = timedelta(minutes=35)
     sent = 0
     for pref in prefs:
-        q = Showtime.query
-        if pref.theater_id:
+        if pref.radius_km is not None and pref.created_at is not None:
+            age = now - pref.created_at.replace(tzinfo=None)
+            if age < _RADIUS_GRACE:
+                continue
+        q = Showtime.query.filter(Showtime.show_datetime >= now)
+        if pref.radius_km is not None:
+            nearby = _radius_theater_ids(pref)
+            if not nearby:
+                continue
+            q = q.filter(Showtime.theater_id.in_(nearby))
+        elif pref.theater_id:
             q = q.filter_by(theater_id=pref.theater_id)
         if not pref.is_any_movie:
             unsent_ids = [

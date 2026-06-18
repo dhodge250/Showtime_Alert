@@ -789,6 +789,9 @@ class AlertPreference(db.Model):
     # Optional buffer (days) around target_date — fires if showtime falls within
     # [target_date - buffer, target_date + buffer]. Ignored when target_date is None.
     target_date_buffer = db.Column(db.Integer, nullable=True)
+    # Radius-based targeting: notify when a matching movie appears within radius_km
+    # of the alert owner's saved location. When set, theater_id is ignored.
+    radius_km = db.Column(db.Float, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = db.relationship("User", back_populates="alert_preferences")
@@ -858,6 +861,7 @@ class AlertPreference(db.Model):
             "notifications_fired": self.notifications_fired or 0,
             "target_date": self.target_date.isoformat() if self.target_date else None,
             "target_date_buffer": self.target_date_buffer,
+            "radius_km": self.radius_km,
         }
 
     def __repr__(self):

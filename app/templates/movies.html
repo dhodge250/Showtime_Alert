@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Movies – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>My Movies</h1>
+  <p class="subtitle">Movies you have active alerts for</p>
+</div>
+
+{% if movie_list %}
+<div class="movie-cards">
+  {% for item in movie_list %}
+  {% set m = item.movie %}
+  <a href="{{ url_for('main.movie_detail', movie_id=m.id) }}" class="movie-card">
+    {% if m.poster_url %}
+    <img class="movie-poster" src="{{ m.poster_url }}" alt="{{ m.title }} poster" loading="lazy">
+    {% else %}
+    <div class="movie-poster-placeholder">&#127916;</div>
+    {% endif %}
+    <div class="movie-info">
+      <div class="movie-title" title="{{ m.title }}">{{ m.title }}</div>
+      <div class="movie-meta">
+        {%- if m.release_date %}{{ m.release_date.year }}{% endif %}
+        {%- if m.release_date and m.genre %} &middot; {% endif %}
+        {%- if m.genre %}{{ m.genre }}{% endif %}
+        {%- if m.runtime_minutes %} &middot; {{ m.runtime_minutes }} min{% endif %}
+      </div>
+      <div class="movie-stats">
+        <span class="movie-stat"><strong>{{ item.alert_count }}</strong> alert{{ 's' if item.alert_count != 1 else '' }}</span>
+        {% if item.theater_count %}
+        <span class="movie-stat"><strong>{{ item.theater_count }}</strong> theater{{ 's' if item.theater_count != 1 else '' }}</span>
+        {% endif %}
+      </div>
+      {% if item.next_dt %}
+      <div class="movie-next-showtime">
+        Next: <time class="utc-time" datetime="{{ item.next_dt.isoformat() }}Z" data-fmt="date-only">{{ item.next_dt.strftime('%b %d, %Y') }}</time>
+      </div>
+      {% else %}
+      <div class="movie-next-showtime" style="color:var(--text-muted)">No upcoming showtimes</div>
+      {% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<section class="card" style="text-align:center;padding:48px 24px">
+  <p style="font-size:48px;margin:0 0 16px">&#127916;</p>
+  <h2 style="margin:0 0 8px">No tracked movies yet</h2>
+  <p class="text-muted" style="margin:0 0 24px">
+    Create an alert with specific movies to see them here.
+  </p>
+  <a href="{{ url_for('main.alerts') }}" class="btn btn-primary">Go to Alerts</a>
+</section>
+{% endif %}
+{% endblock %}

@@ -1303,11 +1303,11 @@ class TestCinemarkScraper:
 
     def test_parse_showtime_dt(self):
         from app.scrapers.cinemark import _parse_showtime_dt
-        from datetime import timezone
 
+        # No theater → returns naive local datetime; caller supplies tz conversion
         dt = _parse_showtime_dt("2026-06-15", "7:10pm")
         assert dt is not None
-        assert dt.tzinfo == timezone.utc
+        assert dt.tzinfo is None
         assert dt.hour == 19
         assert dt.minute == 10
 
@@ -3401,3 +3401,268 @@ class TestUserInvite:
         assert resp.status_code == 200
         with app.app_context():
             assert UserInvite.query.get(invite_id) is None
+
+
+# ── Movies tab (#29) ──────────────────────────────────────────────────
+
+
+class TestMoviesTab:
+    def _make_alert_with_movie(self, app, user_id, theater_id, movie_id):
+        """Helper: create an active AlertPreference with one AlertMovie."""
+        pref = AlertPreference(user_id=user_id, theater_id=theater_id, is_active=True)
+        db.session.add(pref)
+        db.session.flush()
+        am = AlertMovie(alert_id=pref.id, movie_id=movie_id)
+        db.session.add(am)
+        db.session.commit()
+        return pref.id
+
+    def test_movies_page_loads_empty(self, auth_client):
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        assert b"No tracked movies" in resp.data or b"My Movies" in resp.data
+
+    def test_movies_page_shows_tracked_movie(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        assert b"Interstellar IMAX" in resp.data
+
+    def test_movies_page_unauthenticated_redirects(self, client):
+        resp = client.get("/movies")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
+
+    def test_movies_page_persists_after_alert_fires(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        """Movies must remain visible even after the alert fires (is_active=False)."""
+        with app.app_context():
+            pref = AlertPreference(user_id=sample_user, theater_id=sample_theater, is_active=False)
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        assert b"Interstellar IMAX" in resp.data
+
+    def test_movies_page_excludes_any_movie_alerts(self, app, auth_client, sample_theater, sample_user):
+        """An alert with no AlertMovies (any-movie) should not appear on the movies tab."""
+        with app.app_context():
+            pref = AlertPreference(user_id=sample_user, theater_id=sample_theater, is_active=True)
+            db.session.add(pref)
+            db.session.commit()
+
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        # Page loads fine; no movie rows since no AlertMovie rows exist
+        assert b"No tracked movies" in resp.data or b"My Movies" in resp.data
+
+    def test_movies_page_shows_next_showtime(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        from datetime import datetime, timezone, timedelta
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+            future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=5)
+            st = Showtime(
+                theater_id=sample_theater,
+                movie_id=sample_movie,
+                show_datetime=future,
+                tickets_available=True,
+                format_type="IMAX",
+            )
+            db.session.add(st)
+            db.session.commit()
+
+        resp = auth_client.get("/movies")
+        assert resp.status_code == 200
+        assert b"Next:" in resp.data
+
+
+# ── Movie detail page (#30) ───────────────────────────────────────────
+
+
+class TestMovieDetail:
+    def _make_alert_with_movie(self, app, user_id, theater_id, movie_id):
+        pref = AlertPreference(user_id=user_id, theater_id=theater_id, is_active=True)
+        db.session.add(pref)
+        db.session.flush()
+        am = AlertMovie(alert_id=pref.id, movie_id=movie_id)
+        db.session.add(am)
+        db.session.commit()
+        return pref.id
+
+    def test_movie_detail_loads(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Interstellar IMAX" in resp.data
+
+    def test_movie_detail_404_not_tracked(self, auth_client, sample_movie):
+        # Movie exists but user has no alert for it
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 404
+
+    def test_movie_detail_404_unknown_movie(self, auth_client):
+        resp = auth_client.get("/movies/9999")
+        assert resp.status_code == 404
+
+    def test_movie_detail_unauthenticated_redirects(self, client, sample_movie):
+        resp = client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
+
+    def test_movie_detail_shows_showtimes(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        from datetime import datetime, timezone, timedelta
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+            future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=3)
+            st = Showtime(
+                theater_id=sample_theater,
+                movie_id=sample_movie,
+                show_datetime=future,
+                tickets_available=True,
+                format_type="IMAX",
+            )
+            db.session.add(st)
+            db.session.commit()
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Upcoming Showtimes" in resp.data
+        assert b"Test IMAX Theater" in resp.data
+
+    def test_movie_detail_shows_showtimes_from_any_theater(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        """Showtimes at theaters OTHER than the alerted theater must still appear."""
+        from datetime import datetime, timezone, timedelta
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+            other = Theater(name="Other IMAX", chain="Regal", city="Othertown", state="ON")
+            db.session.add(other)
+            db.session.flush()
+            future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=2)
+            db.session.add(Showtime(theater_id=other.id, movie_id=sample_movie,
+                                   show_datetime=future, format_type="IMAX"))
+            db.session.commit()
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Other IMAX" in resp.data
+
+    def test_movie_detail_hides_past_showtimes(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        from datetime import datetime, timezone, timedelta
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+            past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+            st = Showtime(
+                theater_id=sample_theater,
+                movie_id=sample_movie,
+                show_datetime=past,
+                tickets_available=True,
+                format_type="IMAX",
+            )
+            db.session.add(st)
+            db.session.commit()
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"No upcoming showtimes" in resp.data
+
+    def test_movie_detail_shows_alerts_section(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        with app.app_context():
+            self._make_alert_with_movie(app, sample_user, sample_theater, sample_movie)
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Your Alerts" in resp.data
+        assert b"Test IMAX Theater" in resp.data
+
+    def test_movie_detail_accessible_after_alert_fires(self, app, auth_client, sample_movie, sample_theater, sample_user):
+        """Detail page must remain accessible after an alert fires (is_active=False)."""
+        with app.app_context():
+            pref = AlertPreference(user_id=sample_user, theater_id=sample_theater, is_active=False)
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+
+        resp = auth_client.get(f"/movies/{sample_movie}")
+        assert resp.status_code == 200
+        assert b"Interstellar IMAX" in resp.data
+
+
+class TestRadiusAlert:
+    """Tests for radius-based alert creation and target resolution."""
+
+    def _set_user_location(self, user_id, lat, lng):
+        user = User.query.get(user_id)
+        user.location_lat = lat
+        user.location_lon = lng
+        db.session.commit()
+
+    def test_create_radius_alert_requires_location(self, app, auth_client, sample_user, sample_movie):
+        """API rejects radius alert when user has no saved location."""
+        resp = auth_client.post("/api/alerts", json={
+            "user_id": sample_user,
+            "radius_km": 100.0,
+            "movie_ids": [],
+        })
+        assert resp.status_code == 400
+        assert b"location" in resp.data.lower()
+
+    def test_create_radius_alert_succeeds_with_location(self, app, auth_client, sample_user, sample_movie):
+        """Radius alert is created when user has a saved location."""
+        # Set location directly in the active fixture context (no nested context push)
+        self._set_user_location(sample_user, 34.05, -118.24)
+        resp = auth_client.post("/api/alerts", json={
+            "user_id": sample_user,
+            "radius_km": 200.0,
+            "tmdb_ids": [],
+        })
+        assert resp.status_code == 201, resp.get_json()
+        data = resp.get_json()
+        assert data["radius_km"] == 200.0
+        assert data["theater_id"] is None
+
+    def test_create_radius_alert_invalid_radius(self, app, auth_client, sample_user):
+        """API rejects non-positive radius."""
+        self._set_user_location(sample_user, 34.05, -118.24)
+        resp = auth_client.post("/api/alerts", json={
+            "user_id": sample_user,
+            "radius_km": -5.0,
+        })
+        assert resp.status_code == 400
+
+    def test_get_active_targets_includes_nearby_theater(self, app, sample_user, sample_theater, sample_movie):
+        """_get_active_targets expands a radius alert into specific theater IDs."""
+        from app.scrapers.base import _get_active_targets
+        # Theater is at (34.05, -118.24); put user at same location → 0 km away
+        with app.app_context():
+            self._set_user_location(sample_user, 34.05, -118.24)
+            pref = AlertPreference(user_id=sample_user, radius_km=50.0, is_active=True, alert_sent=False)
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+            targets = _get_active_targets()
+
+        assert sample_theater in targets
+        assert sample_movie in targets[sample_theater]
+
+    def test_get_active_targets_excludes_far_theater(self, app, sample_user, sample_theater, sample_movie):
+        """_get_active_targets does not include theaters outside the radius."""
+        from app.scrapers.base import _get_active_targets
+        # Put user far away (New York area) so theater in LA is outside 50 km
+        with app.app_context():
+            self._set_user_location(sample_user, 40.71, -74.01)
+            pref = AlertPreference(user_id=sample_user, radius_km=50.0, is_active=True, alert_sent=False)
+            db.session.add(pref)
+            db.session.flush()
+            db.session.add(AlertMovie(alert_id=pref.id, movie_id=sample_movie))
+            db.session.commit()
+            targets = _get_active_targets()
+
+        assert sample_theater not in targets

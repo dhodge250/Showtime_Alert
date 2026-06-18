@@ -68,20 +68,55 @@
         </p>
       </div>
 
-      <!-- Theater combo box -->
+      <!-- Theater targeting -->
       <div class="form-group">
-        <label>Theater <span class="text-muted" style="font-size:11px">(leave blank = any theater)</span></label>
-        <input type="hidden" id="theater_id" name="theater_id" value="" />
-        <div id="theater-search-wrap" style="position:relative">
-          <input type="text" id="theater-search-input"
-                 placeholder="Search theaters…"
-                 autocomplete="off"
-                 oninput="onTheaterSearch(this.value)" />
-          <div id="theater-search-results" class="search-dropdown" style="display:none"></div>
+        <label>Theater targeting</label>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px">
+            <input type="radio" name="targeting_mode" value="specific" checked onchange="onTargetingChange()"> Specific theater
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px">
+            <input type="radio" name="targeting_mode" value="any" onchange="onTargetingChange()"> Any theater
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px">
+            <input type="radio" name="targeting_mode" value="radius" onchange="onTargetingChange()"> Nearby theaters
+          </label>
         </div>
-        <div id="theater-selected" class="selected-movie-pill" style="display:none">
-          <span id="theater-label"></span>
-          <button type="button" class="btn-sm btn-ghost" onclick="clearTheaterSelection()" style="margin-left:8px">✕</button>
+
+        <!-- Specific theater search -->
+        <div id="theater-specific-wrap">
+          <input type="hidden" id="theater_id" name="theater_id" value="" />
+          <div id="theater-search-wrap" style="position:relative">
+            <input type="text" id="theater-search-input"
+                   placeholder="Search theaters…"
+                   autocomplete="off"
+                   oninput="onTheaterSearch(this.value)" />
+            <div id="theater-search-results" class="search-dropdown" style="display:none"></div>
+          </div>
+          <div id="theater-selected" class="selected-movie-pill" style="display:none">
+            <span id="theater-label"></span>
+            <button type="button" class="btn-sm btn-ghost" onclick="clearTheaterSelection()" style="margin-left:8px">✕</button>
+          </div>
+        </div>
+
+        <!-- Radius input -->
+        <div id="theater-radius-wrap" style="display:none">
+          {% if user_has_location %}
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" id="radius_input" min="1" max="{{ 5000 if unit == 'metric' else 3000 }}"
+                   placeholder="{{ '50' if unit == 'metric' else '30' }}" style="width:100px"
+                   oninput="onRadiusInput()" />
+            <span class="text-muted" style="font-size:13px">{{ 'km' if unit == 'metric' else 'mi' }}</span>
+          </div>
+          <small class="text-muted" id="radius-preview" style="font-size:11px;margin-top:4px;display:block">
+            Enter a radius above to see how many theaters are covered.
+          </small>
+          {% else %}
+          <p class="text-muted" style="font-size:13px;margin:0">
+            Your profile location is not set.
+            <a href="{{ url_for('main.profile') }}">Set it in your profile</a> to use radius alerts.
+          </p>
+          {% endif %}
         </div>
       </div>
 
@@ -166,7 +201,10 @@
                 Any Movie
               {% endif %}
               <span style="color:var(--text-muted)">&nbsp;@&nbsp;</span>
-              {{ pref.theater.name if pref.theater else 'Any Theater' }}
+              {% if pref.radius_km %}
+                {%- set _u = (pref.user.measurement_unit if pref.user else 'metric') -%}
+                Within {{ (pref.radius_km / 1.60934) | round(0) | int if _u == 'imperial' else pref.radius_km | round(0) | int }} {{ 'mi' if _u == 'imperial' else 'km' }}
+              {% elif pref.theater %}{{ pref.theater.name }}{% else %}Any Theater{% endif %}
             </div>
             <div class="pref-meta" style="font-size:12px;color:var(--text-muted);margin-top:2px">
               {{ pref.user.name if pref.user else '–' }}
@@ -220,6 +258,53 @@
 
 {% block scripts %}
 <script>
+// ── Targeting mode ──────────────────────────────────────────────────────
+const theatersCoords = {{ theaters_coords_json | tojson }};
+const userLat = {{ user_lat | tojson }};
+const userLng = {{ user_lng | tojson }};
+const unitLabel = {{ ('km' if unit == 'metric' else 'mi') | tojson }};
+const isImperial = {{ ('true' if unit == 'imperial' else 'false') }};
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function onTargetingChange() {
+  const mode = document.querySelector('input[name="targeting_mode"]:checked').value;
+  document.getElementById('theater-specific-wrap').style.display = mode === 'specific' ? '' : 'none';
+  document.getElementById('theater-radius-wrap').style.display  = mode === 'radius'   ? '' : 'none';
+  if (mode !== 'specific') {
+    document.getElementById('theater_id').value = '';
+    document.getElementById('theater-search-input').value = '';
+    document.getElementById('theater-selected').style.display = 'none';
+    document.getElementById('theater-search-results').style.display = 'none';
+  }
+  if (mode !== 'radius') {
+    const inp = document.getElementById('radius_input');
+    if (inp) inp.value = '';
+    const prev = document.getElementById('radius-preview');
+    if (prev) prev.textContent = 'Enter a radius above to see how many theaters are covered.';
+  }
+}
+
+function onRadiusInput() {
+  const inp = document.getElementById('radius_input');
+  const prev = document.getElementById('radius-preview');
+  if (!inp || !prev) return;
+  const val = parseFloat(inp.value);
+  if (!val || val <= 0 || userLat === null || userLng === null) {
+    prev.textContent = 'Enter a radius above to see how many theaters are covered.';
+    return;
+  }
+  const radiusKm = isImperial ? val * 1.60934 : val;
+  const count = theatersCoords.filter(t => haversineKm(userLat, userLng, t.lat, t.lng) <= radiusKm).length;
+  prev.textContent = `Covers ${count} IMAX theater${count !== 1 ? 's' : ''} within ${val} ${unitLabel}.`;
+}
+
 // ── Theater combo box ───────────────────────────────────────────────────
 const theatersData = {{ theaters_json | tojson }};
 
@@ -401,12 +486,28 @@ document.getElementById('alert-form').addEventListener('submit', async e => {
   btn.disabled = true;
 
   const userId    = parseInt(document.getElementById('user_id').value) || null;
-  const theaterId = parseInt(document.getElementById('theater_id').value) || null;
+  const targetingMode = document.querySelector('input[name="targeting_mode"]:checked').value;
+  const theaterId = targetingMode === 'specific'
+    ? (parseInt(document.getElementById('theater_id').value) || null)
+    : null;
 
   if (!userId) {
     showMsg('Please select a user.', 'error');
     btn.disabled = false;
     return;
+  }
+
+  // Radius alert validation
+  let radiusKm = null;
+  if (targetingMode === 'radius') {
+    const inp = document.getElementById('radius_input');
+    const rawVal = inp ? parseFloat(inp.value) : NaN;
+    if (!rawVal || rawVal <= 0) {
+      showMsg('Please enter a valid radius.', 'error');
+      btn.disabled = false;
+      return;
+    }
+    radiusKm = isImperial ? rawVal * 1.60934 : rawVal;
   }
 
   // Build movie_ids / tmdb_ids arrays from selectedMovies
@@ -423,6 +524,7 @@ document.getElementById('alert-form').addEventListener('submit', async e => {
   const body = {
     user_id: userId,
     theater_id: theaterId,
+    radius_km: radiusKm,
     movie_ids,
     tmdb_ids,
     max_notifications: maxNotif,
