@@ -71,16 +71,13 @@
       <!-- Theater targeting -->
       <div class="form-group">
         <label>Theater targeting</label>
-        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px">
-            <input type="radio" name="targeting_mode" value="specific" checked onchange="onTargetingChange()"> Specific theater
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px">
-            <input type="radio" name="targeting_mode" value="any" onchange="onTargetingChange()"> Any theater
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px">
-            <input type="radio" name="targeting_mode" value="radius" onchange="onTargetingChange()"> Nearby theaters
-          </label>
+        <div class="targeting-options">
+          <input type="radio" class="targeting-radio" name="targeting_mode" id="tm-specific" value="specific" checked onchange="onTargetingChange()">
+          <label for="tm-specific">Specific theater</label>
+          <input type="radio" class="targeting-radio" name="targeting_mode" id="tm-any" value="any" onchange="onTargetingChange()">
+          <label for="tm-any">Any theater</label>
+          <input type="radio" class="targeting-radio" name="targeting_mode" id="tm-radius" value="radius" onchange="onTargetingChange()">
+          <label for="tm-radius">Nearby theaters</label>
         </div>
 
         <!-- Specific theater search -->
