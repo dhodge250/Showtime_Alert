@@ -8,6 +8,7 @@ from flask import (
     abort,
     current_app,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -2665,6 +2666,52 @@ def api_trigger_venue_crawl():
     thread = threading.Thread(target=_run, daemon=True, name="venue-crawl")
     thread.start()
     return jsonify({"status": "started"})
+
+
+# ---------------------------------------------------------------------------
+# API: Theater export / import
+# ---------------------------------------------------------------------------
+
+@api_bp.route("/admin/theaters/export", methods=["GET"])
+@require_role("admin", "editor")
+def api_export_theaters():
+    """Download all theaters as a CSV file."""
+    from app.venue_crawler import export_theaters_csv
+
+    csv_data = export_theaters_csv()
+    resp = make_response(csv_data)
+    resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+    resp.headers["Content-Disposition"] = "attachment; filename=imax_theaters_export.csv"
+    return resp
+
+
+@api_bp.route("/admin/theaters/import", methods=["POST"])
+@require_role("admin")
+def api_import_theaters():
+    """Import/upsert theaters from an uploaded CSV file."""
+    from app.log_utils import write_log
+    from app.venue_crawler import import_theaters_from_csv_str
+
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"status": "error", "message": "No file uploaded"}), 400
+    if not f.filename.lower().endswith(".csv"):
+        return jsonify({"status": "error", "message": "File must be a .csv"}), 400
+
+    try:
+        csv_text = f.read().decode("utf-8")
+    except UnicodeDecodeError:
+        return jsonify({"status": "error", "message": "File must be UTF-8 encoded"}), 400
+
+    result = import_theaters_from_csv_str(csv_text)
+    level = "WARNING" if result["errors"] else "INFO"
+    write_log(
+        "geocode",
+        f"Theater CSV import: {result['inserted']} inserted, {result['updated']} updated, "
+        f"{result['skipped']} skipped, {len(result['errors'])} errors",
+        level=level,
+    )
+    return jsonify(result)
 
 
 # ---------------------------------------------------------------------------

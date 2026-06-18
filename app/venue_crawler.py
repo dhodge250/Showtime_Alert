@@ -46,9 +46,11 @@ import requests
 from app import db
 from app.models import Theater
 from app.lookup_helpers import (
+    get_or_create_aspect_ratio,
     get_or_create_audio_system,
     get_or_create_chain,
     get_or_create_city,
+    get_or_create_continent,
     get_or_create_country,
     get_or_create_projector_type,
     get_or_create_region,
@@ -1093,3 +1095,207 @@ def reseed_from_csv(columns: list[str], dry_run: bool = False) -> dict:
             updated = 0
 
     return {"updated": updated, "skipped": skipped, "unmatched": unmatched, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# Export / Import
+# ---------------------------------------------------------------------------
+
+_EXPORT_FIELDS = [
+    "Region", "Country", "State/Province", "City", "Location Name",
+    "Screen AR", "Digital Projector", " max AR (Digital)", "Film Projector",
+    "Screen Dimensions", "Commercial Films Shown", "Venue Key", "Chain",
+    "Website", "Audio System", "Address", "Postal Code", "Phone", "Active",
+]
+
+
+def export_theaters_csv() -> str:
+    """Return all theaters as a CSV string compatible with import_theaters_from_csv_str."""
+    import csv as _csv
+    import io
+
+    theaters = Theater.query.order_by(Theater.name).all()
+    out = io.StringIO()
+    writer = _csv.DictWriter(out, fieldnames=_EXPORT_FIELDS)
+    writer.writeheader()
+    for t in theaters:
+        writer.writerow({
+            "Region":                  t.continent_name,
+            "Country":                 t.country_name,
+            "State/Province":          t.region_name,
+            "City":                    t.city_name,
+            "Location Name":           t.name,
+            "Screen AR":               t.aspect_ratio_label,
+            "Digital Projector":       t.projector_type_name,
+            " max AR (Digital)":       t.digital_projector_ar_label,
+            "Film Projector":          t.film_projector_type_name,
+            "Screen Dimensions":       t.screen_dims or "",
+            "Commercial Films Shown":  t.commercial_films or "",
+            "Venue Key":               t.venue_key or "",
+            "Chain":                   t.chain_name,
+            "Website":                 t.website or "",
+            "Audio System":            t.audio_system_name,
+            "Address":                 t.address or "",
+            "Postal Code":             t.zip_code or "",
+            "Phone":                   t.phone or "",
+            "Active":                  "Yes" if t.is_active else "No",
+        })
+    return out.getvalue()
+
+
+def import_theaters_from_csv_str(csv_text: str) -> dict:
+    """
+    Upsert theaters from a CSV string.
+
+    Uses the same column layout as export_theaters_csv() / imax_theaters.csv.
+    Match priority: venue_key > exact name > case-insensitive name > insert new.
+    Non-empty CSV fields overwrite DB values; empty fields are left unchanged.
+    Returns {"inserted": N, "updated": N, "skipped": N, "errors": []}.
+    """
+    import csv as _csv
+    import io
+    import urllib.parse
+
+    def _normalise_ar(raw: str) -> str:
+        if not raw:
+            return raw
+        return re.sub(r":0+(\d)$", r":\1", raw.strip())
+
+    inserted = updated = skipped = 0
+    errors: list[str] = []
+    processed = 0
+
+    reader = _csv.DictReader(io.StringIO(csv_text))
+    for row in reader:
+        try:
+            location_name = (row.get("Location Name") or "").strip()
+            if not location_name:
+                skipped += 1
+                continue
+
+            continent_name  = (row.get("Region") or "").strip()
+            country_name    = (row.get("Country") or "").strip()
+            state_name      = (row.get("State/Province") or "").strip()
+            city_name       = (row.get("City") or "").strip()
+            screen_ar_raw   = _normalise_ar(row.get("Screen AR") or "")
+            digital_proj    = (row.get("Digital Projector") or "").strip()
+            digital_ar_raw  = _normalise_ar(
+                row.get(" max AR (Digital)") or row.get("max AR (Digital)") or ""
+            )
+            film_proj_raw   = (row.get("Film Projector") or "").strip()
+            screen_dims_str = (row.get("Screen Dimensions") or "").strip()
+            commercial      = (row.get("Commercial Films Shown") or "").strip() or None
+            venue_key       = (row.get("Venue Key") or "").strip() or None
+            chain_name      = (row.get("Chain") or "").strip() or None
+            website_url     = (row.get("Website") or "").strip() or None
+            audio_sys_name  = (row.get("Audio System") or "").strip() or None
+            address         = (row.get("Address") or "").strip() or None
+            postal_code     = (row.get("Postal Code") or "").strip() or None
+            phone           = (row.get("Phone") or "").strip() or None
+            active_str      = (row.get("Active") or "Yes").strip().lower()
+            is_active       = active_str not in ("no", "false", "0", "inactive")
+
+            continent_obj = get_or_create_continent(continent_name) if continent_name else None
+            country_obj   = get_or_create_country(country_name) if country_name else None
+            region_obj    = (
+                get_or_create_region(state_name, country_obj)
+                if state_name and country_obj else None
+            )
+            city_obj      = (
+                get_or_create_city(city_name, country_obj, region_obj)
+                if city_name and country_obj else None
+            )
+            ar_obj        = get_or_create_aspect_ratio(screen_ar_raw) if screen_ar_raw else None
+            dig_proj_obj  = get_or_create_projector_type(digital_proj) if digital_proj else None
+            dig_ar_obj    = get_or_create_aspect_ratio(digital_ar_raw) if digital_ar_raw else None
+            film_pt_obj   = get_or_create_projector_type(film_proj_raw) if film_proj_raw else None
+            chain_root    = None
+            if website_url:
+                _p = urllib.parse.urlparse(website_url)
+                chain_root = f"{_p.scheme}://{_p.netloc}" if _p.netloc else None
+            chain_obj     = get_or_create_chain(chain_name, website=chain_root or "") if chain_name else None
+            audio_sys_obj = get_or_create_audio_system(audio_sys_name) if audio_sys_name else None
+            w_m, h_m      = parse_screen_dims(screen_dims_str) if screen_dims_str else (None, None)
+
+            t = None
+            if venue_key:
+                t = Theater.query.filter_by(venue_key=venue_key).first()
+            if t is None:
+                t = Theater.query.filter_by(name=location_name).first()
+            if t is None:
+                t = Theater.query.filter(
+                    db.func.lower(Theater.name) == location_name.lower()
+                ).first()
+
+            if t is None:
+                t = Theater(name=location_name, is_active=is_active, crawl_source="import")
+                db.session.add(t)
+                inserted += 1
+            else:
+                t.is_active = is_active
+                updated += 1
+
+            t.name = location_name
+            if venue_key:
+                t.venue_key = venue_key
+            if country_name:
+                t.country    = country_name
+                t.country_id = country_obj.id if country_obj else t.country_id
+            if state_name:
+                t.state     = state_name
+                t.region_id = region_obj.id if region_obj else t.region_id
+            if city_name:
+                t.city    = city_name
+                t.city_id = city_obj.id if city_obj else t.city_id
+            if screen_ar_raw:
+                t.screen_size         = screen_ar_raw
+                t.aspect_ratio_id     = ar_obj.id if ar_obj else t.aspect_ratio_id
+            if digital_proj:
+                t.projector_type       = digital_proj
+                t.projector_type_id    = dig_proj_obj.id if dig_proj_obj else t.projector_type_id
+            if digital_ar_raw:
+                t.digital_projector_ar_id = dig_ar_obj.id if dig_ar_obj else t.digital_projector_ar_id
+            if film_proj_raw:
+                t.film_projector_type    = film_proj_raw
+                t.film_projector_type_id = film_pt_obj.id if film_pt_obj else t.film_projector_type_id
+            if screen_dims_str:
+                t.screen_dims = screen_dims_str
+            if commercial is not None:
+                t.commercial_films = commercial
+            if chain_name:
+                t.chain    = chain_name
+                t.chain_id = chain_obj.id if chain_obj else t.chain_id
+            if website_url:
+                t.website = website_url
+            if audio_sys_name:
+                t.audio_system    = audio_sys_name
+                t.audio_system_id = audio_sys_obj.id if audio_sys_obj else t.audio_system_id
+            if address:
+                t.address = address
+            if postal_code:
+                t.zip_code = postal_code
+            if phone:
+                t.phone = phone
+            if continent_obj:
+                t.continent_id = continent_obj.id
+            if w_m is not None:
+                t.screen_width_m  = w_m
+            if h_m is not None:
+                t.screen_height_m = h_m
+
+            processed += 1
+            if processed % 50 == 0:
+                db.session.flush()
+
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Row '{row.get('Location Name', '?')}': {exc}")
+            logger.warning("CSV import row error: %s", exc)
+
+    try:
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        errors.append(f"DB commit failed: {exc}")
+        return {"inserted": 0, "updated": 0, "skipped": skipped, "errors": errors}
+
+    return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors}
