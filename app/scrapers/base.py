@@ -167,6 +167,8 @@ def _get_active_targets() -> dict:
 
     targets: dict = {}
 
+    active_theaters = Theater.query.filter_by(is_active=True).all()
+
     for pref in active_prefs:
         # --- radius-based alert ---
         if pref.radius_km is not None:
@@ -174,7 +176,7 @@ def _get_active_targets() -> dict:
             if user is None or user.location_lat is None or user.location_lon is None:
                 continue
             theaters_in_radius = [
-                t for t in Theater.query.filter_by(is_active=True).all()
+                t for t in active_theaters
                 if t.latitude is not None and t.longitude is not None
                 and _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= pref.radius_km
             ]
