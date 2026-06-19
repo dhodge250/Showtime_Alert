@@ -10,20 +10,27 @@
     </div>
     <div class="page-header-actions">
       <a href="{{ url_for('main.admin_theater_new') }}" class="btn btn-primary">+ Add Theater</a>
-      <div class="actions-dropdown" id="actions-dropdown">
-        <button class="btn btn-outline" onclick="toggleActionsDropdown(event)">
-          Actions ▾
-        </button>
-        <div class="actions-dropdown-menu" id="actions-menu">
 
-          <span class="actions-dropdown-section-label">Showtimes</span>
+      <div class="actions-dropdown" id="dropdown-showtimes">
+        <button class="btn btn-outline" onclick="toggleDropdown(event, 'menu-showtimes')">Showtimes ▾</button>
+        <div class="actions-dropdown-menu" id="menu-showtimes">
           <button class="actions-dropdown-item" id="scrape-btn"
                   onclick="closeActionsDropdown(); triggerScrape(this)">
             Scrape Showtimes
             <span class="actions-dropdown-item-desc">Fetch current IMAX showings from chain websites now</span>
           </button>
+          <div class="actions-dropdown-divider"></div>
+          <button class="actions-dropdown-item actions-dropdown-item--danger" id="clear-btn"
+                  onclick="closeActionsDropdown(); openClearModal()">
+            Clear Showtimes
+            <span class="actions-dropdown-item-desc">Delete all stored showtime data from the database</span>
+          </button>
+        </div>
+      </div>
 
-          <span class="actions-dropdown-section-label">Venue Data</span>
+      <div class="actions-dropdown" id="dropdown-venue">
+        <button class="btn btn-outline" onclick="toggleDropdown(event, 'menu-venue')">Venue Data ▾</button>
+        <div class="actions-dropdown-menu" id="menu-venue">
           <button class="actions-dropdown-item" id="crawl-btn"
                   onclick="closeActionsDropdown(); triggerCrawl(this)">
             {% if crawl_running %}Crawl Running…{% else %}Refresh Theater List{% endif %}
@@ -51,8 +58,12 @@
             Reset Geocoding
             <span class="actions-dropdown-item-desc">Clear all coordinates so every theater geocodes fresh on next run</span>
           </button>
+        </div>
+      </div>
 
-          <span class="actions-dropdown-section-label">CSV &amp; Data</span>
+      <div class="actions-dropdown" id="dropdown-csv">
+        <button class="btn btn-outline" onclick="toggleDropdown(event, 'menu-csv')">CSV &amp; Data ▾</button>
+        <div class="actions-dropdown-menu" id="menu-csv">
           <button class="actions-dropdown-item" id="sync-csv-btn"
                   onclick="closeActionsDropdown(); syncFromCSV(this)">
             Sync from CSV
@@ -72,13 +83,6 @@
                   onclick="closeActionsDropdown(); openImportModal()">
             Import Theaters
             <span class="actions-dropdown-item-desc">Upload a modified CSV to update theater records in bulk</span>
-          </button>
-
-          <div class="actions-dropdown-divider"></div>
-          <button class="actions-dropdown-item actions-dropdown-item--danger" id="clear-btn"
-                  onclick="closeActionsDropdown(); openClearModal()">
-            Clear Showtimes
-            <span class="actions-dropdown-item-desc">Delete all stored showtime data from the database</span>
           </button>
         </div>
       </div>
@@ -472,17 +476,19 @@
 
 {% block scripts %}
 <script>
-// ── Actions dropdown ──────────────────────────────────────────────────
-function toggleActionsDropdown(e) {
-  e.stopPropagation();
-  document.getElementById('actions-menu').classList.toggle('open');
-}
+// ── Actions dropdowns ─────────────────────────────────────────────────
 function closeActionsDropdown() {
-  document.getElementById('actions-menu').classList.remove('open');
+  document.querySelectorAll('.actions-dropdown-menu').forEach(m => m.classList.remove('open'));
+}
+function toggleDropdown(e, menuId) {
+  e.stopPropagation();
+  const target = document.getElementById(menuId);
+  const wasOpen = target.classList.contains('open');
+  closeActionsDropdown();
+  if (!wasOpen) target.classList.add('open');
 }
 document.addEventListener('click', function(e) {
-  const dd = document.getElementById('actions-dropdown');
-  if (dd && !dd.contains(e.target)) closeActionsDropdown();
+  if (!e.target.closest('.actions-dropdown')) closeActionsDropdown();
 });
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closeActionsDropdown();
