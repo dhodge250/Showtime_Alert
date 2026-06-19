@@ -1143,6 +1143,10 @@ def export_theaters_csv() -> str:
     return out.getvalue()
 
 
+_VALID_COMMERCIAL = frozenset({"yes", "no", "limited"})
+_VALID_ACTIVE     = frozenset({"yes", "no", "true", "false", "1", "0", "inactive"})
+
+
 def import_theaters_from_csv_str(csv_text: str) -> dict:
     """
     Upsert theaters from a CSV string.
@@ -1150,7 +1154,7 @@ def import_theaters_from_csv_str(csv_text: str) -> dict:
     Uses the same column layout as export_theaters_csv() / imax_theaters.csv.
     Match priority: venue_key > exact name > case-insensitive name > insert new.
     Non-empty CSV fields overwrite DB values; empty fields are left unchanged.
-    Returns {"inserted": N, "updated": N, "skipped": N, "errors": []}.
+    Returns {"inserted": N, "updated": N, "skipped": N, "errors": [], "warnings": []}.
     """
     import csv as _csv
     import io
@@ -1163,9 +1167,28 @@ def import_theaters_from_csv_str(csv_text: str) -> dict:
 
     inserted = updated = skipped = 0
     errors: list[str] = []
+    warnings: list[str] = []
     processed = 0
 
     reader = _csv.DictReader(io.StringIO(csv_text))
+
+    # ── Header validation ──────────────────────────────────────────────
+    if not reader.fieldnames:
+        return {"inserted": 0, "updated": 0, "skipped": 0,
+                "errors": ["File is empty or has no header row"], "warnings": []}
+    headers = set(reader.fieldnames)
+    if "Location Name" not in headers:
+        return {
+            "inserted": 0, "updated": 0, "skipped": 0,
+            "errors": ["Missing required column 'Location Name'. "
+                       "Is this a valid IMAX Alert theater CSV?"],
+            "warnings": [],
+        }
+    known = set(_EXPORT_FIELDS) | {"max AR (Digital)"}
+    unknown_cols = headers - known - {"Location Name"}
+    if unknown_cols:
+        warnings.append(f"Unrecognized column(s) ignored: {', '.join(sorted(unknown_cols))}")
+
     for row in reader:
         try:
             location_name = (row.get("Location Name") or "").strip()
@@ -1194,6 +1217,29 @@ def import_theaters_from_csv_str(csv_text: str) -> dict:
             phone           = (row.get("Phone") or "").strip() or None
             active_str      = (row.get("Active") or "Yes").strip().lower()
             is_active       = active_str not in ("no", "false", "0", "inactive")
+
+            # ── Per-row data validation ────────────────────────────────
+            if website_url and not (
+                website_url.startswith("http://") or website_url.startswith("https://")
+            ):
+                errors.append(
+                    f"Row '{location_name}': Website '{website_url}' rejected — "
+                    "must start with http:// or https://"
+                )
+                website_url = None
+
+            if commercial and commercial.lower() not in _VALID_COMMERCIAL:
+                errors.append(
+                    f"Row '{location_name}': Commercial Films Shown '{commercial}' rejected — "
+                    "must be Yes, No, or Limited"
+                )
+                commercial = None
+
+            if active_str not in _VALID_ACTIVE:
+                errors.append(
+                    f"Row '{location_name}': Active '{active_str}' unrecognized — defaulting to Yes"
+                )
+                is_active = True
 
             continent_obj = get_or_create_continent(continent_name) if continent_name else None
             country_obj   = get_or_create_country(country_name) if country_name else None
@@ -1296,6 +1342,6 @@ def import_theaters_from_csv_str(csv_text: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         db.session.rollback()
         errors.append(f"DB commit failed: {exc}")
-        return {"inserted": 0, "updated": 0, "skipped": skipped, "errors": errors}
+        return {"inserted": 0, "updated": 0, "skipped": skipped, "errors": errors, "warnings": warnings}
 
-    return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors}
+    return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors, "warnings": warnings}

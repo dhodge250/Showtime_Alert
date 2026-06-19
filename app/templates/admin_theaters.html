@@ -15,21 +15,14 @@
           Actions ▾
         </button>
         <div class="actions-dropdown-menu" id="actions-menu">
+
+          <span class="actions-dropdown-section-label">Showtimes</span>
           <button class="actions-dropdown-item" id="scrape-btn"
                   onclick="closeActionsDropdown(); triggerScrape(this)">
             Scrape Showtimes
           </button>
-          <button class="actions-dropdown-item" id="sync-csv-btn"
-                  onclick="closeActionsDropdown(); syncFromCSV(this)">
-            Sync from CSV
-          </button>
-          <a class="actions-dropdown-item" href="{{ url_for('api.api_export_theaters') }}" download>
-            Export as CSV
-          </a>
-          <button class="actions-dropdown-item" id="import-btn"
-                  onclick="closeActionsDropdown(); openImportModal()">
-            Import CSV
-          </button>
+
+          <span class="actions-dropdown-section-label">Venue Data</span>
           <button class="actions-dropdown-item" id="crawl-btn"
                   onclick="closeActionsDropdown(); triggerCrawl(this)">
             {% if crawl_running %}Crawl Running…{% else %}Refresh Theater List{% endif %}
@@ -48,16 +41,30 @@
                   {% if geocode_status.running %}disabled{% endif %}>
             Re-geocode All
           </button>
-          <button class="actions-dropdown-item actions-dropdown-item--pre-divider" id="geocode-reset-btn"
+          <button class="actions-dropdown-item" id="geocode-reset-btn"
                   onclick="closeActionsDropdown(); triggerGeocodeReset(this)"
                   {% if geocode_status.running %}disabled{% endif %}>
             Reset Geocoding
           </button>
-          <div class="actions-dropdown-divider"></div>
+
+          <span class="actions-dropdown-section-label">CSV &amp; Data</span>
+          <button class="actions-dropdown-item" id="sync-csv-btn"
+                  onclick="closeActionsDropdown(); syncFromCSV(this)">
+            Sync from CSV
+          </button>
           <button class="actions-dropdown-item" id="reseed-btn"
                   onclick="closeActionsDropdown(); openReseedModal()">
             Re-seed from CSV
           </button>
+          <button class="actions-dropdown-item" id="export-btn"
+                  onclick="closeActionsDropdown(); openExportModal()">
+            Export Theaters
+          </button>
+          <button class="actions-dropdown-item" id="import-btn"
+                  onclick="closeActionsDropdown(); openImportModal()">
+            Import Theaters
+          </button>
+
           <div class="actions-dropdown-divider"></div>
           <button class="actions-dropdown-item actions-dropdown-item--danger" id="clear-btn"
                   onclick="closeActionsDropdown(); openClearModal()">
@@ -315,6 +322,39 @@
       <button id="reseed-confirm-btn" class="btn btn-primary" onclick="executeReseed()" disabled>
         Re-seed
       </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Export Theaters Modal ─────────────────────────────────────── -->
+<div id="export-modal" class="modal-overlay" style="display:none" onclick="handleExportOverlayClick(event)">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="export-modal-title">
+    <div class="modal-header">
+      <h2 id="export-modal-title">Export Theaters</h2>
+      <button class="modal-close" onclick="closeExportModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-top:0;color:var(--text-muted);font-size:13px">
+        Exports all {{ theaters|length }} theaters as a CSV file (same column layout as the seed file,
+        plus an Active column). Choose how to receive the file.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+        <a class="btn btn-outline" style="text-align:center"
+           href="{{ url_for('api.api_export_theaters') }}" download
+           onclick="closeExportModal()">
+          Download to this browser
+        </a>
+        <button class="btn btn-outline" id="export-email-btn" onclick="executeExportEmail(this)">
+          Email to {{ current_user.email or 'your email' }}
+        </button>
+        <button class="btn btn-outline" id="export-save-btn" onclick="executeExportSave(this)">
+          Save to server
+        </button>
+      </div>
+      <p id="export-result" style="display:none;margin-top:10px;font-size:13px"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeExportModal()">Close</button>
     </div>
   </div>
 </div>
@@ -1286,41 +1326,137 @@ function showToast(msg) {
   setTimeout(() => { el.style.display = 'none'; }, 2500);
 }
 
+// ── Export Theaters Modal ─────────────────────────────────────────────────
+function openExportModal() {
+  document.getElementById('export-result').style.display = 'none';
+  document.getElementById('export-email-btn').disabled = false;
+  document.getElementById('export-email-btn').textContent = 'Email to {{ current_user.email or "your email" }}';
+  document.getElementById('export-save-btn').disabled = false;
+  document.getElementById('export-save-btn').textContent = 'Save to server';
+  document.getElementById('export-modal').style.display = 'flex';
+}
+function closeExportModal() {
+  document.getElementById('export-modal').style.display = 'none';
+}
+function handleExportOverlayClick(e) {
+  if (e.target === document.getElementById('export-modal')) closeExportModal();
+}
+
+function showExportResult(msg, isError) {
+  const el = document.getElementById('export-result');
+  el.textContent = msg;
+  el.style.color = isError ? 'var(--danger)' : 'var(--success)';
+  el.style.display = '';
+}
+
+function executeExportEmail(btn) {
+  btn.disabled = true; btn.textContent = 'Sending…';
+  fetch('/api/admin/theaters/export/email', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'ok') {
+        showExportResult(`Email sent to ${data.email}.`, false);
+        btn.textContent = 'Sent';
+      } else {
+        showExportResult(`Error: ${data.message}`, true);
+        btn.disabled = false;
+        btn.textContent = 'Email to {{ current_user.email or "your email" }}';
+      }
+    })
+    .catch(() => {
+      showExportResult('Request failed — check logs.', true);
+      btn.disabled = false;
+      btn.textContent = 'Email to {{ current_user.email or "your email" }}';
+    });
+}
+
+function executeExportSave(btn) {
+  btn.disabled = true; btn.textContent = 'Saving…';
+  fetch('/api/admin/theaters/export/save', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'ok') {
+        showExportResult(`Saved as ${data.filename} (${data.path}).`, false);
+        btn.textContent = 'Saved';
+      } else {
+        showExportResult(`Error: ${data.message}`, true);
+        btn.disabled = false;
+        btn.textContent = 'Save to server';
+      }
+    })
+    .catch(() => {
+      showExportResult('Request failed — check logs.', true);
+      btn.disabled = false;
+      btn.textContent = 'Save to server';
+    });
+}
+
 // ── Import Theaters Modal ─────────────────────────────────────────────────
+const _REQUIRED_IMPORT_HEADER = 'Location Name';
 let _importFile = null;
 
 function openImportModal() {
   _importFile = null;
   document.getElementById('import-file-input').value = '';
-  document.getElementById('import-preview').textContent = 'Select a file to preview.';
+  _setImportPreview('Select a .csv file to continue.', false);
   document.getElementById('import-confirm-btn').disabled = true;
   document.getElementById('import-modal').style.display = 'flex';
 }
-
 function closeImportModal() {
   document.getElementById('import-modal').style.display = 'none';
 }
-
 function handleImportOverlayClick(e) {
   if (e.target === document.getElementById('import-modal')) closeImportModal();
 }
 
+function _setImportPreview(msg, isError) {
+  const el = document.getElementById('import-preview');
+  el.textContent = msg;
+  el.style.color = isError ? 'var(--danger)' : '';
+}
+
 function onImportFileChange(input) {
   const file = input.files[0];
+  const previewEl = document.getElementById('import-preview');
   if (!file) {
     _importFile = null;
-    document.getElementById('import-preview').textContent = 'Select a file to preview.';
+    _setImportPreview('Select a .csv file to continue.', false);
     document.getElementById('import-confirm-btn').disabled = true;
     return;
   }
+
+  // Fix #3 — reject non-CSV files before reading content
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    _importFile = null;
+    input.value = '';
+    _setImportPreview(`"${file.name}" is not a CSV file. Only .csv files are accepted.`, true);
+    document.getElementById('import-confirm-btn').disabled = true;
+    return;
+  }
+
   _importFile = file;
-  // Count rows client-side for a quick preview (header row excluded)
   const reader = new FileReader();
   reader.onload = function(e) {
-    const lines = (e.target.result || '').split('\n').filter(l => l.trim());
-    const rowCount = Math.max(0, lines.length - 1); // subtract header
-    document.getElementById('import-preview').textContent =
-      `${rowCount} theater row${rowCount !== 1 ? 's' : ''} found in file. Click Import to apply.`;
+    const text = e.target.result || '';
+
+    // Fix #4 — validate header row before enabling Import
+    const firstLine = text.split('\n')[0] || '';
+    const headers = firstLine.split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+    if (!headers.includes(_REQUIRED_IMPORT_HEADER)) {
+      _setImportPreview(
+        `Column "${_REQUIRED_IMPORT_HEADER}" not found. Is this a valid IMAX Alert theater CSV?`,
+        true
+      );
+      document.getElementById('import-confirm-btn').disabled = true;
+      return;
+    }
+
+    // Count data rows (exclude header and blank lines)
+    const rowCount = Math.max(0, text.split('\n').slice(1).filter(l => l.trim()).length);
+    _setImportPreview(
+      `${rowCount} theater row${rowCount !== 1 ? 's' : ''} found. Click Import to apply.`,
+      false
+    );
     document.getElementById('import-confirm-btn').disabled = rowCount === 0;
   };
   reader.readAsText(file);
@@ -1338,18 +1474,28 @@ function executeImport() {
   fetch('/api/admin/theaters/import', { method: 'POST', body: formData })
     .then(r => r.json())
     .then(data => {
+      if (data.status === 'error') {
+        _setImportPreview(`Import blocked: ${data.message}`, true);
+        btn.disabled = false;
+        btn.textContent = 'Import';
+        return;
+      }
       closeImportModal();
-      if (data.errors && data.errors.length) {
-        showToast(`Import done with ${data.errors.length} error(s) — check logs.`);
+      const errCount = (data.errors || []).length;
+      const warnCount = (data.warnings || []).length;
+      const msg = `${data.inserted} inserted, ${data.updated} updated, ${data.skipped} skipped`;
+      if (errCount) {
+        showToast(`Import done with ${errCount} validation error(s) — check logs.`);
+      } else if (warnCount) {
+        showToast(`Import complete: ${msg}. ${warnCount} warning(s).`);
       } else {
-        const msg = `${data.inserted} inserted, ${data.updated} updated, ${data.skipped} skipped`;
         showToast(`Import complete: ${msg}.`);
       }
       btn.textContent = 'Import';
       setTimeout(() => location.reload(), 1500);
     })
     .catch(() => {
-      showToast('Import failed — check logs.');
+      _setImportPreview('Import failed — check logs.', true);
       btn.disabled = false;
       btn.textContent = 'Import';
     });

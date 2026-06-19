@@ -2714,6 +2714,69 @@ def api_import_theaters():
     return jsonify(result)
 
 
+@api_bp.route("/admin/theaters/export/email", methods=["POST"])
+@require_role("admin", "editor")
+def api_export_theaters_email():
+    """Generate theater CSV and email it to the requesting user."""
+    from app.notifications import send_email_with_attachment
+    from app.venue_crawler import export_theaters_csv
+
+    to_addr = current_user.email
+    if not to_addr:
+        return jsonify({"status": "error", "message": "Your account has no email address configured"}), 400
+
+    csv_data = export_theaters_csv()
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = f"imax_theaters_{ts}.csv"
+
+    ok, err = send_email_with_attachment(
+        app_config=current_app.config,
+        to_address=to_addr,
+        subject=f"IMAX Alert — Theater Export ({ts})",
+        body_html=f"<p>Your theater CSV export is attached as <strong>{filename}</strong>.</p>",
+        body_text=f"Your theater CSV export is attached as {filename}.",
+        attachment_data=csv_data.encode("utf-8"),
+        attachment_filename=filename,
+    )
+    if ok:
+        return jsonify({"status": "ok", "email": to_addr})
+    return jsonify({"status": "error", "message": err}), 500
+
+
+@api_bp.route("/admin/theaters/export/save", methods=["POST"])
+@require_role("admin", "editor")
+def api_export_theaters_save():
+    """Save theater CSV to the server's persistent data directory."""
+    import os
+    from app.venue_crawler import export_theaters_csv
+
+    db_url = current_app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if db_url.startswith("sqlite:///"):
+        db_path = db_url[len("sqlite:///"):]
+        data_dir = os.path.dirname(os.path.abspath(db_path)) if db_path else "/app/data"
+    else:
+        data_dir = "/app/data"
+
+    exports_dir = os.path.join(data_dir, "exports")
+    try:
+        os.makedirs(exports_dir, exist_ok=True)
+    except OSError as exc:
+        return jsonify({"status": "error", "message": f"Cannot create exports directory: {exc}"}), 500
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = f"imax_theaters_{ts}.csv"
+    filepath = os.path.join(exports_dir, filename)
+
+    csv_data = export_theaters_csv()
+    try:
+        with open(filepath, "w", encoding="utf-8", newline="") as fh:
+            fh.write(csv_data)
+    except OSError as exc:
+        return jsonify({"status": "error", "message": f"Could not write file: {exc}"}), 500
+
+    return jsonify({"status": "ok", "filename": filename, "path": filepath})
+
+
 # ---------------------------------------------------------------------------
 # API: Notifications log
 # ---------------------------------------------------------------------------
