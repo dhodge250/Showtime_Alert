@@ -84,6 +84,65 @@ def send_email(
         return False, str(exc)
 
 
+def send_email_with_attachment(
+    app_config: dict,
+    to_address: str,
+    subject: str,
+    body_html: str,
+    body_text: str,
+    attachment_data: bytes,
+    attachment_filename: str,
+    attachment_content_type: str = "text/csv",
+) -> tuple[bool, str]:
+    """Like send_email but includes a binary file attachment."""
+    from email import encoders as _enc
+    from email.mime.base import MIMEBase
+
+    username = app_config.get("MAIL_USERNAME", "")
+    password = app_config.get("MAIL_PASSWORD", "")
+    from_address = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
+
+    if not username or not password:
+        return False, "Email credentials not configured"
+
+    host = app_config.get("MAIL_SERVER", "smtp.gmail.com")
+    port = int(app_config.get("MAIL_PORT", 587))
+    use_tls = app_config.get("MAIL_USE_TLS", True)
+
+    outer = MIMEMultipart("mixed")
+    outer["Subject"] = subject
+    outer["From"] = from_address
+    outer["To"] = to_address
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(body_text, "plain"))
+    alt.attach(MIMEText(body_html, "html"))
+    outer.attach(alt)
+
+    part = MIMEBase("application", "octet-stream")
+    part.set_payload(attachment_data)
+    _enc.encode_base64(part)
+    part.add_header("Content-Disposition", "attachment", filename=attachment_filename)
+    part.add_header("Content-Type", attachment_content_type)
+    outer.attach(part)
+
+    try:
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=_SMTP_TIMEOUT)
+        else:
+            server = smtplib.SMTP(host, port, timeout=_SMTP_TIMEOUT)
+            if use_tls:
+                server.starttls()
+        server.login(username, password)
+        server.sendmail(from_address, to_address, outer.as_string())
+        server.quit()
+        logger.info("Email with attachment sent to %s", to_address)
+        return True, ""
+    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
+        logger.error("Failed to send email with attachment to %s: %s", to_address, exc)
+        return False, str(exc)
+
+
 # ---------------------------------------------------------------------------
 # SMS transport
 # ---------------------------------------------------------------------------
