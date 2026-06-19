@@ -20,12 +20,14 @@
           <button class="actions-dropdown-item" id="scrape-btn"
                   onclick="closeActionsDropdown(); triggerScrape(this)">
             Scrape Showtimes
+            <span class="actions-dropdown-item-desc">Fetch current IMAX showings from chain websites now</span>
           </button>
 
           <span class="actions-dropdown-section-label">Venue Data</span>
           <button class="actions-dropdown-item" id="crawl-btn"
                   onclick="closeActionsDropdown(); triggerCrawl(this)">
             {% if crawl_running %}Crawl Running…{% else %}Refresh Theater List{% endif %}
+            <span class="actions-dropdown-item-desc">Crawl theater websites to discover new or renamed locations</span>
           </button>
           <button class="actions-dropdown-item" id="geocode-btn"
                   onclick="closeActionsDropdown(); triggerGeocode(this)"
@@ -35,40 +37,48 @@
             {% else %}
               Geocode Missing
             {% endif %}
+            <span class="actions-dropdown-item-desc">Look up coordinates for theaters that have none yet</span>
           </button>
           <button class="actions-dropdown-item" id="geocode-all-btn"
                   onclick="closeActionsDropdown(); triggerGeocodeAll(this)"
                   {% if geocode_status.running %}disabled{% endif %}>
             Re-geocode All
+            <span class="actions-dropdown-item-desc">Re-run geocoding for every theater, overwriting existing coordinates</span>
           </button>
           <button class="actions-dropdown-item" id="geocode-reset-btn"
                   onclick="closeActionsDropdown(); triggerGeocodeReset(this)"
                   {% if geocode_status.running %}disabled{% endif %}>
             Reset Geocoding
+            <span class="actions-dropdown-item-desc">Clear all coordinates so every theater geocodes fresh on next run</span>
           </button>
 
           <span class="actions-dropdown-section-label">CSV &amp; Data</span>
           <button class="actions-dropdown-item" id="sync-csv-btn"
                   onclick="closeActionsDropdown(); syncFromCSV(this)">
             Sync from CSV
+            <span class="actions-dropdown-item-desc">Add new theaters and update all fields from the seed CSV — non-destructive</span>
           </button>
           <button class="actions-dropdown-item" id="reseed-btn"
                   onclick="closeActionsDropdown(); openReseedModal()">
             Re-seed from CSV
+            <span class="actions-dropdown-item-desc">Restore selected columns (e.g. website, chain) to seed values, overwriting manual edits</span>
           </button>
           <button class="actions-dropdown-item" id="export-btn"
                   onclick="closeActionsDropdown(); openExportModal()">
             Export Theaters
+            <span class="actions-dropdown-item-desc">Download, email, or save a CSV snapshot of all theaters</span>
           </button>
           <button class="actions-dropdown-item" id="import-btn"
                   onclick="closeActionsDropdown(); openImportModal()">
             Import Theaters
+            <span class="actions-dropdown-item-desc">Upload a modified CSV to update theater records in bulk</span>
           </button>
 
           <div class="actions-dropdown-divider"></div>
           <button class="actions-dropdown-item actions-dropdown-item--danger" id="clear-btn"
                   onclick="closeActionsDropdown(); openClearModal()">
             Clear Showtimes
+            <span class="actions-dropdown-item-desc">Delete all stored showtime data from the database</span>
           </button>
         </div>
       </div>
