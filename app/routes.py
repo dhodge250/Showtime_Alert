@@ -284,15 +284,26 @@ def alert_detail(pref_id):
     )
 
 
-@main_bp.route("/profile", methods=["GET", "POST"])
+@main_bp.route("/profile")
 @login_required
 def profile():
-    """User profile page — view info + update notification prefs and unit preference."""
+    return redirect(url_for("main.settings_account"), 301)
+
+
+@main_bp.route("/settings")
+@login_required
+def settings():
+    return redirect(url_for("main.settings_account"))
+
+
+@main_bp.route("/settings/account", methods=["GET", "POST"])
+@login_required
+def settings_account():
+    """My Account — view profile info + update preferences."""
     user = current_user._get_current_object()
     saved = False
 
     if request.method == "POST":
-        # Only allow updating notification prefs and measurement unit from this page
         user.notify_email = request.form.get("notify_email") == "on"
         user.notify_sms = request.form.get("notify_sms") == "on"
         unit = request.form.get("measurement_unit", "metric")
@@ -308,7 +319,7 @@ def profile():
         db.session.commit()
         saved = True
 
-    return render_template("profile.html", user=user, saved=saved, unit=user.measurement_unit or "metric")
+    return render_template("settings_account.html", user=user, saved=saved, unit=user.measurement_unit or "metric")
 
 
 @main_bp.route("/profile/mfa-setup", methods=["GET", "POST"])
@@ -350,7 +361,7 @@ def profile_mfa_setup():
                                        error=error)
         elif action == "regen_recovery":
             if not user.mfa_enabled:
-                return redirect(url_for("main.profile"))
+                return redirect(url_for("main.settings_account"))
             recovery_codes = user.generate_recovery_codes()
             db.session.commit()
             return render_template("mfa_setup.html", user=user, step="done",
@@ -378,13 +389,13 @@ def profile_mfa_disable():
     password = request.form.get("password", "")
     if not user.check_password(password):
         flash("Incorrect password. MFA was not disabled.", "error")
-        return redirect(url_for("main.profile"))
+        return redirect(url_for("main.settings_account"))
     user.clear_mfa()
     db.session.commit()
     from app.log_utils import write_log
     write_log("auth", f"MFA disabled by {user.email}", user_id=user.id)
     flash("Multi-factor authentication has been disabled.", "success")
-    return redirect(url_for("main.profile"))
+    return redirect(url_for("main.settings_account"))
 
 
 # ---------------------------------------------------------------------------

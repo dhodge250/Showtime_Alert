@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block title %}My Account – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>My Account</h1>
+</div>
+
+{% if saved %}
+<div class="flash-message flash-success">Preferences saved.</div>
+{% endif %}
+
+<div class="settings-account-grid">
+
+  {# ── Profile Info (read-only) ── #}
+  <div class="form-section settings-profile-info">
+    <h2 class="form-section-title">Profile Info</h2>
+
+    <div class="settings-profile-identity">
+      <div class="settings-avatar" aria-hidden="true">
+        {{ (current_user.name or 'U')[:2]|upper }}
+      </div>
+      <div class="settings-identity-meta">
+        <span class="settings-identity-name">{{ current_user.name }}</span>
+        <div class="settings-identity-badges">
+          {% if current_user.role_name %}
+          <span class="role-badge role-{{ current_user.role_name }}">{{ current_user.role_name }}</span>
+          {% endif %}
+          {% if current_user.created_at %}
+          <span class="settings-identity-since">
+            Member since <time class="utc-time" datetime="{{ current_user.created_at.isoformat() }}Z" data-fmt="date-only">
+              {{ current_user.created_at.strftime('%b %Y') }}
+            </time>
+          </span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-info-rows">
+      <div class="settings-info-row">
+        <span class="info-label">Email</span>
+        <span class="info-value">{{ current_user.email or '—' }}</span>
+      </div>
+      <div class="settings-info-row">
+        <span class="info-label">Phone</span>
+        <span class="info-value">{{ current_user.phone or '—' }}</span>
+      </div>
+      {% if current_user.location_name or current_user.location_address %}
+      <div class="settings-info-row">
+        <span class="info-label">Location</span>
+        <span class="info-value">{{ current_user.location_name or current_user.location_address }}</span>
+      </div>
+      {% endif %}
+      {% if current_user.last_login_at %}
+      <div class="settings-info-row">
+        <span class="info-label">Last login</span>
+        <span class="info-value">
+          <time class="utc-time" datetime="{{ current_user.last_login_at.isoformat() }}Z" data-fmt="short">
+            {{ current_user.last_login_at.strftime('%b %-d at %-I:%M %p') }}
+          </time>
+        </span>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if current_user.location_lat and current_user.location_lon %}
+    <div id="profile-map" style="height:180px;border-radius:var(--radius);border:1px solid var(--border);margin-top:16px"></div>
+    {% endif %}
+  </div>
+
+  {# ── Profile Settings (editable, accordion) ── #}
+  <div class="form-section settings-profile-settings">
+    <h2 class="form-section-title">Profile Settings</h2>
+
+    <div class="settings-accordion">
+
+      {# Account Details #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-account">
+          <span>Account Details</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-account">
+          <div class="settings-accordion-inner">
+            <form method="post" action="{{ url_for('main.settings_account') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="section" value="account">
+
+              <div class="form-group" style="margin-bottom:14px">
+                <label for="acc-timezone">Timezone</label>
+                <select id="acc-timezone" name="timezone">
+                  {% set _tz = user.timezone or 'UTC' %}
+                  {% set _tz_groups = [
+                    ('UTC',         [('UTC', 'UTC')]),
+                    ('United States', [
+                      ('America/New_York',    'Eastern Time (ET)'),
+                      ('America/Chicago',     'Central Time (CT)'),
+                      ('America/Denver',      'Mountain Time (MT)'),
+                      ('America/Phoenix',     'Arizona (no DST)'),
+                      ('America/Los_Angeles', 'Pacific Time (PT)'),
+                      ('America/Anchorage',   'Alaska (AKT)'),
+                      ('Pacific/Honolulu',    'Hawaii (HT)'),
+                    ]),
+                    ('Canada', [
+                      ('America/Halifax',   'Halifax (AT)'),
+                      ('America/Toronto',   'Toronto (ET)'),
+                      ('America/Winnipeg',  'Winnipeg (CT)'),
+                      ('America/Edmonton',  'Edmonton (MT)'),
+                      ('America/Vancouver', 'Vancouver (PT)'),
+                    ]),
+                    ('Europe', [
+                      ('Europe/London',    'London (GMT/BST)'),
+                      ('Europe/Paris',     'Paris (CET/CEST)'),
+                      ('Europe/Berlin',    'Berlin (CET/CEST)'),
+                      ('Europe/Rome',      'Rome (CET/CEST)'),
+                      ('Europe/Helsinki',  'Helsinki (EET/EEST)'),
+                    ]),
+                    ('Asia / Pacific', [
+                      ('Asia/Dubai',     'Dubai (GST)'),
+                      ('Asia/Kolkata',   'India (IST)'),
+                      ('Asia/Singapore', 'Singapore (SGT)'),
+                      ('Asia/Shanghai',  'China (CST)'),
+                      ('Asia/Tokyo',     'Japan (JST)'),
+                      ('Asia/Seoul',     'Korea (KST)'),
+                      ('Australia/Perth',   'Perth (AWST)'),
+                      ('Australia/Sydney',  'Sydney (AET)'),
+                      ('Pacific/Auckland',  'Auckland (NZST)'),
+                    ]),
+                  ] %}
+                  {% for group_label, zones in _tz_groups %}
+                    <optgroup label="{{ group_label }}">
+                      {% for val, label in zones %}
+                      <option value="{{ val }}" {% if val == _tz %}selected{% endif %}>{{ label }}</option>
+                      {% endfor %}
+                    </optgroup>
+                  {% endfor %}
+                </select>
+                <small class="text-muted" style="font-size:11px;margin-top:4px">Alert and notification times display in this timezone.</small>
+              </div>
+
+              <div class="form-group" style="margin-bottom:14px">
+                <label style="display:block;margin-bottom:6px">Measurement Unit</label>
+                <div class="targeting-options" style="max-width:220px">
+                  <input type="radio" class="targeting-radio" id="acc-unit-metric"
+                         name="measurement_unit" value="metric"
+                         {% if unit == 'metric' %}checked{% endif %}>
+                  <label for="acc-unit-metric">Metric (m)</label>
+                  <input type="radio" class="targeting-radio" id="acc-unit-imperial"
+                         name="measurement_unit" value="imperial"
+                         {% if unit == 'imperial' %}checked{% endif %}>
+                  <label for="acc-unit-imperial">Imperial (ft)</label>
+                </div>
+                <small class="text-muted" style="font-size:11px;margin-top:6px;display:block">Affects how screen dimensions display across the app.</small>
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-sm">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      {# Security #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-security">
+          <span>Security</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-security">
+          <div class="settings-accordion-inner">
+            <div class="settings-security-rows">
+              <div class="settings-security-row">
+                <div>
+                  <div class="settings-security-label">Password</div>
+                  <div class="settings-security-desc">Change your login password</div>
+                </div>
+                <a href="{{ url_for('auth.change_password') }}" class="btn btn-outline btn-sm">Change</a>
+              </div>
+              <div class="settings-security-row">
+                <div>
+                  <div class="settings-security-label">Two-Factor Authentication</div>
+                  <div class="settings-security-desc">
+                    {% if user.mfa_enabled %}
+                    <span style="color:var(--success)">&#10003; Enabled</span>
+                    {% else %}
+                    Not enabled — add an extra layer of security
+                    {% endif %}
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <a href="{{ url_for('main.profile_mfa_setup') }}" class="btn btn-outline btn-sm">
+                    {{ 'Manage' if user.mfa_enabled else 'Enable' }}
+                  </a>
+                  {% if user.mfa_enabled %}
+                  <form method="POST" action="{{ url_for('main.profile_mfa_disable') }}" id="mfa-disable-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="button" id="mfa-disable-btn" class="btn btn-danger btn-sm"
+                            onclick="document.getElementById('mfa-disable-expand').style.display='flex';this.style.display='none';document.getElementById('mfa-disable-pw').focus()">
+                      Disable
+                    </button>
+                    <div id="mfa-disable-expand" style="display:none;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+                      <input type="password" id="mfa-disable-pw" name="password"
+                             placeholder="Current password" class="form-control"
+                             autocomplete="current-password" />
+                      <button type="submit" class="btn btn-danger btn-sm"
+                              onclick="return confirm('Disable MFA? You will no longer need a code to log in.')">
+                        Confirm
+                      </button>
+                    </div>
+                  </form>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# Notifications #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-notifications">
+          <span>Notifications</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-notifications">
+          <div class="settings-accordion-inner">
+            <form method="post" action="{{ url_for('main.settings_account') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="section" value="notifications">
+              {# carry other fields through so POST handler doesn't reset them #}
+              <input type="hidden" name="measurement_unit" value="{{ unit }}">
+              <input type="hidden" name="timezone" value="{{ user.timezone or 'UTC' }}">
+
+              <div class="settings-notif-rows">
+                <label class="settings-notif-row">
+                  <div>
+                    <div class="settings-security-label">Email alerts</div>
+                    <div class="settings-security-desc">Receive showtime alerts by email</div>
+                  </div>
+                  <div class="settings-toggle-wrap">
+                    <input type="checkbox" class="settings-toggle-cb" name="notify_email"
+                           id="toggle-email" {% if user.notify_email %}checked{% endif %} />
+                    <span class="settings-toggle-track" aria-hidden="true"></span>
+                  </div>
+                </label>
+                <label class="settings-notif-row">
+                  <div>
+                    <div class="settings-security-label">SMS alerts</div>
+                    <div class="settings-security-desc">Receive showtime alerts by text message</div>
+                  </div>
+                  <div class="settings-toggle-wrap">
+                    <input type="checkbox" class="settings-toggle-cb" name="notify_sms"
+                           id="toggle-sms" {% if user.notify_sms %}checked{% endif %} />
+                    <span class="settings-toggle-track" aria-hidden="true"></span>
+                  </div>
+                </label>
+              </div>
+
+              <div class="form-actions" style="margin-top:16px">
+                <button type="submit" class="btn btn-primary btn-sm">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+    </div>{# /.settings-accordion #}
+  </div>
+
+</div>{# /.settings-account-grid #}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var triggers = document.querySelectorAll('.settings-accordion-trigger');
+  triggers.forEach(function (trigger) {
+    trigger.addEventListener('click', function () {
+      var id      = trigger.getAttribute('data-accordion');
+      var content = document.getElementById(id);
+      var isOpen  = trigger.getAttribute('aria-expanded') === 'true';
+
+      /* Close all others */
+      triggers.forEach(function (t) {
+        var otherId = t.getAttribute('data-accordion');
+        var other   = document.getElementById(otherId);
+        t.setAttribute('aria-expanded', 'false');
+        if (other) other.classList.remove('open');
+      });
+
+      /* Toggle this one */
+      if (!isOpen) {
+        trigger.setAttribute('aria-expanded', 'true');
+        if (content) content.classList.add('open');
+      }
+    });
+  });
+})();
+</script>
+{% if current_user.location_lat and current_user.location_lon %}
+<script>
+  var map = L.map('profile-map').setView([{{ current_user.location_lat }}, {{ current_user.location_lon }}], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap', maxZoom: 18,
+  }).addTo(map);
+  var userIcon = L.divIcon({
+    html: '<div class="map-dot map-dot-user"></div>',
+    className: '', iconSize: [14,14], iconAnchor: [7,7],
+  });
+  L.marker([{{ current_user.location_lat }}, {{ current_user.location_lon }}], { icon: userIcon })
+    .addTo(map)
+    .bindPopup('<strong>{{ current_user.location_name or "Your Location" }}</strong>')
+    .openPopup();
+</script>
+{% endif %}
+{% endblock %}
