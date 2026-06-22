@@ -143,20 +143,18 @@
               </div>
 
               <div class="form-group" style="margin-bottom:14px">
-                <label>Measurement Unit</label>
-                <div style="display:flex;gap:16px;margin-top:4px">
-                  <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
-                    <input type="radio" name="measurement_unit" value="metric"
-                           {% if unit == 'metric' %}checked{% endif %} />
-                    Metric (m)
-                  </label>
-                  <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
-                    <input type="radio" name="measurement_unit" value="imperial"
-                           {% if unit == 'imperial' %}checked{% endif %} />
-                    Imperial (ft)
-                  </label>
+                <label style="display:block;margin-bottom:6px">Measurement Unit</label>
+                <div class="targeting-options" style="max-width:220px">
+                  <input type="radio" class="targeting-radio" id="acc-unit-metric"
+                         name="measurement_unit" value="metric"
+                         {% if unit == 'metric' %}checked{% endif %}>
+                  <label for="acc-unit-metric">Metric (m)</label>
+                  <input type="radio" class="targeting-radio" id="acc-unit-imperial"
+                         name="measurement_unit" value="imperial"
+                         {% if unit == 'imperial' %}checked{% endif %}>
+                  <label for="acc-unit-imperial">Imperial (ft)</label>
                 </div>
-                <small class="text-muted" style="font-size:11px;margin-top:4px">Affects how screen dimensions display across the app.</small>
+                <small class="text-muted" style="font-size:11px;margin-top:6px;display:block">Affects how screen dimensions display across the app.</small>
               </div>
 
               <div class="form-actions">
