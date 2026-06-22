@@ -2,6 +2,7 @@
 import functools
 import logging
 import re
+from datetime import datetime, timezone
 
 from flask import (
     Blueprint,
@@ -124,6 +125,8 @@ def login():
             session.pop("mfa_pending_user_id", None)
             session.pop("mfa_remember", None)
             session.pop("mfa_next", None)
+            user.last_login_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.session.commit()
             login_user(user, remember=remember)
             logger.info("User %s logged in.", user.email)
             from app.log_utils import write_log
@@ -345,6 +348,7 @@ def mfa_verify():
             verified = user.verify_totp(code)
 
         if verified:
+            user.last_login_at = datetime.now(timezone.utc).replace(tzinfo=None)
             db.session.commit()
             remember = session.pop("mfa_remember", False)
             next_page = session.pop("mfa_next", None)

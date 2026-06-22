@@ -584,8 +584,13 @@ class TestUIRoutes:
         assert resp.status_code == 200
 
     def test_profile_page(self, auth_client):
-        resp = auth_client.get("/profile")
+        resp = auth_client.get("/settings/account")
         assert resp.status_code == 200
+
+    def test_profile_redirects_to_settings(self, auth_client):
+        resp = auth_client.get("/profile")
+        assert resp.status_code == 301
+        assert "/settings/account" in resp.headers["Location"]
 
     def test_theater_detail_not_found(self, auth_client):
         resp = auth_client.get("/theaters/9999")

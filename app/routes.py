@@ -287,12 +287,24 @@ def alert_detail(pref_id):
 @main_bp.route("/profile", methods=["GET", "POST"])
 @login_required
 def profile():
-    """User profile page — view info + update notification prefs and unit preference."""
+    code = 308 if request.method == "POST" else 301
+    return redirect(url_for("main.settings_account"), code)
+
+
+@main_bp.route("/settings")
+@login_required
+def settings():
+    return redirect(url_for("main.settings_account"))
+
+
+@main_bp.route("/settings/account", methods=["GET", "POST"])
+@login_required
+def settings_account():
+    """My Account — view profile info + update preferences."""
     user = current_user._get_current_object()
     saved = False
 
     if request.method == "POST":
-        # Only allow updating notification prefs and measurement unit from this page
         user.notify_email = request.form.get("notify_email") == "on"
         user.notify_sms = request.form.get("notify_sms") == "on"
         unit = request.form.get("measurement_unit", "metric")
@@ -308,7 +320,7 @@ def profile():
         db.session.commit()
         saved = True
 
-    return render_template("profile.html", user=user, saved=saved, unit=user.measurement_unit or "metric")
+    return render_template("settings_account.html", user=user, saved=saved, unit=user.measurement_unit or "metric")
 
 
 @main_bp.route("/profile/mfa-setup", methods=["GET", "POST"])
