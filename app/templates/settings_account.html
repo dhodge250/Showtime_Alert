@@ -28,7 +28,7 @@
           {% endif %}
           {% if current_user.created_at %}
           <span class="settings-identity-since">
-            Member since <time class="utc-time" datetime="{{ current_user.created_at.isoformat() }}Z" data-fmt="date-only">
+            Member since <time class="utc-time" datetime="{{ current_user.created_at.strftime('%Y-%m-%dT%H:%M:%S') }}Z" data-fmt="date-only">
               {{ current_user.created_at.strftime('%b %Y') }}
             </time>
           </span>
@@ -56,8 +56,8 @@
       <div class="settings-info-row">
         <span class="info-label">Last login</span>
         <span class="info-value">
-          <time class="utc-time" datetime="{{ current_user.last_login_at.isoformat() }}Z" data-fmt="short">
-            {{ current_user.last_login_at.strftime('%b %-d at %-I:%M %p') }}
+          <time class="utc-time" datetime="{{ current_user.last_login_at.strftime('%Y-%m-%dT%H:%M:%S') }}Z" data-fmt="short">
+            {{ current_user.last_login_at.strftime('%b %d at %I:%M %p') }}
           </time>
         </span>
       </div>
@@ -318,9 +318,11 @@
     html: '<div class="map-dot map-dot-user"></div>',
     className: '', iconSize: [14,14], iconAnchor: [7,7],
   });
+  var _locEl = document.createElement('strong');
+  _locEl.textContent = {{ (current_user.location_name or 'Your Location') | tojson }};
   L.marker([{{ current_user.location_lat }}, {{ current_user.location_lon }}], { icon: userIcon })
     .addTo(map)
-    .bindPopup('<strong>{{ current_user.location_name or "Your Location" }}</strong>')
+    .bindPopup(_locEl.outerHTML)
     .openPopup();
 </script>
 {% endif %}

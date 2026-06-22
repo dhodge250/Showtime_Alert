@@ -561,6 +561,11 @@ def _run_migrations():
             "ALTER TABLE alert_preferences ADD COLUMN radius_km REAL",
             None,
         ),
+        (
+            "last_login_at", "users",
+            "ALTER TABLE users ADD COLUMN last_login_at DATETIME",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:

@@ -284,10 +284,11 @@ def alert_detail(pref_id):
     )
 
 
-@main_bp.route("/profile")
+@main_bp.route("/profile", methods=["GET", "POST"])
 @login_required
 def profile():
-    return redirect(url_for("main.settings_account"), 301)
+    code = 308 if request.method == "POST" else 301
+    return redirect(url_for("main.settings_account"), code)
 
 
 @main_bp.route("/settings")

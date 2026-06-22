@@ -591,6 +591,7 @@ class User(db.Model, UserMixin):
     mfa_secret = db.Column(db.String(64), nullable=True)
     mfa_enabled = db.Column(db.Boolean, default=False)
     mfa_recovery_codes = db.Column(db.Text, nullable=True)
+    last_login_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     role = db.relationship("Role", back_populates="users")
