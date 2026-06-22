@@ -113,12 +113,12 @@ docker logs imax-alert -f
 | v1.17.0 | Movies Feature: Movies tab, movie detail page, radius-based alerts, UTC showtime storage + browser-local display, notification reliability fixes (#29 #30) |
 | v1.18.0 | UX Polish & Mobile Fixes: brand link, theme toggle relocation, segmented theater targeting, target date hint, movie card overflow fix, Clear Showtimes in Actions menu (#205 #206 #207 #208 #209 #210) |
 | v1.19.0 | Theater Data Infrastructure: CSV export (download/email/save), bulk import with validation, Actions menu split into Showtimes/Venue Data/CSV & Data with inline descriptions, 10 remaining website URLs populated (#46 #83) |
+| v1.20.0 | Settings & Navigation Redesign: unified Settings nav, left-rail sidebar (desktop) + page-picker overlay (mobile), Profile Info/Settings split with accordions, App Settings accordion groups, segmented unit buttons, last_login_at tracking, XSS + datetime fixes (#211) |
 
 ### In Progress & Upcoming
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.20 | Settings & Navigation Redesign | 🔄 next | #211 |
 | v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
 | v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 |

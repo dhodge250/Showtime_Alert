@@ -362,7 +362,7 @@ def profile_mfa_setup():
                                        error=error)
         elif action == "regen_recovery":
             if not user.mfa_enabled:
-                return redirect(url_for("main.profile"))
+                return redirect(url_for("main.settings_account"))
             recovery_codes = user.generate_recovery_codes()
             db.session.commit()
             return render_template("mfa_setup.html", user=user, step="done",
@@ -390,13 +390,13 @@ def profile_mfa_disable():
     password = request.form.get("password", "")
     if not user.check_password(password):
         flash("Incorrect password. MFA was not disabled.", "error")
-        return redirect(url_for("main.profile"))
+        return redirect(url_for("main.settings_account"))
     user.clear_mfa()
     db.session.commit()
     from app.log_utils import write_log
     write_log("auth", f"MFA disabled by {user.email}", user_id=user.id)
     flash("Multi-factor authentication has been disabled.", "success")
-    return redirect(url_for("main.profile"))
+    return redirect(url_for("main.settings_account"))
 
 
 # ---------------------------------------------------------------------------

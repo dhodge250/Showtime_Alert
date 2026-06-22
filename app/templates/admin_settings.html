@@ -1,371 +1,459 @@
 {% extends "base.html" %}
-{% block title %}Admin – Settings{% endblock %}
+{% block title %}App Settings – IMAX Alert{% endblock %}
 
 {% block content %}
 <div class="page-header">
-  <h1>Application Settings</h1>
-  <p class="subtitle">External API keys and global defaults</p>
+  <h1>App Settings</h1>
+  <p class="subtitle">External API keys, notifications, and global defaults</p>
 </div>
 
-<form method="post" class="admin-edit-form">
+<form method="post" style="max-width:680px">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <div class="form-grid">
 
-    <!-- TMDB Integration (own card) -->
-    <div class="form-section">
-      <h2 class="form-section-title">TMDB Integration</h2>
-      <p class="text-muted" style="font-size:12px;margin-bottom:12px">
-        The Movie Database (TMDB) is used for movie search and poster images
-        on the Alerts page. Leave blank to disable and fall back to local DB only.
-      </p>
+  <div class="form-section settings-profile-settings">
+    <h2 class="form-section-title">Application Settings</h2>
 
-      <div class="form-group">
-        <label for="tmdb_api_key">TMDB API Key (v3 read-access token)</label>
-        <input type="password" id="tmdb_api_key" name="tmdb_api_key"
-               value="{{ settings.get('tmdb_api_key', '') }}"
-               autocomplete="off"
-               placeholder="Paste your TMDB API key here" />
-        <small class="text-muted" style="font-size:11px;margin-top:2px">
-          Obtain a free key at
-          <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">
-            themoviedb.org/settings/api
-          </a>
-        </small>
-      </div>
+    <div class="settings-accordion">
 
-      <div class="form-group form-group-checkbox" style="margin-top:8px">
-        <label>
-          <input type="checkbox" id="show-key-toggle" onchange="toggleKeyVisibility()" />
-          Show API key
-        </label>
-      </div>
-
-      {% if settings.get('tmdb_api_key') %}
-      <p class="text-muted" style="font-size:12px;margin-top:8px">
-        Status: <span style="color:var(--success)">Configured</span>
-      </p>
-      {% else %}
-      <p class="text-muted" style="font-size:12px;margin-top:8px">
-        Status: <span style="color:var(--warning)">Not configured — using local DB only</span>
-      </p>
-      {% endif %}
-    </div>
-
-    <!-- Global Defaults -->
-    <div class="form-section">
-      <h2 class="form-section-title">Global Defaults</h2>
-      <p class="text-muted" style="font-size:12px;margin-bottom:12px">
-        Defaults applied to new users and new alerts. Users can override their
-        own unit preference on the Profile page.
-      </p>
-
-      <div class="form-group">
-        <label>Default Measurement Unit</label>
-        <div style="display:flex;gap:16px;margin-top:4px">
-          <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
-            <input type="radio" name="app_measurement_unit" value="metric"
-                   {% if settings.get('app_measurement_unit', 'metric') == 'metric' %}checked{% endif %} />
-            Metric (m)
-          </label>
-          <label style="cursor:pointer;font-size:14px;color:var(--text-primary)">
-            <input type="radio" name="app_measurement_unit" value="imperial"
-                   {% if settings.get('app_measurement_unit') == 'imperial' %}checked{% endif %} />
-            Imperial (ft)
-          </label>
-        </div>
-      </div>
-
-      <div class="form-group" style="margin-top:16px">
-        <label for="default_max_notifications">Default notification limit (per alert)</label>
-        <input type="number" id="default_max_notifications" name="default_max_notifications"
-               min="1"
-               value="{{ settings.get('default_max_notifications', '') }}"
-               placeholder="Unlimited"
-               style="width:120px" />
-        <small class="text-muted" style="font-size:11px;margin-top:2px">
-          Pre-fills the notification limit when creating a new alert. Leave blank for unlimited.
-        </small>
-      </div>
-    </div>
-
-    <!-- Security -->
-    <div class="form-section">
-      <h2 class="form-section-title">Security</h2>
-
-      <div class="form-group">
-        <label for="session_timeout_minutes">Session idle timeout (minutes)</label>
-        <input type="number" id="session_timeout_minutes" name="session_timeout_minutes"
-               min="0" max="1440"
-               value="{{ settings.get('session_timeout_minutes', '60') }}"
-               style="width:120px" />
-        <small class="text-muted" style="font-size:11px;margin-top:2px">
-          Automatically log users out after this many minutes of inactivity.
-          Set to <strong>0</strong> to disable (sessions last until the browser closes or the user logs out).
-          When enabled: Min: 5 min, Max: 1440 min (24 h).
-        </small>
-      </div>
-    </div>
-
-    <!-- Email (SMTP) -->
-    <div class="form-section">
-      <h2 class="form-section-title">Email Notifications (SMTP)</h2>
-      <p class="text-muted" style="font-size:12px;margin-bottom:12px">
-        Used to send email alerts when new IMAX showtimes are detected.
-        Gmail users: use an App Password, not your account password.
-      </p>
-
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
-        <div class="form-group">
-          <label for="mail_server">SMTP Server</label>
-          <input type="text" id="mail_server" name="mail_server"
-                 value="{{ settings.get('mail_server', 'smtp.gmail.com') }}"
-                 placeholder="smtp.gmail.com" />
-        </div>
-        <div class="form-group">
-          <label for="mail_port">SMTP Port</label>
-          <input type="number" id="mail_port" name="mail_port"
-                 value="{{ settings.get('mail_port', '587') }}"
-                 min="1" max="65535" placeholder="587" />
-        </div>
-      </div>
-
-      <div class="form-group form-group-checkbox" style="margin-bottom:12px">
-        <label>
-          <input type="checkbox" id="mail_use_tls" name="mail_use_tls" value="true"
-                 {% if settings.get('mail_use_tls', 'true') in ('true','1','yes') %}checked{% endif %} />
-          Use TLS (STARTTLS)
-        </label>
-      </div>
-
-      <div class="form-group">
-        <label for="mail_username">SMTP Username</label>
-        <input type="text" id="mail_username" name="mail_username"
-               value="{{ settings.get('mail_username', '') }}"
-               autocomplete="off" placeholder="you@gmail.com" />
-      </div>
-
-      <div class="form-group">
-        <label for="mail_password">SMTP Password / App Password</label>
-        <input type="password" id="mail_password" name="mail_password"
-               value="{{ settings.get('mail_password', '') }}"
-               autocomplete="new-password" placeholder="••••••••••••••••" />
-        <div class="form-group form-group-checkbox" style="margin-top:4px">
-          <label style="font-size:12px">
-            <input type="checkbox" onchange="toggleFieldVisibility('mail_password', this)" />
-            Show password
-          </label>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label for="mail_from">From Address</label>
-        <input type="text" id="mail_from" name="mail_from"
-               value="{{ settings.get('mail_from', '') }}"
-               placeholder="IMAX Alert &lt;you@gmail.com&gt;" />
-        <small class="text-muted" style="font-size:11px;margin-top:2px">
-          Displayed as the sender in email clients. Can be <code>Name &lt;email&gt;</code> format.
-        </small>
-      </div>
-
-      <div class="form-group" style="margin-top:12px">
-        <button type="button" class="btn btn-outline" id="smtp-test-btn" onclick="testSmtp()">
-          Send Test Email
+      {# ── TMDB Integration ── #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-tmdb">
+          <span>TMDB Integration</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </button>
-        <div id="smtp-test-result" style="margin-top:8px"></div>
+        <div class="settings-accordion-content" id="acc-tmdb">
+          <div class="settings-accordion-inner">
+            <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+              The Movie Database (TMDB) is used for movie search and poster images on the Alerts page.
+              Leave blank to disable and fall back to local DB only.
+            </p>
+
+            <div class="form-group">
+              <label for="tmdb_api_key">TMDB API Key (v3 read-access token)</label>
+              <input type="password" id="tmdb_api_key" name="tmdb_api_key"
+                     value="{{ settings.get('tmdb_api_key', '') }}"
+                     autocomplete="off"
+                     placeholder="Paste your TMDB API key here" />
+              <small class="text-muted" style="font-size:11px;margin-top:2px">
+                Obtain a free key at
+                <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener">
+                  themoviedb.org/settings/api
+                </a>
+              </small>
+            </div>
+
+            <div class="form-group form-group-checkbox" style="margin-top:8px">
+              <label>
+                <input type="checkbox" id="show-key-toggle" onchange="toggleKeyVisibility()" />
+                Show API key
+              </label>
+            </div>
+
+            <p class="text-muted" style="font-size:12px;margin-top:8px">
+              Status:
+              {% if settings.get('tmdb_api_key') %}
+                <span style="color:var(--success)">Configured</span>
+              {% else %}
+                <span style="color:var(--warning)">Not configured — using local DB only</span>
+              {% endif %}
+            </p>
+          </div>
+        </div>
       </div>
 
-      <p class="text-muted" style="font-size:12px;margin-top:8px">
-        Status:
-        {% if settings.get('mail_username') and settings.get('mail_password') %}
-          <span style="color:var(--success)">Configured</span>
-        {% else %}
-          <span style="color:var(--warning)">Not configured — email alerts disabled</span>
-        {% endif %}
-      </p>
+      {# ── Global Defaults ── #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-defaults">
+          <span>Global Defaults</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-defaults">
+          <div class="settings-accordion-inner">
+            <p class="text-muted" style="font-size:12px;margin-bottom:14px">
+              Defaults applied to new users and new alerts. Users can override their own unit preference in My Account.
+            </p>
+
+            <div class="form-group" style="margin-bottom:16px">
+              <label style="display:block;margin-bottom:6px">Default Measurement Unit</label>
+              <div class="targeting-options" style="max-width:220px">
+                <input type="radio" class="targeting-radio" id="app-unit-metric"
+                       name="app_measurement_unit" value="metric"
+                       {% if settings.get('app_measurement_unit', 'metric') == 'metric' %}checked{% endif %}>
+                <label for="app-unit-metric">Metric (m)</label>
+                <input type="radio" class="targeting-radio" id="app-unit-imperial"
+                       name="app_measurement_unit" value="imperial"
+                       {% if settings.get('app_measurement_unit') == 'imperial' %}checked{% endif %}>
+                <label for="app-unit-imperial">Imperial (ft)</label>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom:16px">
+              <label for="default_max_notifications">Default notification limit (per alert)</label>
+              <input type="number" id="default_max_notifications" name="default_max_notifications"
+                     min="1"
+                     value="{{ settings.get('default_max_notifications', '') }}"
+                     placeholder="Unlimited"
+                     style="width:120px" />
+              <small class="text-muted" style="font-size:11px;margin-top:2px">
+                Pre-fills the notification limit when creating a new alert. Leave blank for unlimited.
+              </small>
+            </div>
+
+            <div class="form-group">
+              <label for="rows_per_page">Dashboard rows per page</label>
+              <input type="number" id="rows_per_page" name="rows_per_page"
+                     min="5" max="100"
+                     value="{{ settings.get('rows_per_page', '15') }}"
+                     style="width:120px" />
+              <small class="text-muted" style="font-size:11px;margin-top:2px">
+                Rows shown per page in Available Showtimes and Active Alerts lists. Min: 5, Max: 100.
+              </small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ── Security ── #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-security">
+          <span>Security</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-security">
+          <div class="settings-accordion-inner">
+            <div class="form-group">
+              <label for="session_timeout_minutes">Session idle timeout (minutes)</label>
+              <input type="number" id="session_timeout_minutes" name="session_timeout_minutes"
+                     min="0" max="1440"
+                     value="{{ settings.get('session_timeout_minutes', '60') }}"
+                     style="width:120px" />
+              <small class="text-muted" style="font-size:11px;margin-top:2px">
+                Automatically log users out after this many minutes of inactivity.
+                Set to <strong>0</strong> to disable.
+                When enabled: Min 5 min, Max 1440 min (24 h).
+              </small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ── Email Notifications ── #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-email">
+          <span>Email Notifications (SMTP)</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-email">
+          <div class="settings-accordion-inner">
+            <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+              Used to send email alerts when new IMAX showtimes are detected.
+              Gmail users: use an App Password, not your account password.
+            </p>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:12px">
+              <div class="form-group">
+                <label for="mail_server">SMTP Server</label>
+                <input type="text" id="mail_server" name="mail_server"
+                       value="{{ settings.get('mail_server', 'smtp.gmail.com') }}"
+                       placeholder="smtp.gmail.com" />
+              </div>
+              <div class="form-group">
+                <label for="mail_port">SMTP Port</label>
+                <input type="number" id="mail_port" name="mail_port"
+                       value="{{ settings.get('mail_port', '587') }}"
+                       min="1" max="65535" placeholder="587" />
+              </div>
+            </div>
+
+            <div class="form-group form-group-checkbox" style="margin-bottom:12px">
+              <label>
+                <input type="checkbox" id="mail_use_tls" name="mail_use_tls" value="true"
+                       {% if settings.get('mail_use_tls', 'true') in ('true','1','yes') %}checked{% endif %} />
+                Use TLS (STARTTLS)
+              </label>
+            </div>
+
+            <div class="form-group" style="margin-bottom:12px">
+              <label for="mail_username">SMTP Username</label>
+              <input type="text" id="mail_username" name="mail_username"
+                     value="{{ settings.get('mail_username', '') }}"
+                     autocomplete="off" placeholder="you@gmail.com" />
+            </div>
+
+            <div class="form-group" style="margin-bottom:12px">
+              <label for="mail_password">SMTP Password / App Password</label>
+              <input type="password" id="mail_password" name="mail_password"
+                     value="{{ settings.get('mail_password', '') }}"
+                     autocomplete="new-password" placeholder="••••••••••••••••" />
+              <div class="form-group form-group-checkbox" style="margin-top:4px">
+                <label style="font-size:12px">
+                  <input type="checkbox" onchange="toggleFieldVisibility('mail_password', this)" />
+                  Show password
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom:12px">
+              <label for="mail_from">From Address</label>
+              <input type="text" id="mail_from" name="mail_from"
+                     value="{{ settings.get('mail_from', '') }}"
+                     placeholder="IMAX Alert &lt;you@gmail.com&gt;" />
+              <small class="text-muted" style="font-size:11px;margin-top:2px">
+                Can be <code>Name &lt;email&gt;</code> format.
+              </small>
+            </div>
+
+            <div class="form-group" style="margin-bottom:8px">
+              <button type="button" class="btn btn-outline btn-sm" id="smtp-test-btn" onclick="testSmtp()">
+                Send Test Email
+              </button>
+              <div id="smtp-test-result" style="margin-top:8px"></div>
+            </div>
+
+            <p class="text-muted" style="font-size:12px">
+              Status:
+              {% if settings.get('mail_username') and settings.get('mail_password') %}
+                <span style="color:var(--success)">Configured</span>
+              {% else %}
+                <span style="color:var(--warning)">Not configured — email alerts disabled</span>
+              {% endif %}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {# ── SMS Notifications ── #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-sms">
+          <span>SMS Notifications (Twilio)</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-sms">
+          <div class="settings-accordion-inner">
+            <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+              Requires a <a href="https://www.twilio.com/" target="_blank" rel="noopener">Twilio</a>
+              account with a purchased phone number.
+            </p>
+
+            <div class="form-group" style="margin-bottom:12px">
+              <label for="twilio_account_sid">Account SID</label>
+              <input type="text" id="twilio_account_sid" name="twilio_account_sid"
+                     value="{{ settings.get('twilio_account_sid', '') }}"
+                     autocomplete="off" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+            </div>
+
+            <div class="form-group" style="margin-bottom:12px">
+              <label for="twilio_auth_token">Auth Token</label>
+              <input type="password" id="twilio_auth_token" name="twilio_auth_token"
+                     value="{{ settings.get('twilio_auth_token', '') }}"
+                     autocomplete="new-password" placeholder="••••••••••••••••••••••••••••••••" />
+              <div class="form-group form-group-checkbox" style="margin-top:4px">
+                <label style="font-size:12px">
+                  <input type="checkbox" onchange="toggleFieldVisibility('twilio_auth_token', this)" />
+                  Show token
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom:8px">
+              <label for="twilio_from_number">Twilio Phone Number</label>
+              <input type="text" id="twilio_from_number" name="twilio_from_number"
+                     value="{{ settings.get('twilio_from_number', '') }}"
+                     placeholder="+12223334444" />
+              <small class="text-muted" style="font-size:11px;margin-top:2px">
+                Must be in E.164 format, e.g. <code>+12223334444</code>.
+              </small>
+            </div>
+
+            <p class="text-muted" style="font-size:12px">
+              Status:
+              {% if settings.get('twilio_account_sid') and settings.get('twilio_auth_token') and settings.get('twilio_from_number') %}
+                <span style="color:var(--success)">Configured</span>
+              {% else %}
+                <span style="color:var(--warning)">Not configured — SMS alerts disabled</span>
+              {% endif %}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {# ── Scheduler ── #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-scheduler">
+          <span>Scheduler</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-scheduler">
+          <div class="settings-accordion-inner">
+            <p class="text-muted" style="font-size:12px;margin-bottom:14px">
+              Controls how often background jobs run. Changes take effect immediately without a restart.
+            </p>
+
+            {% if scheduler_status.running %}
+              {% set scrape_job = scheduler_status.jobs | selectattr("id","equalto","imax_scrape")      | first | default(None) %}
+              {% set alert_job  = scheduler_status.jobs | selectattr("id","equalto","imax_alerts")      | first | default(None) %}
+              {% set crawl_job  = scheduler_status.jobs | selectattr("id","equalto","imax_venue_crawl") | first | default(None) %}
+            {% else %}
+              {% set scrape_job = None %}
+              {% set alert_job  = None %}
+              {% set crawl_job  = None %}
+            {% endif %}
+
+            <div class="settings-security-rows">
+              <div class="form-group">
+                <label for="scraper_interval_minutes">Showtime scrape interval (minutes)</label>
+                <input type="number" id="scraper_interval_minutes" name="scraper_interval_minutes"
+                       min="1" max="1440"
+                       value="{{ settings.get('scraper_interval_minutes', '30') }}"
+                       style="width:120px" />
+                <small class="text-muted" style="font-size:11px;margin-top:2px">
+                  How often to scrape theater websites for new showtimes. Min: 1 min, Max: 1440 min.
+                </small>
+                {% if scrape_job and scrape_job.next_run_iso %}
+                <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
+                  Next run: <strong class="local-time" data-iso="{{ scrape_job.next_run_iso }}"></strong>
+                </small>
+                {% elif not scheduler_status.running %}
+                <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>
+                {% endif %}
+              </div>
+
+              <div class="form-group">
+                <label for="alert_interval_minutes">Alert processor interval (minutes)</label>
+                <input type="number" id="alert_interval_minutes" name="alert_interval_minutes"
+                       min="1" max="1440"
+                       value="{{ settings.get('alert_interval_minutes', '15') }}"
+                       style="width:120px" />
+                <small class="text-muted" style="font-size:11px;margin-top:2px">
+                  How often to check active alerts against existing showtimes. Min: 1 min, Max: 1440 min.
+                </small>
+                {% if alert_job and alert_job.next_run_iso %}
+                <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
+                  Next run: <strong class="local-time" data-iso="{{ alert_job.next_run_iso }}"></strong>
+                </small>
+                {% elif not scheduler_status.running %}
+                <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>
+                {% endif %}
+              </div>
+
+              <div class="form-group">
+                <label for="venue_crawl_interval_days">Venue list refresh interval (days)</label>
+                <input type="number" id="venue_crawl_interval_days" name="venue_crawl_interval_days"
+                       min="1" max="365"
+                       value="{{ settings.get('venue_crawl_interval_days', '7') }}"
+                       style="width:120px" />
+                <small class="text-muted" style="font-size:11px;margin-top:2px">
+                  How often to crawl for new or closed theaters. Min: 1 day, Max: 365 days.
+                </small>
+                {% if crawl_job and crawl_job.next_run_iso %}
+                <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
+                  Next run: <strong class="local-time" data-iso="{{ crawl_job.next_run_iso }}"></strong>
+                </small>
+                {% elif not scheduler_status.running %}
+                <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>
+                {% endif %}
+              </div>
+
+              <div class="form-group">
+                <label for="log_retention_days">Log retention (days)</label>
+                <input type="number" id="log_retention_days" name="log_retention_days"
+                       min="1" max="365"
+                       value="{{ settings.get('log_retention_days', '30') }}"
+                       style="width:120px" />
+                <small class="text-muted" style="font-size:11px;margin-top:2px">
+                  Log entries older than this are deleted by the cleanup job. Min: 1, Max: 365 days.
+                </small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>{# /.settings-accordion #}
+
+    <div class="form-actions" style="margin-top:20px">
+      <button type="submit" class="btn btn-primary">Save Settings</button>
     </div>
-
-    <!-- SMS (Twilio) -->
-    <div class="form-section">
-      <h2 class="form-section-title">SMS Notifications (Twilio)</h2>
-      <p class="text-muted" style="font-size:12px;margin-bottom:12px">
-        Used to send SMS alerts. Requires a
-        <a href="https://www.twilio.com/" target="_blank" rel="noopener">Twilio</a>
-        account with a purchased phone number.
-      </p>
-
-      <div class="form-group">
-        <label for="twilio_account_sid">Account SID</label>
-        <input type="text" id="twilio_account_sid" name="twilio_account_sid"
-               value="{{ settings.get('twilio_account_sid', '') }}"
-               autocomplete="off" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-      </div>
-
-      <div class="form-group">
-        <label for="twilio_auth_token">Auth Token</label>
-        <input type="password" id="twilio_auth_token" name="twilio_auth_token"
-               value="{{ settings.get('twilio_auth_token', '') }}"
-               autocomplete="new-password" placeholder="••••••••••••••••••••••••••••••••" />
-        <div class="form-group form-group-checkbox" style="margin-top:4px">
-          <label style="font-size:12px">
-            <input type="checkbox" onchange="toggleFieldVisibility('twilio_auth_token', this)" />
-            Show token
-          </label>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label for="twilio_from_number">Twilio Phone Number</label>
-        <input type="text" id="twilio_from_number" name="twilio_from_number"
-               value="{{ settings.get('twilio_from_number', '') }}"
-               placeholder="+12223334444" />
-        <small class="text-muted" style="font-size:11px;margin-top:2px">
-          Must be in E.164 format, e.g. <code>+12223334444</code>.
-        </small>
-      </div>
-
-      <p class="text-muted" style="font-size:12px;margin-top:8px">
-        Status:
-        {% if settings.get('twilio_account_sid') and settings.get('twilio_auth_token') and settings.get('twilio_from_number') %}
-          <span style="color:var(--success)">Configured</span>
-        {% else %}
-          <span style="color:var(--warning)">Not configured — SMS alerts disabled</span>
-        {% endif %}
-      </p>
-    </div>
-
-    <!-- Scheduler -->
-    <div class="form-section" style="grid-column: 1 / -1">
-      <h2 class="form-section-title">Scheduler</h2>
-      <p class="text-muted" style="font-size:12px;margin-bottom:12px">
-        Controls how often background jobs run. Changes take effect immediately without a restart.
-      </p>
-
-      {% if scheduler_status.running %}
-        {% set scrape_job = scheduler_status.jobs | selectattr("id","equalto","imax_scrape")      | first | default(None) %}
-        {% set alert_job  = scheduler_status.jobs | selectattr("id","equalto","imax_alerts")      | first | default(None) %}
-        {% set crawl_job  = scheduler_status.jobs | selectattr("id","equalto","imax_venue_crawl") | first | default(None) %}
-      {% else %}
-        {% set scrape_job = None %}
-        {% set alert_job  = None %}
-        {% set crawl_job  = None %}
-      {% endif %}
-
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px">
-        <div class="form-group">
-          <label for="scraper_interval_minutes">Showtime scrape interval (minutes)</label>
-          <input type="number" id="scraper_interval_minutes" name="scraper_interval_minutes"
-                 min="1" max="1440"
-                 value="{{ settings.get('scraper_interval_minutes', '30') }}" />
-          <small class="text-muted" style="font-size:11px;margin-top:2px">
-            How often to scrape theater websites for new showtimes. Min: 1 min, Max: 1440 min (24 h).
-          </small>
-          {% if scrape_job and scrape_job.next_run_iso %}
-          <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
-            Next run: <strong class="local-time" data-iso="{{ scrape_job.next_run_iso }}"></strong>
-          </small>
-          {% elif not scheduler_status.running %}
-          <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>
-          {% endif %}
-        </div>
-
-        <div class="form-group">
-          <label for="alert_interval_minutes">Alert processor interval (minutes)</label>
-          <input type="number" id="alert_interval_minutes" name="alert_interval_minutes"
-                 min="1" max="1440"
-                 value="{{ settings.get('alert_interval_minutes', '15') }}" />
-          <small class="text-muted" style="font-size:11px;margin-top:2px">
-            How often to check active alerts against existing showtimes. Min: 1 min, Max: 1440 min.
-          </small>
-          {% if alert_job and alert_job.next_run_iso %}
-          <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
-            Next run: <strong class="local-time" data-iso="{{ alert_job.next_run_iso }}"></strong>
-          </small>
-          {% elif not scheduler_status.running %}
-          <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>
-          {% endif %}
-        </div>
-
-        <div class="form-group">
-          <label for="venue_crawl_interval_days">Venue list refresh interval (days)</label>
-          <input type="number" id="venue_crawl_interval_days" name="venue_crawl_interval_days"
-                 min="1" max="365"
-                 value="{{ settings.get('venue_crawl_interval_days', '7') }}" />
-          <small class="text-muted" style="font-size:11px;margin-top:2px">
-            How often to crawl the IMAX venue list for new or closed theaters. Min: 1 day, Max: 365 days.
-          </small>
-          {% if crawl_job and crawl_job.next_run_iso %}
-          <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
-            Next run: <strong class="local-time" data-iso="{{ crawl_job.next_run_iso }}"></strong>
-          </small>
-          {% elif not scheduler_status.running %}
-          <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>
-          {% endif %}
-        </div>
-
-        <div class="form-group">
-          <label for="rows_per_page">Dashboard rows per page</label>
-          <input type="number" id="rows_per_page" name="rows_per_page"
-                 min="5" max="100"
-                 value="{{ settings.get('rows_per_page', '15') }}" />
-          <small class="text-muted" style="font-size:11px;margin-top:2px">
-            Rows shown per page in Available Showtimes and Active Alerts lists. Min: 5, Max: 100.
-          </small>
-        </div>
-
-        <div class="form-group">
-          <label for="log_retention_days">Log retention (days)</label>
-          <input type="number" id="log_retention_days" name="log_retention_days"
-                 min="1" max="365"
-                 value="{{ settings.get('log_retention_days', '30') }}" />
-          <small class="text-muted" style="font-size:11px;margin-top:2px">
-            Log entries older than this many days are deleted by the cleanup job. Min: 1, Max: 365.
-          </small>
-        </div>
-      </div>
-    </div>
-
-  </div><!-- .form-grid -->
-
-  <div class="form-actions">
-    <button type="submit" class="btn btn-primary">Save Settings</button>
   </div>
 </form>
 {% endblock %}
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('.local-time[data-iso]').forEach(el => {
+(function () {
+  var triggers = document.querySelectorAll('.settings-accordion-trigger');
+  triggers.forEach(function (trigger) {
+    trigger.addEventListener('click', function () {
+      var id      = trigger.getAttribute('data-accordion');
+      var content = document.getElementById(id);
+      var isOpen  = trigger.getAttribute('aria-expanded') === 'true';
+
+      triggers.forEach(function (t) {
+        var otherId = t.getAttribute('data-accordion');
+        var other   = document.getElementById(otherId);
+        t.setAttribute('aria-expanded', 'false');
+        if (other) other.classList.remove('open');
+      });
+
+      if (!isOpen) {
+        trigger.setAttribute('aria-expanded', 'true');
+        if (content) content.classList.add('open');
+      }
+    });
+  });
+})();
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('.local-time[data-iso]').forEach(function (el) {
     try {
       el.textContent = new Date(el.dataset.iso).toLocaleString([], {
         year: 'numeric', month: 'short', day: 'numeric',
         hour: 'numeric', minute: '2-digit',
       });
-    } catch {
+    } catch (e) {
       el.textContent = el.dataset.iso;
     }
   });
 });
 
 function toggleKeyVisibility() {
-  const input = document.getElementById('tmdb_api_key');
-  const checkbox = document.getElementById('show-key-toggle');
-  input.type = checkbox.checked ? 'text' : 'password';
+  var input    = document.getElementById('tmdb_api_key');
+  var checkbox = document.getElementById('show-key-toggle');
+  input.type   = checkbox.checked ? 'text' : 'password';
 }
+
 function toggleFieldVisibility(fieldId, checkbox) {
-  const input = document.getElementById(fieldId);
+  var input = document.getElementById(fieldId);
   if (input) input.type = checkbox.checked ? 'text' : 'password';
 }
 
 function testSmtp() {
-  const btn    = document.getElementById('smtp-test-btn');
-  const result = document.getElementById('smtp-test-result');
+  var btn    = document.getElementById('smtp-test-btn');
+  var result = document.getElementById('smtp-test-result');
   btn.disabled = true;
   btn.textContent = 'Sending…';
   result.textContent = '';
   result.style.cssText = '';
 
-  let payload;
+  var payload;
   try {
     payload = {
       mail_server:   document.getElementById('mail_server').value.trim(),
@@ -382,8 +470,8 @@ function testSmtp() {
     return;
   }
 
-  const controller = new AbortController();
-  const clientTimeout = setTimeout(() => controller.abort(), 20000);
+  var controller = new AbortController();
+  var clientTimeout = setTimeout(function () { controller.abort(); }, 20000);
 
   fetch('/api/admin/smtp/test', {
     method: 'POST',
@@ -391,17 +479,15 @@ function testSmtp() {
     body: JSON.stringify(payload),
     signal: controller.signal,
   })
-    .then(r => r.json())
-    .then(data => {
-      showSmtpResult(data.message, data.success);
-    })
-    .catch(err => {
-      const msg = err.name === 'AbortError'
+    .then(function (r) { return r.json(); })
+    .then(function (data) { showSmtpResult(data.message, data.success); })
+    .catch(function (err) {
+      var msg = err.name === 'AbortError'
         ? 'No response after 20 seconds — check Docker logs for details.'
         : 'Request failed — check browser console.';
       showSmtpResult(msg, false);
     })
-    .finally(() => {
+    .finally(function () {
       clearTimeout(clientTimeout);
       btn.disabled = false;
       btn.textContent = 'Send Test Email';
@@ -409,7 +495,7 @@ function testSmtp() {
 }
 
 function showSmtpResult(message, success) {
-  const result = document.getElementById('smtp-test-result');
+  var result = document.getElementById('smtp-test-result');
   result.textContent = message;
   result.style.cssText = [
     'display:inline-block',
