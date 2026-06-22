@@ -584,8 +584,13 @@ class TestUIRoutes:
         assert resp.status_code == 200
 
     def test_profile_page(self, auth_client):
-        resp = auth_client.get("/profile")
+        resp = auth_client.get("/settings/account")
         assert resp.status_code == 200
+
+    def test_profile_redirects_to_settings(self, auth_client):
+        resp = auth_client.get("/profile")
+        assert resp.status_code == 301
+        assert "/settings/account" in resp.headers["Location"]
 
     def test_theater_detail_not_found(self, auth_client):
         resp = auth_client.get("/theaters/9999")
@@ -751,7 +756,7 @@ class TestAdminSettings:
 class TestProfile:
     def test_profile_post_saves_prefs(self, auth_client, app, sample_user):
         resp = auth_client.post(
-            "/profile",
+            "/settings/account",
             data={"notify_email": "on", "measurement_unit": "imperial"},
             follow_redirects=True,
         )
@@ -762,7 +767,7 @@ class TestProfile:
             assert user.notify_email is True
 
     def test_profile_unit_toggle(self, auth_client, app, sample_user):
-        auth_client.post("/profile", data={"measurement_unit": "metric"})
+        auth_client.post("/settings/account", data={"measurement_unit": "metric"})
         with app.app_context():
             user = User.query.get(sample_user)
             assert user.measurement_unit == "metric"
