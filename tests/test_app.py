@@ -756,7 +756,7 @@ class TestAdminSettings:
 class TestProfile:
     def test_profile_post_saves_prefs(self, auth_client, app, sample_user):
         resp = auth_client.post(
-            "/settings/account",
+            "/profile",
             data={"notify_email": "on", "measurement_unit": "imperial"},
             follow_redirects=True,
         )
@@ -767,7 +767,7 @@ class TestProfile:
             assert user.notify_email is True
 
     def test_profile_unit_toggle(self, auth_client, app, sample_user):
-        auth_client.post("/settings/account", data={"measurement_unit": "metric"})
+        auth_client.post("/profile", data={"measurement_unit": "metric"})
         with app.app_context():
             user = User.query.get(sample_user)
             assert user.measurement_unit == "metric"

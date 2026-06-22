@@ -478,29 +478,14 @@
 <script>
 // ── Actions dropdowns ─────────────────────────────────────────────────
 function closeActionsDropdown() {
-  document.querySelectorAll('.actions-dropdown-menu').forEach(m => {
-    m.classList.remove('open');
-    m.style.left = '';
-    m.style.right = '';
-  });
+  document.querySelectorAll('.actions-dropdown-menu').forEach(m => m.classList.remove('open'));
 }
 function toggleDropdown(e, menuId) {
   e.stopPropagation();
   const target = document.getElementById(menuId);
   const wasOpen = target.classList.contains('open');
   closeActionsDropdown();
-  if (!wasOpen) {
-    target.classList.add('open');
-    const rect = target.getBoundingClientRect();
-    const vw   = window.innerWidth;
-    if (rect.left < 8) {
-      target.style.left  = '0';
-      target.style.right = 'auto';
-    } else if (rect.right > vw - 8) {
-      target.style.left  = 'auto';
-      target.style.right = '0';
-    }
-  }
+  if (!wasOpen) target.classList.add('open');
 }
 document.addEventListener('click', function(e) {
   if (!e.target.closest('.actions-dropdown')) closeActionsDropdown();

@@ -5,7 +5,7 @@
 <div class="page-header">
   <h1>Multi-Factor Authentication</h1>
   <p class="subtitle">Secure your account with a time-based one-time password (TOTP)</p>
-  <a href="{{ url_for('main.settings_account') }}" class="back-link">&larr; Back to My Account</a>
+  <a href="{{ url_for('main.profile') }}" class="back-link">&larr; Back to Profile</a>
 </div>
 
 <div class="card" style="max-width:560px">
@@ -82,7 +82,7 @@
       <input type="hidden" name="action" value="regen_recovery">
       <button type="submit" class="btn btn-outline btn-sm">Regenerate Recovery Codes</button>
     </form>
-    <a href="{{ url_for('main.settings_account') }}" class="btn btn-primary">Done</a>
+    <a href="{{ url_for('main.profile') }}" class="btn btn-primary">Done</a>
 
   {% endif %}
 </div>
