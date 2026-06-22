@@ -1935,9 +1935,6 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   .admin-subnav::-webkit-scrollbar { display: none; }
   .admin-subnav a { padding: 8px 12px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
 
-  /* Actions dropdowns: anchor left so menus don't bleed off left edge */
-  .actions-dropdown-menu { left: 0; right: auto; }
-
   /* Settings layout: sidebar → page-picker on mobile */
   .main-content.settings-main { display: block; padding: 0; min-height: auto; }
   .settings-sidebar { display: none; }
