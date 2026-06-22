@@ -33,10 +33,7 @@
       <li><a href="{{ url_for('main.theaters') }}" {% if request.endpoint in ['main.theaters','main.theater_detail'] %}class="active"{% endif %}>Theaters</a></li>
       <li><a href="{{ url_for('main.alerts') }}" {% if request.endpoint in ['main.alerts','main.alert_detail'] %}class="active"{% endif %}>Alerts</a></li>
       <li><a href="{{ url_for('main.movies') }}" {% if request.endpoint in ['main.movies','main.movie_detail'] %}class="active"{% endif %}>Movies</a></li>
-      <li><a href="{{ url_for('main.profile') }}" {% if request.endpoint in ['main.profile','main.profile_mfa_setup'] %}class="active"{% endif %}>Profile</a></li>
-      {% if current_user.is_authenticated and current_user.role_name in ['admin', 'editor'] %}
-      <li><a href="{{ url_for('main.admin_theaters') }}" {% if request.endpoint and request.endpoint.startswith('main.admin') %}class="active"{% endif %}>Admin</a></li>
-      {% endif %}
+      <li><a href="{{ url_for('main.settings_account') }}" {% if request.endpoint in ['main.settings_account','main.profile_mfa_setup'] or (request.endpoint and request.endpoint.startswith('main.admin')) %}class="active"{% endif %}>Settings</a></li>
     </ul>
     {% if current_user.is_authenticated %}
     <div class="nav-user">
@@ -69,15 +66,103 @@
     {% endif %}
   </nav>
 
-  <main class="main-content">
-    {% if current_user.is_authenticated and current_user.role_name == 'admin' and request.endpoint and request.endpoint.startswith('main.admin') %}
-    <nav class="admin-subnav">
-      <a href="{{ url_for('main.admin_theaters') }}"   {% if request.endpoint == 'main.admin_theaters' or request.endpoint == 'main.admin_theater_edit' %}class="active"{% endif %}>Theaters</a>
-      <a href="{{ url_for('main.admin_users') }}"      {% if request.endpoint in ['main.admin_users','main.admin_user_edit'] %}class="active"{% endif %}>Users</a>
-      <a href="{{ url_for('main.admin_lookup') }}"     {% if request.endpoint and 'lookup' in request.endpoint %}class="active"{% endif %}>Lookup Tables</a>
-      <a href="{{ url_for('main.admin_settings') }}"   {% if request.endpoint == 'main.admin_settings' %}class="active"{% endif %}>Settings</a>
-      <a href="{{ url_for('main.admin_logs') }}"       {% if request.endpoint == 'main.admin_logs' %}class="active"{% endif %}>Logs</a>
-    </nav>
+  {% set _on_settings = request.endpoint in ['main.settings_account', 'main.profile_mfa_setup'] or (request.endpoint and request.endpoint.startswith('main.admin')) %}
+  {% if _on_settings %}
+    {% if request.endpoint in ['main.settings_account', 'main.profile_mfa_setup'] %}
+      {% set _settings_label = 'My Account' %}
+    {% elif request.endpoint in ['main.admin_users', 'main.admin_user_edit', 'main.admin_user_new', 'main.admin_user_invite', 'main.admin_invite_revoke', 'main.admin_user_delete', 'main.admin_user_reset_mfa'] %}
+      {% set _settings_label = 'Users' %}
+    {% elif request.endpoint in ['main.admin_theaters', 'main.admin_theater_edit', 'main.admin_theater_new', 'main.admin_theater_delete', 'main.admin_theater_reactivate'] %}
+      {% set _settings_label = 'Theaters' %}
+    {% elif request.endpoint and 'lookup' in request.endpoint %}
+      {% set _settings_label = 'Lookup Tables' %}
+    {% elif request.endpoint == 'main.admin_settings' %}
+      {% set _settings_label = 'App Settings' %}
+    {% elif request.endpoint == 'main.admin_logs' %}
+      {% set _settings_label = 'Logs' %}
+    {% else %}
+      {% set _settings_label = 'Settings' %}
+    {% endif %}
+  {% endif %}
+  <main class="main-content{% if _on_settings %} settings-main{% endif %}">
+    {% if _on_settings %}
+    <aside class="settings-sidebar">
+      <div class="settings-sidebar-header">Settings</div>
+      <nav class="settings-sidebar-nav">
+        <a href="{{ url_for('main.settings_account') }}"
+           class="settings-sidebar-link{% if request.endpoint in ['main.settings_account','main.profile_mfa_setup'] %} active{% endif %}">
+          My Account
+        </a>
+        {% if current_user.is_authenticated and current_user.role_name in ['admin', 'editor'] %}
+        <div class="settings-sidebar-divider">Administration</div>
+        {% if current_user.role_name == 'admin' %}
+        <a href="{{ url_for('main.admin_users') }}"
+           class="settings-sidebar-link{% if request.endpoint in ['main.admin_users','main.admin_user_edit','main.admin_user_new'] %} active{% endif %}">
+          Users
+        </a>
+        {% endif %}
+        <a href="{{ url_for('main.admin_theaters') }}"
+           class="settings-sidebar-link{% if request.endpoint in ['main.admin_theaters','main.admin_theater_edit','main.admin_theater_new'] %} active{% endif %}">
+          Theaters
+        </a>
+        {% if current_user.role_name == 'admin' %}
+        <a href="{{ url_for('main.admin_lookup') }}"
+           class="settings-sidebar-link{% if request.endpoint and 'lookup' in request.endpoint %} active{% endif %}">
+          Lookup Tables
+        </a>
+        <a href="{{ url_for('main.admin_settings') }}"
+           class="settings-sidebar-link{% if request.endpoint == 'main.admin_settings' %} active{% endif %}">
+          App Settings
+        </a>
+        <a href="{{ url_for('main.admin_logs') }}"
+           class="settings-sidebar-link{% if request.endpoint == 'main.admin_logs' %} active{% endif %}">
+          Logs
+        </a>
+        {% endif %}
+        {% endif %}
+      </nav>
+    </aside>
+    <div class="settings-content">
+      <div class="settings-page-picker-wrap">
+        <button class="settings-page-picker" id="settings-page-picker" aria-expanded="false">
+          <span>{{ _settings_label }}</span>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="settings-overlay-backdrop" id="settings-overlay-backdrop"></div>
+        <nav class="settings-overlay" id="settings-overlay" aria-label="Settings navigation">
+          <a href="{{ url_for('main.settings_account') }}"
+             class="settings-overlay-link{% if request.endpoint in ['main.settings_account','main.profile_mfa_setup'] %} active{% endif %}">
+            My Account
+          </a>
+          {% if current_user.is_authenticated and current_user.role_name in ['admin', 'editor'] %}
+          <div class="settings-overlay-divider">Administration</div>
+          {% if current_user.role_name == 'admin' %}
+          <a href="{{ url_for('main.admin_users') }}"
+             class="settings-overlay-link{% if request.endpoint in ['main.admin_users','main.admin_user_edit','main.admin_user_new'] %} active{% endif %}">
+            Users
+          </a>
+          {% endif %}
+          <a href="{{ url_for('main.admin_theaters') }}"
+             class="settings-overlay-link{% if request.endpoint in ['main.admin_theaters','main.admin_theater_edit','main.admin_theater_new'] %} active{% endif %}">
+            Theaters
+          </a>
+          {% if current_user.role_name == 'admin' %}
+          <a href="{{ url_for('main.admin_lookup') }}"
+             class="settings-overlay-link{% if request.endpoint and 'lookup' in request.endpoint %} active{% endif %}">
+            Lookup Tables
+          </a>
+          <a href="{{ url_for('main.admin_settings') }}"
+             class="settings-overlay-link{% if request.endpoint == 'main.admin_settings' %} active{% endif %}">
+            App Settings
+          </a>
+          <a href="{{ url_for('main.admin_logs') }}"
+             class="settings-overlay-link{% if request.endpoint == 'main.admin_logs' %} active{% endif %}">
+            Logs
+          </a>
+          {% endif %}
+          {% endif %}
+        </nav>
+      </div>
     {% endif %}
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -87,6 +172,9 @@
       {% endif %}
     {% endwith %}
     {% block content %}{% endblock %}
+    {% if _on_settings %}
+    </div>
+    {% endif %}
   </main>
 
   <footer class="footer">
@@ -157,6 +245,28 @@
     })();
   </script>
 
+  <script>
+    (function () {
+      var btn      = document.getElementById('settings-page-picker');
+      var overlay  = document.getElementById('settings-overlay');
+      var backdrop = document.getElementById('settings-overlay-backdrop');
+      if (!btn || !overlay || !backdrop) return;
+      function open() {
+        overlay.classList.add('open');
+        backdrop.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+      }
+      function close() {
+        overlay.classList.remove('open');
+        backdrop.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+      btn.addEventListener('click', function () {
+        overlay.classList.contains('open') ? close() : open();
+      });
+      backdrop.addEventListener('click', close);
+    })();
+  </script>
   {% if current_user.is_authenticated and session_timeout_minutes > 0 %}
   <!-- Session idle timeout (issue #73) -->
   <div id="session-warn-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center">
