@@ -114,6 +114,7 @@ docker logs imax-alert -f
 | v1.18.0 | UX Polish & Mobile Fixes: brand link, theme toggle relocation, segmented theater targeting, target date hint, movie card overflow fix, Clear Showtimes in Actions menu (#205 #206 #207 #208 #209 #210) |
 | v1.19.0 | Theater Data Infrastructure: CSV export (download/email/save), bulk import with validation, Actions menu split into Showtimes/Venue Data/CSV & Data with inline descriptions, 10 remaining website URLs populated (#46 #83) |
 | v1.20.0 | Settings & Navigation Redesign: unified Settings nav, left-rail sidebar (desktop) + page-picker overlay (mobile), Profile Info/Settings split with accordions, App Settings accordion groups, segmented unit buttons, last_login_at tracking, XSS + datetime fixes (#211) |
+| v1.20.1 | Hotfix: restore base.html/CSS/template changes lost in release merge conflict; remove dead profile.html |
 
 ### In Progress & Upcoming
 
