@@ -719,16 +719,15 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
 .theater-list-wrap {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   min-height: 0;  /* allow flex child to shrink below content size */
 }
 .theater-list {
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-right: 6px;
-  padding-bottom: 16px;
+  padding: 4px 6px 16px 2px;  /* top pad so hover lift isn't clipped */
   flex: 1;
   min-height: 0;
 }
@@ -800,6 +799,10 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
   inset: 0;
   z-index: 0;
   border-radius: inherit;
+  display: block;
+  text-decoration: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .theater-card-footer { position: relative; z-index: 1; }
 .theater-card-action { position: relative; z-index: 1; }
@@ -1508,6 +1511,7 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 #profile-map {
   width: 100%;
   box-sizing: border-box;
+  aspect-ratio: 1 / 1;
 }
 
 .settings-profile-identity {
@@ -2458,9 +2462,18 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 .scraper-guide summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-muted); padding: 0; list-style: none; }
 .scraper-guide summary::before { content: '▸ '; }
 .scraper-guide[open] summary::before { content: '▾ '; }
-.scraper-guide-body { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
-.scraper-guide-row { display: flex; align-items: flex-start; gap: 12px; font-size: 13px; color: var(--text-secondary); }
-.scraper-guide-row .scraper-status-badge { flex-shrink: 0; margin-top: 1px; }
+.scraper-guide-body { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
+.scraper-guide-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+@media (max-width: 480px) {
+  .scraper-guide-row { grid-template-columns: 1fr; gap: 4px; }
+}
 
 @media (max-width: 768px) {
   .scraper-summary-card { flex-direction: column; align-items: flex-start; }

@@ -83,7 +83,8 @@ def run_health_check(scraper, app) -> dict:
             error_summary = "No active theaters configured for this chain"
         else:
             try:
-                new_showtimes = scraper.scrape_theater(theater)
+                # {None} is the "any movie" sentinel — bypasses demand-driven filtering
+                new_showtimes = scraper.scrape_theater(theater, {None})
                 showtime_count = len(new_showtimes) if new_showtimes is not None else 0
                 if showtime_count > 0:
                     status = "ok"
