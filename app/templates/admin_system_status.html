@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}System Status – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>System Status</h1>
+  <p class="subtitle">Scraper health across all registered chains</p>
+</div>
+
+{# ── Signal strip ─────────────────────────────────────────────────── #}
+<div class="scraper-signal-strip" aria-label="Scraper health overview">
+  {% for row in rows %}
+  <div class="signal-segment signal-{{ row.status }}"
+       title="{{ row.chain_name }}: {{ row.status | upper }}"></div>
+  {% endfor %}
+</div>
+
+{# ── Summary banner ───────────────────────────────────────────────── #}
+<div class="card scraper-summary-card">
+  <div class="scraper-summary-stats">
+    <div class="summary-stat summary-stat-ok">
+      <span class="summary-dot status-dot-ok"></span>
+      <strong>{{ ok_count }}</strong>
+      <span class="summary-label">OK</span>
+    </div>
+    <div class="summary-stat summary-stat-warning">
+      <span class="summary-dot status-dot-warning"></span>
+      <strong>{{ warning_count }}</strong>
+      <span class="summary-label">Warning</span>
+    </div>
+    <div class="summary-stat summary-stat-error">
+      <span class="summary-dot status-dot-error"></span>
+      <strong>{{ error_count }}</strong>
+      <span class="summary-label">Error</span>
+    </div>
+    {% if never_count > 0 %}
+    <div class="summary-stat summary-stat-never">
+      <span class="summary-dot status-dot-never"></span>
+      <strong>{{ never_count }}</strong>
+      <span class="summary-label">Never run</span>
+    </div>
+    {% endif %}
+  </div>
+  <div class="scraper-summary-meta">
+    {% if health_job and health_job.next_run_iso %}
+    <span>Next scheduled check: <time class="utc-time" datetime="{{ health_job.next_run_iso }}" data-fmt="medium">{{ health_job.next_run_iso }}</time></span>
+    {% else %}
+    <span class="text-muted">Health check scheduler not running</span>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Scrapers table ───────────────────────────────────────────────── #}
+<div class="card" style="margin-top:20px">
+  <div class="table-wrap">
+    <table class="data-table scraper-status-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Chain</th>
+          <th>Theaters</th>
+          <th>Last Checked</th>
+          <th>Showtimes Found</th>
+          <th>Issue</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="scraper-row scraper-row-{{ row.status }}" data-chain="{{ row.chain_name }}">
+          <td>
+            <span class="scraper-status-badge scraper-status-{{ row.status }}">
+              {{ row.status | upper }}
+            </span>
+          </td>
+          <td><strong>{{ row.chain_name }}</strong></td>
+          <td>{{ row.theater_count }}</td>
+          <td>
+            {% if row.checked_at %}
+            <time class="utc-time" datetime="{{ row.checked_at.isoformat() }}Z" data-fmt="relative">
+              {{ row.checked_at.strftime('%b %d at %I:%M %p') }}
+            </time>
+            {% else %}
+            <span class="text-muted">Never</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.status == 'error' %}
+            <span class="text-muted">—</span>
+            {% elif row.showtime_count is not none %}
+            {{ row.showtime_count }}
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="scraper-issue-cell">
+            {% if row.error_summary %}
+            <span class="scraper-issue-text">{{ row.error_summary }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <button class="btn btn-outline btn-sm run-now-btn"
+                    data-chain="{{ row.chain_name }}"
+                    onclick="runHealthCheck(this, {{ row.chain_name | tojson }})">
+              Run Now
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── Status guide (collapsible) ───────────────────────────────────── #}
+<details class="card scraper-guide" style="margin-top:16px">
+  <summary class="scraper-guide-toggle">How statuses are determined</summary>
+  <div class="scraper-guide-body">
+    <div class="scraper-guide-row">
+      <span class="scraper-status-badge scraper-status-ok">OK</span>
+      <span>Scraper ran without exception and returned at least one showtime.</span>
+    </div>
+    <div class="scraper-guide-row">
+      <span class="scraper-status-badge scraper-status-warning">WARNING</span>
+      <span>Scraper ran without exception but returned zero showtimes — possible site change, no current screenings, or selector drift.</span>
+    </div>
+    <div class="scraper-guide-row">
+      <span class="scraper-status-badge scraper-status-error">ERROR</span>
+      <span>Scraper raised an exception and could not complete the check.</span>
+    </div>
+    <div class="scraper-guide-row">
+      <span class="scraper-status-badge scraper-status-never">NEVER RUN</span>
+      <span>No health check has been run for this chain yet. Use Run Now to check immediately.</span>
+    </div>
+    <p class="text-muted" style="margin-top:12px;font-size:12px">
+      Health checks run automatically once daily. They are independent of the alert scraper and run even when no alerts are active for a chain.
+    </p>
+  </div>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function runHealthCheck(btn, chainName) {
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+
+  fetch('/api/admin/scraper-check/' + encodeURIComponent(chainName), { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        // Update the row status without a full reload
+        var row = btn.closest('tr');
+        var statusBadge = row.querySelector('.scraper-status-badge');
+        var foundCell = row.cells[4];
+        var issueCell = row.querySelector('.scraper-issue-text');
+
+        row.className = 'scraper-row scraper-row-' + data.status;
+        statusBadge.className = 'scraper-status-badge scraper-status-' + data.status;
+        statusBadge.textContent = data.status.toUpperCase();
+
+        if (data.status === 'error') {
+          foundCell.innerHTML = '<span class="text-muted">—</span>';
+        } else {
+          foundCell.textContent = data.showtime_count !== null ? data.showtime_count : '—';
+        }
+
+        if (issueCell) {
+          issueCell.textContent = data.error_summary || '';
+        } else if (data.error_summary) {
+          var td = row.querySelector('.scraper-issue-cell');
+          if (td) td.innerHTML = '<span class="scraper-issue-text">' + data.error_summary + '</span>';
+        }
+
+        var checkedCell = row.cells[3];
+        checkedCell.textContent = 'Just now';
+      } else {
+        alert('Health check failed: ' + (data.error || 'Unknown error'));
+      }
+    })
+    .catch(err => alert('Request failed: ' + err))
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = 'Run Now';
+    });
+}
+</script>
+{% endblock %}

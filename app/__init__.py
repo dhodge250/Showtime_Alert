@@ -566,6 +566,21 @@ def _run_migrations():
             "ALTER TABLE users ADD COLUMN last_login_at DATETIME",
             None,
         ),
+        (
+            "description", "theaters",
+            "ALTER TABLE theaters ADD COLUMN description TEXT",
+            None,
+        ),
+        (
+            "amenities", "theaters",
+            "ALTER TABLE theaters ADD COLUMN amenities TEXT",
+            None,
+        ),
+        (
+            "seating_capacity", "theaters",
+            "ALTER TABLE theaters ADD COLUMN seating_capacity INTEGER",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:

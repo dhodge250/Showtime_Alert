@@ -65,7 +65,7 @@
     </div>
 
     {% if current_user.location_lat and current_user.location_lon %}
-    <div id="profile-map" style="height:180px;border-radius:var(--radius);border:1px solid var(--border);margin-top:16px"></div>
+    <div id="profile-map" style="width:100%;height:200px;border-radius:var(--radius);border:1px solid var(--border);margin-top:16px"></div>
     {% endif %}
   </div>
 
@@ -311,6 +311,7 @@
 {% if current_user.location_lat and current_user.location_lon %}
 <script>
   var map = L.map('profile-map').setView([{{ current_user.location_lat }}, {{ current_user.location_lon }}], 13);
+  map.invalidateSize();
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap', maxZoom: 18,
   }).addTo(map);
