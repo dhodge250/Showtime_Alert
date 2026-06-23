@@ -784,9 +784,13 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
   border: 1px solid var(--border);
   border-radius: var(--radius);
   position: relative;
-  padding: 12px 14px;
+  padding: 14px 14px 12px;
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+  /* Fixed-height flex column: body fills middle, footer pins to bottom */
+  display: flex;
+  flex-direction: column;
+  height: 160px;
   flex-shrink: 0;
 }
 .theater-card:hover, .theater-card.selected {
@@ -804,12 +808,50 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
   outline: none;
   -webkit-tap-highlight-color: transparent;
 }
-.theater-card-footer { position: relative; z-index: 1; }
+.theater-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+.theater-card-header h3 {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  flex: 1;
+  /* Clamp to 2 lines so long names don't push everything else */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.theater-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  min-height: 0;
+}
+.theater-address {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.theater-card-footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
 .theater-card-action { position: relative; z-index: 1; }
-.theater-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.theater-card-header h3 { font-size: 14px; flex: 1; line-height: 1.3; }
-.theater-card-body { display: flex; flex-direction: column; gap: 3px; }
-.theater-address { font-size: 13px; color: var(--text-primary); }
 .theater-spec {
   display: flex;
   align-items: center;
@@ -882,14 +924,49 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
 }
 
 /* ── Theater detail page ─────────────────────────────────────────── */
-.theater-detail-heading { display: flex; flex-direction: column; gap: 4px; }
-.theater-detail-heading .chain-badge { margin-bottom: 4px; }
-.theater-detail-location { color: var(--text-muted); font-size: 14px; margin: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.theater-detail-distance { color: var(--accent); font-weight: 600; }
+.theater-detail-hero {
+  margin-bottom: 20px;
+}
+.theater-hero-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.theater-hero-identity {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.theater-hero-name-block { flex: 1; min-width: 0; }
+.theater-hero-name {
+  font-size: clamp(20px, 3vw, 28px);
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0 0 6px;
+  color: var(--text-primary);
+}
+.theater-hero-meta {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.theater-hero-distance {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 15px;
+}
+.theater-hero-cta { flex-shrink: 0; align-self: center; }
 
 .theater-image-banner {
   width: 100%;
-  height: 220px;
+  height: 200px;
   border-radius: var(--radius);
   overflow: hidden;
   margin-bottom: 24px;
@@ -908,18 +985,69 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  background: linear-gradient(135deg, var(--bg-card) 0%, rgba(0,212,255,0.05) 100%);
+  gap: 16px;
+  background: linear-gradient(160deg, var(--bg-card) 0%, #0d1620 100%);
+  position: relative;
 }
-.chain-badge-lg { font-size: 14px; padding: 6px 14px; }
-.theater-banner-name { color: var(--text-muted); font-size: 13px; }
+/* CSS cinema screen rectangle — the signature IMAX element */
+.theater-banner-screen-rect {
+  width: 55%;
+  aspect-ratio: 2.39 / 1;
+  border: 1px solid rgba(0,212,255,0.3);
+  border-radius: 2px;
+  box-shadow: 0 0 20px rgba(0,212,255,0.08), inset 0 0 30px rgba(0,0,0,0.4);
+  background: linear-gradient(180deg, rgba(0,212,255,0.03) 0%, transparent 100%);
+}
+.theater-banner-chain-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: rgba(0,212,255,0.5);
+}
 
-.theater-specs-card h2 { margin-bottom: 16px; }
-.theater-specs-grid { display: flex; flex-direction: column; gap: 10px; }
-.spec-row { display: grid; grid-template-columns: 120px 1fr; gap: 8px; align-items: baseline; }
-.spec-row .spec-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-.spec-row .spec-value { font-size: 14px; color: var(--text-primary); }
-.theater-specs-divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.theater-specs-card h2 { margin-bottom: 12px; }
+.theater-specs-grid { display: flex; flex-direction: column; gap: 8px; }
+.spec-row { display: grid; grid-template-columns: 110px 1fr; gap: 8px; align-items: baseline; }
+.spec-row .spec-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.spec-row .spec-value { font-size: 13px; color: var(--text-primary); }
+.theater-specs-divider { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
+/* Screen dimensions — large display anchor */
+.theater-screen-display {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.theater-screen-dims {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.screen-dim-unit {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+.screen-dim-x {
+  font-size: 18px;
+  color: var(--text-muted);
+  margin: 0 4px;
+}
+.theater-screen-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  align-self: flex-end;
+  padding-bottom: 4px;
+}
 
 .theater-distance-display { color: var(--accent); font-size: 14px; font-weight: 600; margin-bottom: 8px; }
 .theater-address-block { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 4px; }
@@ -945,7 +1073,11 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
 
 @media (max-width: 768px) {
   .theater-image-banner { height: 160px; }
-  .spec-row { grid-template-columns: 100px 1fr; }
+  .spec-row { grid-template-columns: 90px 1fr; }
+  .theater-hero-identity { flex-direction: column; align-items: flex-start; }
+  .theater-hero-cta { width: 100%; text-align: center; }
+  .theater-screen-dims { font-size: 22px; }
+  .theater-banner-screen-rect { width: 70%; }
 }
 
 .leaflet-popup-content-wrapper {

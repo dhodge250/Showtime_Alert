@@ -2,23 +2,30 @@
 {% block title %}{{ theater.name }} – IMAX Alert{% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <a href="{{ url_for('main.theaters') }}" class="back-link">← Back to Theaters</a>
-  <div class="theater-detail-heading">
-    <div>
-      {% set _chain = theater.chain_name or theater.chain %}
-      {% if _chain %}
-      <span class="chain-badge chain-{{ _chain|lower|replace(' ','-') }}">{{ _chain }}</span>
-      {% endif %}
-      <h1>{{ theater.name }}</h1>
-    </div>
-    {% if user_distance or theater.city %}
-    <p class="theater-detail-location">
-      {% if user_distance %}<span class="theater-detail-distance">{{ user_distance }}</span>{% endif %}
-      {% if user_distance and theater.city %} · {% endif %}
-      {{ theater.city_name or theater.city }}{% if theater.region_name or theater.state %}, {{ theater.region_name or theater.state }}{% endif %}
-    </p>
+{% set _chain = theater.chain_name or theater.chain %}
+
+{# ── Integrated hero ──────────────────────────────────────────────── #}
+<div class="theater-detail-hero">
+  <div class="theater-hero-top">
+    <a href="{{ url_for('main.theaters') }}" class="back-link">← Back to Theaters</a>
+    {% if _chain %}
+    <span class="chain-badge chain-{{ _chain|lower|replace(' ','-') }}">{{ _chain }}</span>
     {% endif %}
+  </div>
+  <div class="theater-hero-identity">
+    <div class="theater-hero-name-block">
+      <h1 class="theater-hero-name">{{ theater.name }}</h1>
+      {% if user_distance or (theater.city_name or theater.city) %}
+      <p class="theater-hero-meta">
+        {% if user_distance %}<span class="theater-hero-distance">{{ user_distance }}</span>{% endif %}
+        {% if user_distance and (theater.city_name or theater.city) %} &middot; {% endif %}
+        <span class="theater-hero-city">{{ theater.city_name or theater.city }}{% if theater.region_name or theater.state %}, {{ theater.region_name or theater.state }}{% endif %}</span>
+      </p>
+      {% endif %}
+    </div>
+    <a href="{{ url_for('main.alerts') }}?theater_id={{ theater.id }}" class="btn btn-primary theater-hero-cta">
+      Set Alert
+    </a>
   </div>
 </div>
 
@@ -28,10 +35,10 @@
   <img src="{{ theater.image_url }}" alt="{{ theater.name }}" class="theater-banner-img">
   {% else %}
   <div class="theater-banner-placeholder">
+    <div class="theater-banner-screen-rect"></div>
     {% if _chain %}
-    <span class="chain-badge chain-{{ _chain|lower|replace(' ','-') }} chain-badge-lg">{{ _chain }}</span>
+    <span class="theater-banner-chain-name">{{ _chain }}</span>
     {% endif %}
-    <span class="theater-banner-name">{{ theater.name }}</span>
   </div>
   {% endif %}
 </div>
@@ -40,26 +47,32 @@
 <div class="detail-grid" style="margin-bottom:24px">
 
   {# IMAX Specifications #}
+  {% set _ar = theater.aspect_ratio_ref.label if theater.aspect_ratio_ref else theater.screen_size %}
+  {% set _pt = theater.projector_type_ref.name if theater.projector_type_ref else theater.projector_type %}
+  {% set _audio = theater.audio_system_ref.name if theater.audio_system_ref else theater.audio_system %}
   <section class="card theater-specs-card">
     <h2>IMAX Specifications</h2>
+
+    {# Screen dimensions — large display anchor #}
+    {% if theater.screen_width_m and theater.screen_height_m %}
+    <div class="theater-screen-display">
+      <span class="theater-screen-dims">
+        {% if unit == 'imperial' %}
+          {{ theater.screen_width_ft | round(1) }}<span class="screen-dim-unit">ft</span>
+          <span class="screen-dim-x">×</span>
+          {{ theater.screen_height_ft | round(1) }}<span class="screen-dim-unit">ft</span>
+        {% else %}
+          {{ theater.screen_width_m | round(1) }}<span class="screen-dim-unit">m</span>
+          <span class="screen-dim-x">×</span>
+          {{ theater.screen_height_m | round(1) }}<span class="screen-dim-unit">m</span>
+        {% endif %}
+      </span>
+      <span class="theater-screen-label">screen</span>
+    </div>
+    {% endif %}
+
+    {# Secondary specs #}
     <div class="theater-specs-grid">
-
-      {# Screen dimensions #}
-      {% if theater.screen_width_m and theater.screen_height_m %}
-      <div class="spec-row">
-        <span class="spec-label">Screen</span>
-        <span class="spec-value">
-          {% if unit == 'imperial' %}
-            {{ theater.screen_width_ft | round(1) }} ft × {{ theater.screen_height_ft | round(1) }} ft
-          {% else %}
-            {{ theater.screen_width_m | round(1) }} m × {{ theater.screen_height_m | round(1) }} m
-          {% endif %}
-        </span>
-      </div>
-      {% endif %}
-
-      {# Aspect ratio #}
-      {% set _ar = theater.aspect_ratio_ref.label if theater.aspect_ratio_ref else theater.screen_size %}
       {% if _ar %}
       <div class="spec-row">
         <span class="spec-label">Aspect Ratio</span>
@@ -69,45 +82,33 @@
         </span>
       </div>
       {% endif %}
-
-      {# Projector #}
-      {% set _pt = theater.projector_type_ref.name if theater.projector_type_ref else theater.projector_type %}
       {% if _pt %}
       <div class="spec-row">
         <span class="spec-label">Projector</span>
         <span class="spec-value">{{ _pt }}</span>
       </div>
       {% endif %}
-
-      {# Film projector #}
       {% if theater.film_projector_type_name %}
       <div class="spec-row">
         <span class="spec-label">Film Projector</span>
         <span class="spec-value">{{ theater.film_projector_type_name }}</span>
       </div>
       {% endif %}
-
-      {# Audio #}
-      {% set _audio = theater.audio_system_ref.name if theater.audio_system_ref else theater.audio_system %}
       {% if _audio %}
       <div class="spec-row">
         <span class="spec-label">Audio</span>
         <span class="spec-value">{{ _audio }}</span>
       </div>
       {% endif %}
-
-      {# Digital projector AR (if differs from screen AR) #}
       {% if theater.digital_projector_ar_ref and theater.digital_projector_ar_ref.label != _ar %}
       <div class="spec-row">
         <span class="spec-label">Digital AR</span>
         <span class="spec-value">{{ theater.digital_projector_ar_ref.label }}</span>
       </div>
       {% endif %}
-
-      {# Commercial films #}
       {% if theater.commercial_films %}
       <div class="spec-row">
-        <span class="spec-label">Commercial Films</span>
+        <span class="spec-label">Commercial</span>
         <span class="spec-value">
           <span class="status-badge {% if theater.commercial_films == 'Yes' %}status-active{% elif theater.commercial_films == 'Limited' %}status-warning{% else %}status-inactive{% endif %}">
             {{ theater.commercial_films }}
@@ -115,23 +116,29 @@
         </span>
       </div>
       {% endif %}
-
     </div>
 
-    {# Chain / contact info divider #}
+    {# Tertiary: chain / contact #}
     {% if _chain or theater.website or theater.phone or theater.seating_capacity %}
     <div class="theater-specs-divider"></div>
     <div class="theater-specs-grid">
-      {% if _chain %}
+      {% if _chain and theater.website %}
+      <div class="spec-row">
+        <span class="spec-label">Chain</span>
+        <span class="spec-value">
+          {{ _chain }}
+          <a href="{{ theater.website }}" target="_blank" rel="noopener" class="external-link" style="margin-left:6px">{{ theater.website | replace('https://', '') | replace('http://', '') | truncate(28, True, '…') }} ↗</a>
+        </span>
+      </div>
+      {% elif _chain %}
       <div class="spec-row">
         <span class="spec-label">Chain</span>
         <span class="spec-value">{{ _chain }}</span>
       </div>
-      {% endif %}
-      {% if theater.website %}
+      {% elif theater.website %}
       <div class="spec-row">
         <span class="spec-label">Website</span>
-        <span class="spec-value"><a href="{{ theater.website }}" target="_blank" rel="noopener" class="external-link">{{ theater.website | replace('https://', '') | replace('http://', '') | truncate(40, True, '…') }} ↗</a></span>
+        <span class="spec-value"><a href="{{ theater.website }}" target="_blank" rel="noopener" class="external-link">{{ theater.website | replace('https://', '') | replace('http://', '') | truncate(36, True, '…') }} ↗</a></span>
       </div>
       {% endif %}
       {% if theater.phone %}
@@ -148,12 +155,6 @@
       {% endif %}
     </div>
     {% endif %}
-
-    <div class="theater-actions" style="margin-top:20px">
-      <a href="{{ url_for('main.alerts') }}?theater_id={{ theater.id }}" class="btn btn-primary">
-        Set Alert for This Theater
-      </a>
-    </div>
   </section>
 
   {# Location #}
