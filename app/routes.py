@@ -177,6 +177,9 @@ def theaters():
 @login_required
 def theater_detail(theater_id):
     """Theater detail page."""
+    import json
+    from app.scrapers.base import _haversine_km
+
     theater = Theater.query.get_or_404(theater_id)
     showtimes = (
         Showtime.query.filter_by(theater_id=theater_id)
@@ -184,11 +187,39 @@ def theater_detail(theater_id):
         .order_by(Showtime.show_datetime)
         .all()
     )
+
+    unit = _current_unit()
+
+    user_distance = None
+    if (
+        current_user.location_lat is not None
+        and current_user.location_lon is not None
+        and theater.latitude is not None
+        and theater.longitude is not None
+    ):
+        dist_km = _haversine_km(
+            current_user.location_lat, current_user.location_lon,
+            theater.latitude, theater.longitude,
+        )
+        if unit == "imperial":
+            user_distance = f"{dist_km / 1.60934:.1f} mi"
+        else:
+            user_distance = f"{dist_km:.1f} km"
+
+    amenities_list = []
+    if theater.amenities:
+        try:
+            amenities_list = json.loads(theater.amenities)
+        except (ValueError, TypeError):
+            pass
+
     return render_template(
         "theater_detail.html",
         theater=theater,
         showtimes=showtimes,
-        unit=_current_unit(),
+        unit=unit,
+        user_distance=user_distance,
+        amenities_list=amenities_list,
     )
 
 
@@ -1076,6 +1107,59 @@ def admin_logs():
         level_filter=level_filter,
         category_filter=category_filter,
         categories=categories,
+    )
+
+
+@main_bp.route("/admin/system-status")
+@require_role("admin")
+def admin_system_status():
+    """Admin: scraper health status dashboard."""
+    from app.models import ScraperStatus, Theater
+    from app.scrapers import ALL_SCRAPERS
+    from app.scheduler import get_scheduler_status
+
+    # Build one entry per chain from ALL_SCRAPERS — latest status row each
+    chain_names = [s.chain_name for s in ALL_SCRAPERS]
+    rows = []
+    for chain_name in chain_names:
+        latest = (
+            ScraperStatus.query
+            .filter_by(chain_name=chain_name)
+            .order_by(ScraperStatus.checked_at.desc())
+            .first()
+        )
+        theater_count = Theater.query.filter(
+            Theater.is_active == True,  # noqa: E712
+            Theater.chain == chain_name,
+        ).count()
+        rows.append({
+            "chain_name": chain_name,
+            "theater_count": theater_count,
+            "status": latest.status if latest else "never",
+            "checked_at": latest.checked_at if latest else None,
+            "showtime_count": latest.showtime_count if latest else None,
+            "error_summary": latest.error_summary if latest else None,
+        })
+
+    ok_count = sum(1 for r in rows if r["status"] == "ok")
+    warning_count = sum(1 for r in rows if r["status"] == "warning")
+    error_count = sum(1 for r in rows if r["status"] == "error")
+    never_count = sum(1 for r in rows if r["status"] == "never")
+
+    scheduler_status = get_scheduler_status()
+    health_job = next(
+        (j for j in scheduler_status.get("jobs", []) if j["id"] == "imax_health_check"),
+        None,
+    )
+
+    return render_template(
+        "admin_system_status.html",
+        rows=rows,
+        ok_count=ok_count,
+        warning_count=warning_count,
+        error_count=error_count,
+        never_count=never_count,
+        health_job=health_job,
     )
 
 
@@ -2558,6 +2642,32 @@ def api_reseed_from_csv():
               level=level, user_id=current_user.id,
               details={"columns": columns, **result})
     return jsonify({"status": "ok", **result})
+
+
+# ---------------------------------------------------------------------------
+# API: Scraper health check (on-demand)
+# ---------------------------------------------------------------------------
+
+@api_bp.route("/admin/scraper-check/<string:chain_name>", methods=["POST"])
+@require_role("admin")
+def api_scraper_health_check(chain_name: str):
+    """Trigger an on-demand health check for a single scraper chain."""
+    from flask import current_app
+    from app.scrapers import ALL_SCRAPERS
+    from app.scrapers.health import run_health_check
+
+    scraper = next((s for s in ALL_SCRAPERS if s.chain_name == chain_name), None)
+    if scraper is None:
+        return jsonify({"error": f"Unknown chain: {chain_name}"}), 404
+
+    from app.log_utils import write_log
+    write_log("scrape", f"On-demand health check triggered for {chain_name}", user_id=current_user.id)
+
+    try:
+        result = run_health_check(scraper, current_app._get_current_object())
+        return jsonify({"ok": True, **result})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------

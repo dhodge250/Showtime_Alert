@@ -4,88 +4,232 @@
 {% block content %}
 <div class="page-header">
   <a href="{{ url_for('main.theaters') }}" class="back-link">← Back to Theaters</a>
-  <h1>{{ theater.name }}</h1>
-  <span class="chain-badge chain-{{ theater.chain|lower }}">{{ theater.chain }}</span>
+  <div class="theater-detail-heading">
+    <div>
+      {% set _chain = theater.chain_name or theater.chain %}
+      {% if _chain %}
+      <span class="chain-badge chain-{{ _chain|lower|replace(' ','-') }}">{{ _chain }}</span>
+      {% endif %}
+      <h1>{{ theater.name }}</h1>
+    </div>
+    {% if user_distance or theater.city %}
+    <p class="theater-detail-location">
+      {% if user_distance %}<span class="theater-detail-distance">{{ user_distance }}</span>{% endif %}
+      {% if user_distance and theater.city %} · {% endif %}
+      {{ theater.city_name or theater.city }}{% if theater.region_name or theater.state %}, {{ theater.region_name or theater.state }}{% endif %}
+    </p>
+    {% endif %}
+  </div>
 </div>
 
-<div class="detail-grid">
-  <!-- Theater Info -->
-  <section class="card theater-info-card">
-    <h2>Theater Information</h2>
-    <div class="info-grid">
-      <div class="info-item">
-        <span class="info-label">Address</span>
-        <span class="info-value">{{ theater.address }}, {{ theater.city }}, {{ theater.state }} {{ theater.zip_code }}</span>
-      </div>
-      {% if theater.screen_size %}
-      <div class="info-item">
-        <span class="info-label">Screen Size</span>
-        <span class="info-value">{{ theater.screen_size }}</span>
+{# ── Image banner ─────────────────────────────────────────────────── #}
+<div class="theater-image-banner">
+  {% if theater.image_url %}
+  <img src="{{ theater.image_url }}" alt="{{ theater.name }}" class="theater-banner-img">
+  {% else %}
+  <div class="theater-banner-placeholder">
+    {% if _chain %}
+    <span class="chain-badge chain-{{ _chain|lower|replace(' ','-') }} chain-badge-lg">{{ _chain }}</span>
+    {% endif %}
+    <span class="theater-banner-name">{{ theater.name }}</span>
+  </div>
+  {% endif %}
+</div>
+
+{# ── Top grid: specs + location ───────────────────────────────────── #}
+<div class="detail-grid" style="margin-bottom:24px">
+
+  {# IMAX Specifications #}
+  <section class="card theater-specs-card">
+    <h2>IMAX Specifications</h2>
+    <div class="theater-specs-grid">
+
+      {# Screen dimensions #}
+      {% if theater.screen_width_m and theater.screen_height_m %}
+      <div class="spec-row">
+        <span class="spec-label">Screen</span>
+        <span class="spec-value">
+          {% if unit == 'imperial' %}
+            {{ theater.screen_width_ft | round(1) }} ft × {{ theater.screen_height_ft | round(1) }} ft
+          {% else %}
+            {{ theater.screen_width_m | round(1) }} m × {{ theater.screen_height_m | round(1) }} m
+          {% endif %}
+        </span>
       </div>
       {% endif %}
-      {% if theater.projector_type %}
-      <div class="info-item">
-        <span class="info-label">Projector Type</span>
-        <span class="info-value">{{ theater.projector_type }}</span>
+
+      {# Aspect ratio #}
+      {% set _ar = theater.aspect_ratio_ref.label if theater.aspect_ratio_ref else theater.screen_size %}
+      {% if _ar %}
+      <div class="spec-row">
+        <span class="spec-label">Aspect Ratio</span>
+        <span class="spec-value">
+          {{ _ar }}
+          {% if _ar == '1.43:1' %}<span class="screen-tag screen-tag-gt">IMAX GT</span>{% endif %}
+        </span>
       </div>
       {% endif %}
-      {% if theater.audio_system %}
-      <div class="info-item">
-        <span class="info-label">Audio System</span>
-        <span class="info-value">{{ theater.audio_system }}</span>
+
+      {# Projector #}
+      {% set _pt = theater.projector_type_ref.name if theater.projector_type_ref else theater.projector_type %}
+      {% if _pt %}
+      <div class="spec-row">
+        <span class="spec-label">Projector</span>
+        <span class="spec-value">{{ _pt }}</span>
       </div>
       {% endif %}
-      {% if theater.phone %}
-      <div class="info-item">
-        <span class="info-label">Phone</span>
-        <span class="info-value">{{ theater.phone }}</span>
+
+      {# Film projector #}
+      {% if theater.film_projector_type_name %}
+      <div class="spec-row">
+        <span class="spec-label">Film Projector</span>
+        <span class="spec-value">{{ theater.film_projector_type_name }}</span>
+      </div>
+      {% endif %}
+
+      {# Audio #}
+      {% set _audio = theater.audio_system_ref.name if theater.audio_system_ref else theater.audio_system %}
+      {% if _audio %}
+      <div class="spec-row">
+        <span class="spec-label">Audio</span>
+        <span class="spec-value">{{ _audio }}</span>
+      </div>
+      {% endif %}
+
+      {# Digital projector AR (if differs from screen AR) #}
+      {% if theater.digital_projector_ar_ref and theater.digital_projector_ar_ref.label != _ar %}
+      <div class="spec-row">
+        <span class="spec-label">Digital AR</span>
+        <span class="spec-value">{{ theater.digital_projector_ar_ref.label }}</span>
+      </div>
+      {% endif %}
+
+      {# Commercial films #}
+      {% if theater.commercial_films %}
+      <div class="spec-row">
+        <span class="spec-label">Commercial Films</span>
+        <span class="spec-value">
+          <span class="status-badge {% if theater.commercial_films == 'Yes' %}status-active{% elif theater.commercial_films == 'Limited' %}status-warning{% else %}status-inactive{% endif %}">
+            {{ theater.commercial_films }}
+          </span>
+        </span>
+      </div>
+      {% endif %}
+
+    </div>
+
+    {# Chain / contact info divider #}
+    {% if _chain or theater.website or theater.phone or theater.seating_capacity %}
+    <div class="theater-specs-divider"></div>
+    <div class="theater-specs-grid">
+      {% if _chain %}
+      <div class="spec-row">
+        <span class="spec-label">Chain</span>
+        <span class="spec-value">{{ _chain }}</span>
       </div>
       {% endif %}
       {% if theater.website %}
-      <div class="info-item">
-        <span class="info-label">Website</span>
-        <span class="info-value"><a href="{{ theater.website }}" target="_blank">{{ theater.website }}</a></span>
+      <div class="spec-row">
+        <span class="spec-label">Website</span>
+        <span class="spec-value"><a href="{{ theater.website }}" target="_blank" rel="noopener" class="external-link">{{ theater.website | replace('https://', '') | replace('http://', '') | truncate(40, True, '…') }} ↗</a></span>
+      </div>
+      {% endif %}
+      {% if theater.phone %}
+      <div class="spec-row">
+        <span class="spec-label">Phone</span>
+        <span class="spec-value">{{ theater.phone }}</span>
+      </div>
+      {% endif %}
+      {% if theater.seating_capacity %}
+      <div class="spec-row">
+        <span class="spec-label">Seating</span>
+        <span class="spec-value">{{ theater.seating_capacity }} seats</span>
       </div>
       {% endif %}
     </div>
-    <div class="theater-actions">
+    {% endif %}
+
+    <div class="theater-actions" style="margin-top:20px">
       <a href="{{ url_for('main.alerts') }}?theater_id={{ theater.id }}" class="btn btn-primary">
-        🔔 Set Alert for This Theater
+        Set Alert for This Theater
       </a>
     </div>
   </section>
 
-  <!-- Mini Map -->
+  {# Location #}
   <section class="card map-card">
     <h2>Location</h2>
+    {% if user_distance %}
+    <p class="theater-distance-display">{{ user_distance }} from your saved location</p>
+    {% endif %}
+    <div class="theater-address-block">
+      {% if theater.address %}{{ theater.address }}<br>{% endif %}
+      {{ theater.city_name or theater.city }}{% if theater.region_name or theater.state %}, {{ theater.region_name or theater.state }}{% endif %}{% if theater.zip_code %} {{ theater.zip_code }}{% endif %}
+      {% set _country = theater.country_name or theater.country %}
+      {% if _country and _country != 'United States' %}<br>{{ _country }}{% endif %}
+    </div>
+    {% if theater.latitude and theater.longitude %}
     <div id="theater-mini-map"></div>
+    {% else %}
+    <p class="text-muted" style="padding:20px 0;text-align:center">Map coordinates not available</p>
+    {% endif %}
   </section>
+
 </div>
 
-<!-- Showtimes -->
-<section class="card" style="margin-top: 24px">
+{# ── Theater Overview (full width) ───────────────────────────────── #}
+<section class="card" style="margin-bottom:24px">
+  <h2>Theater Overview</h2>
+  {% if theater.description %}
+  <p class="theater-overview-text">{{ theater.description }}</p>
+  {% else %}
+  <p class="text-muted theater-overview-text">Theater overview not yet available. Content will be populated as scraper data is collected.</p>
+  {% endif %}
+
+  {% if amenities_list %}
+  <div class="theater-amenities">
+    {% for amenity in amenities_list %}
+    <span class="amenity-chip">{{ amenity }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+{# ── Showtimes (full width) ──────────────────────────────────────── #}
+<section class="card">
   <h2>Upcoming Showtimes</h2>
   {% if showtimes %}
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>Movie</th><th>Format</th><th>Date/Time <span class="text-muted" style="font-size:11px;font-weight:400">(local theater time)</span></th><th>Tickets</th></tr>
+        <tr>
+          <th>Movie</th>
+          <th>Format</th>
+          <th>Date / Time <span class="text-muted" style="font-size:11px;font-weight:400">(your local time)</span></th>
+          <th>Tickets</th>
+        </tr>
       </thead>
       <tbody>
         {% for st in showtimes %}
         <tr>
-          <td><strong>{{ st.movie.title if st.movie else '–' }}</strong></td>
+          <td>
+            {% if st.movie %}
+            <a href="{{ url_for('main.movie_detail', movie_id=st.movie.id) }}" class="table-link">
+              <strong>{{ st.movie.title }}</strong>
+            </a>
+            {% else %}
+            <span class="text-muted">–</span>
+            {% endif %}
+          </td>
           <td><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
           <td><time class="utc-time" datetime="{{ st.show_datetime.isoformat() }}Z" data-fmt="long">{{ st.show_datetime.strftime('%A, %B %d, %Y at %I:%M %p') }}</time></td>
           <td>
-            {% if st.tickets_available %}
-              {% if st.tickets_url %}
-                <a href="{{ st.tickets_url }}" target="_blank" class="btn-sm btn-primary">Buy Tickets →</a>
-              {% else %}
-                <span class="chip chip-green">Available</span>
-              {% endif %}
+            {% if st.tickets_available and st.tickets_url %}
+            <a href="{{ st.tickets_url }}" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Buy</a>
+            {% elif st.tickets_available %}
+            <span class="badge">Available</span>
             {% else %}
-              <span class="chip chip-red">Sold Out</span>
+            <span class="text-muted">–</span>
             {% endif %}
           </td>
         </tr>
@@ -96,7 +240,7 @@
   {% else %}
   <div class="empty-state">
     <p>No upcoming showtimes found for this theater.</p>
-    <p>Check back after the next scrape or <button class="btn-link" onclick="triggerScrape()">scrape now</button>.</p>
+    <p class="text-muted">Check back after the next scheduled scrape.</p>
   </div>
   {% endif %}
 </section>
@@ -104,58 +248,42 @@
 
 {% block scripts %}
 <script>
-  {% if theater.latitude and theater.longitude %}
-  const map = L.map('theater-mini-map');
+{% if theater.latitude and theater.longitude %}
+(function () {
+  var map = L.map('theater-mini-map').setView([{{ theater.latitude }}, {{ theater.longitude }}], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap',
-    maxZoom: 18,
+    attribution: '&copy; OpenStreetMap', maxZoom: 18,
   }).addTo(map);
 
-  const theaterIcon = L.divIcon({
-    html: '<div class="map-marker map-marker-theater">🎬</div>',
-    className: '',
-    iconSize: [36, 36],
-    iconAnchor: [18, 36],
+  var theaterIcon = L.divIcon({
+    html: '<div class="map-dot map-dot-theater"></div>',
+    className: '', iconSize: [14,14], iconAnchor: [7,7],
   });
 
-  const lat = {{ theater.latitude }};
-  const lng = {{ theater.longitude }};
-  map.setView([lat, lng], 15);
-  L.marker([lat, lng], { icon: theaterIcon })
+  var _nameEl = document.createElement('strong');
+  _nameEl.textContent = {{ theater.name | tojson }};
+  L.marker([{{ theater.latitude }}, {{ theater.longitude }}], { icon: theaterIcon })
     .addTo(map)
-    .bindPopup('<strong>{{ theater.name }}</strong>')
+    .bindPopup(_nameEl.outerHTML)
     .openPopup();
 
-  // User location
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(pos => {
-      const { latitude, longitude } = pos.coords;
-      const userIcon = L.divIcon({
-        html: '<div class="map-marker map-marker-user">📍</div>',
-        className: '',
-        iconSize: [36, 36],
-        iconAnchor: [18, 36],
-      });
-      L.marker([latitude, longitude], { icon: userIcon })
-        .addTo(map)
-        .bindPopup('<strong>Your Location</strong>');
-
-      // Draw line between user and theater
-      const polyline = L.polyline([[latitude, longitude], [lat, lng]], {
-        color: '#00d4ff', dashArray: '6 4', weight: 2,
-      }).addTo(map);
-      map.fitBounds(polyline.getBounds(), { padding: [30, 30] });
-    });
-  }
-  {% else %}
-  document.getElementById('theater-mini-map').innerHTML =
-    '<p style="padding:20px;text-align:center;color:#999">Map coordinates not available</p>';
+  {% if current_user.location_lat and current_user.location_lon %}
+  var userIcon = L.divIcon({
+    html: '<div class="map-dot map-dot-user"></div>',
+    className: '', iconSize: [14,14], iconAnchor: [7,7],
+  });
+  L.marker([{{ current_user.location_lat }}, {{ current_user.location_lon }}], { icon: userIcon })
+    .addTo(map)
+    .bindPopup('<strong>Your Location</strong>');
+  var line = L.polyline(
+    [[{{ current_user.location_lat }}, {{ current_user.location_lon }}], [{{ theater.latitude }}, {{ theater.longitude }}]],
+    { color: 'var(--accent)', dashArray: '6 4', weight: 2, opacity: 0.7 }
+  ).addTo(map);
+  map.fitBounds(line.getBounds(), { padding: [30, 30] });
   {% endif %}
 
-  async function triggerScrape() {
-    const resp = await fetch('/api/scheduler/trigger', { method: 'POST' });
-    const data = await resp.json();
-    if (resp.ok) location.reload();
-  }
+  map.invalidateSize();
+})();
+{% endif %}
 </script>
 {% endblock %}

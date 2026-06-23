@@ -129,6 +129,35 @@ def _cleanup_job(app):
         )
 
 
+def _health_check_job(app):
+    """Scheduled job: run a lightweight health check against every registered scraper chain."""
+    with app.app_context():
+        from app.log_utils import write_log
+        from app.scrapers import ALL_SCRAPERS
+        from app.scrapers.health import run_health_check
+
+        logger.info("Scraper health check starting...")
+        write_log("scrape", "Scraper health check starting")
+        results = []
+        for scraper in ALL_SCRAPERS:
+            result = run_health_check(scraper, app)
+            results.append(result)
+            logger.info(
+                "Health check %s: status=%s showtimes=%s",
+                scraper.chain_name,
+                result["status"],
+                result.get("showtime_count"),
+            )
+        ok = sum(1 for r in results if r["status"] == "ok")
+        warn = sum(1 for r in results if r["status"] == "warning")
+        err = sum(1 for r in results if r["status"] == "error")
+        write_log(
+            "scrape",
+            f"Scraper health check complete: {ok} OK, {warn} Warning, {err} Error",
+            details={"results": results},
+        )
+
+
 def start_scheduler(app) -> None:
     """Start the background scheduler with scrape, venue crawl, and cleanup jobs."""
     global _scheduler  # noqa: PLW0603
@@ -201,6 +230,15 @@ def start_scheduler(app) -> None:
         trigger=IntervalTrigger(hours=cleanup_hours),
         id="imax_cleanup",
         name="Showtime cleanup",
+        replace_existing=True,
+    )
+
+    # Scraper health check — runs once daily
+    _scheduler.add_job(
+        func=lambda: _health_check_job(app),
+        trigger=IntervalTrigger(hours=24),
+        id="imax_health_check",
+        name="Scraper health check",
         replace_existing=True,
     )
 

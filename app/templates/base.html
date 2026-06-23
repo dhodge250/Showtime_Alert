@@ -78,6 +78,8 @@
       {% set _settings_label = 'Lookup Tables' %}
     {% elif request.endpoint == 'main.admin_settings' %}
       {% set _settings_label = 'App Settings' %}
+    {% elif request.endpoint == 'main.admin_system_status' %}
+      {% set _settings_label = 'System Status' %}
     {% elif request.endpoint == 'main.admin_logs' %}
       {% set _settings_label = 'Logs' %}
     {% else %}
@@ -113,6 +115,10 @@
         <a href="{{ url_for('main.admin_settings') }}"
            class="settings-sidebar-link{% if request.endpoint == 'main.admin_settings' %} active{% endif %}">
           App Settings
+        </a>
+        <a href="{{ url_for('main.admin_system_status') }}"
+           class="settings-sidebar-link{% if request.endpoint == 'main.admin_system_status' %} active{% endif %}">
+          System Status
         </a>
         <a href="{{ url_for('main.admin_logs') }}"
            class="settings-sidebar-link{% if request.endpoint == 'main.admin_logs' %} active{% endif %}">
@@ -154,6 +160,10 @@
           <a href="{{ url_for('main.admin_settings') }}"
              class="settings-overlay-link{% if request.endpoint == 'main.admin_settings' %} active{% endif %}">
             App Settings
+          </a>
+          <a href="{{ url_for('main.admin_system_status') }}"
+             class="settings-overlay-link{% if request.endpoint == 'main.admin_system_status' %} active{% endif %}">
+            System Status
           </a>
           <a href="{{ url_for('main.admin_logs') }}"
              class="settings-overlay-link{% if request.endpoint == 'main.admin_logs' %} active{% endif %}">
