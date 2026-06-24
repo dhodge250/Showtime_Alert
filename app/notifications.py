@@ -14,11 +14,31 @@ from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import db
 from app.models import AlertMovie, AlertPreference, Notification, Showtime, Theater, User
 
 logger = logging.getLogger(__name__)
+
+
+def _user_tz(user: "User") -> ZoneInfo:
+    """Return the ZoneInfo for a user's configured timezone, defaulting to UTC."""
+    try:
+        return ZoneInfo(user.timezone or "UTC")
+    except (ZoneInfoNotFoundError, KeyError):
+        return ZoneInfo("UTC")
+
+
+def _fmt_dt(show_datetime: datetime, tz: ZoneInfo, fmt: str) -> str:
+    """Format a naive-UTC show_datetime in the given timezone."""
+    return (
+        show_datetime.replace(tzinfo=ZoneInfo("UTC"))
+        .astimezone(tz)
+        .strftime(fmt)
+        .replace(" 0", " ")
+        .replace("at 0", "at ")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +210,7 @@ def _build_email_body_multi(
     to "Showtimes:" and each datetime is listed with its own ticket link.
     """
     sorted_sts = sorted(showtimes, key=lambda s: s.show_datetime)
+    tz = _user_tz(user)
 
     # Group by (movie_title, theater_name), preserving chronological order
     groups: dict[tuple, list[Showtime]] = {}
@@ -223,20 +244,14 @@ def _build_email_body_multi(
             f"  Format:  {fmt}",
         ]
         if len(sts) == 1:
-            dt = (
-                sts[0].show_datetime.strftime("%A, %B %d, %Y at %I:%M %p")
-                .replace(" 0", " ")
-            )
+            dt = _fmt_dt(sts[0].show_datetime, tz, "%A, %B %d, %Y at %I:%M %p")
             text_lines.append(f"  Showtime: {dt}")
             if sts[0].tickets_url:
                 text_lines += ["", f"Get your tickets here: {sts[0].tickets_url}"]
         else:
             text_lines.append("  Showtimes:")
             for st in sts:
-                dt = (
-                    st.show_datetime.strftime("%a, %b %d, %Y at %I:%M %p")
-                    .replace(" 0", " ")
-                )
+                dt = _fmt_dt(st.show_datetime, tz, "%a, %b %d, %Y at %I:%M %p")
                 line = f"    {dt}"
                 if st.tickets_url:
                     line += f"  —  {st.tickets_url}"
@@ -253,10 +268,7 @@ def _build_email_body_multi(
 
         if len(sts) == 1:
             st = sts[0]
-            dt = (
-                st.show_datetime.strftime("%A, %B %d, %Y at %I:%M %p")
-                .replace(" 0", " ").replace("at 0", "at ")
-            )
+            dt = _fmt_dt(st.show_datetime, tz, "%A, %B %d, %Y at %I:%M %p")
             ticket_btn = (
                 f'<a href="{st.tickets_url}" class="btn">Get Tickets Now &rarr;</a>'
                 if st.tickets_url else ""
@@ -272,10 +284,7 @@ def _build_email_body_multi(
         else:
             rows = ""
             for st in sts:
-                dt = (
-                    st.show_datetime.strftime("%A, %B %d, %Y at %I:%M %p")
-                    .replace(" 0", " ").replace("at 0", "at ")
-                )
+                dt = _fmt_dt(st.show_datetime, tz, "%A, %B %d, %Y at %I:%M %p")
                 link = (
                     f'<a href="{st.tickets_url}" class="btn-sm">Get Tickets &rarr;</a>'
                     if st.tickets_url else ""
@@ -332,6 +341,7 @@ def _build_email_body_multi(
 def _build_sms_body_multi(user: User, showtimes: list[Showtime]) -> str:
     """Build an SMS body for one or more showtimes, grouped by movie."""
     sorted_sts = sorted(showtimes, key=lambda s: s.show_datetime)
+    tz = _user_tz(user)
     titles = list(
         dict.fromkeys(st.movie.title if st.movie else "Unknown" for st in sorted_sts)
     )
@@ -340,7 +350,7 @@ def _build_sms_body_multi(user: User, showtimes: list[Showtime]) -> str:
 
     if count == 1:
         st = sorted_sts[0]
-        dt_str = st.show_datetime.strftime("%b %d at %I:%M %p").replace(" 0", " ")
+        dt_str = _fmt_dt(st.show_datetime, tz, "%b %d at %I:%M %p")
         msg = f"IMAX ALERT: {titles[0]} at {theater} on {dt_str}."
         if st.tickets_url:
             msg += f" {st.tickets_url}"
@@ -417,9 +427,15 @@ def _get_matching_showtimes_for_pref(
         buffer = pref.target_date_buffer or 0
         date_from = pref.target_date - timedelta(days=buffer)
         date_to   = pref.target_date + timedelta(days=buffer)
+        # Convert each showtime's UTC datetime to the user's local timezone before
+        # extracting the date — a naive UTC .date() can be off by one day for
+        # showtimes that fall after 4pm-midnight Pacific (i.e. past UTC midnight).
+        user_tz = _user_tz(pref.user) if pref.user else ZoneInfo("UTC")
         candidates = [
             st for st in candidates
-            if date_from <= st.show_datetime.date() <= date_to
+            if date_from
+            <= st.show_datetime.replace(tzinfo=ZoneInfo("UTC")).astimezone(user_tz).date()
+            <= date_to
         ]
 
     # Resolve radius theater set once (None when not a radius alert).
