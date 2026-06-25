@@ -2688,6 +2688,119 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 [data-theme="light"] .admin-table tbody tr:hover { background: rgba(0, 0, 0, 0.025); }
 [data-theme="light"] .admin-lookup-table tr:hover td { background: rgba(0, 136, 255, 0.04); }
 
+/* ── Movies toolbar (search / sort / per-page) ───────────────────────── */
+.movies-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: var(--bg-card);
+  border: 1px solid rgba(255,255,255,.07);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+}
+
+.movies-toolbar-search {
+  position: relative;
+  flex: 1 1 180px;
+  min-width: 140px;
+}
+
+.movies-search-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.movies-search-input {
+  width: 100%;
+  padding: 6px 10px 6px 30px;
+  background: var(--bg-input, var(--bg-card-alt));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+.movies-search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,136,255,.15); }
+.movies-search-input::placeholder { color: var(--text-muted); }
+
+.movies-toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.movies-ctrl-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.movies-ctrl-label-page { margin-left: 4px; }
+
+.movies-sort-select {
+  padding: 5px 28px 5px 8px;
+  background: var(--bg-input, var(--bg-card-alt));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6H0z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+.movies-sort-select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,136,255,.15); }
+
+.movies-perpage-group {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.movies-perpage-btn {
+  padding: 5px 10px;
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.movies-perpage-btn:last-child { border-right: none; }
+.movies-perpage-btn:hover { background: rgba(0,136,255,.08); color: var(--accent); }
+.movies-perpage-btn.active { background: var(--accent); color: #fff; }
+
+/* ── Movies pagination bar ───────────────────────────────────────────── */
+.movies-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+}
+.movies-pager-controls { display: flex; align-items: center; gap: 8px; }
+.movies-pager-label { font-size: 13px; color: var(--text-muted); min-width: 50px; text-align: center; }
+
 /* ── Movie cards (Movies tab) ────────────────────────────────────────── */
 .movie-cards {
   display: grid;
@@ -2787,11 +2900,19 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
 .movie-detail-links { display: flex; gap: 8px; flex-wrap: wrap; }
 
 [data-theme="light"] .movie-card { border-color: var(--border); }
+[data-theme="light"] .movies-toolbar { border-color: var(--border); border-left-color: var(--accent); }
+[data-theme="light"] .movies-perpage-group { border-color: var(--border); }
+[data-theme="light"] .movies-perpage-btn { border-right-color: var(--border); }
+[data-theme="light"] .movies-pager { border-top-color: var(--border); }
 
 @media (max-width: 600px) {
   .movie-cards { grid-template-columns: 1fr; }
   .movie-detail-header { flex-direction: column; }
   .movie-detail-poster { width: 80px; min-width: 80px; height: 120px; }
+  .movies-toolbar { gap: 8px; padding: 8px 10px; }
+  .movies-toolbar-search { flex: 1 1 100%; }
+  .movies-ctrl-label-page { margin-left: 0; }
+  .movies-pager { flex-direction: column; align-items: flex-start; gap: 6px; }
 }
 
 /* ── Scraper health status page ─────────────────────────────────── */

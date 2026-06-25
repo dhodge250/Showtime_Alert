@@ -236,6 +236,8 @@ def theater_detail(theater_id):
             cooldown_active = True
             cooldown_remaining_sec = int(remaining.total_seconds())
 
+    rows_per_page = _get_setting_int("rows_per_page", 15)
+
     return render_template(
         "theater_detail.html",
         theater=theater,
@@ -248,6 +250,7 @@ def theater_detail(theater_id):
         fetch_running=fetch_running,
         cooldown_active=cooldown_active,
         cooldown_remaining_sec=cooldown_remaining_sec,
+        rows_per_page=rows_per_page,
     )
 
 
@@ -585,7 +588,8 @@ def movies():
         x["movie"].title.lower(),
     ))
 
-    return render_template("movies.html", movie_list=movie_list)
+    movies_per_page = _get_setting_int("movies_per_page", 50)
+    return render_template("movies.html", movie_list=movie_list, movies_per_page=movies_per_page)
 
 
 @main_bp.route("/movies/<int:movie_id>")
@@ -643,12 +647,15 @@ def movie_detail(movie_id):
     if movie.tmdb_id and tmdb_mod.is_configured():
         tmdb_extra = tmdb_mod.get_movie_details(movie.tmdb_id)
 
+    rows_per_page = _get_setting_int("rows_per_page", 15)
+
     return render_template(
         "movie_detail.html",
         movie=movie,
         showtimes=showtimes,
         user_alerts=user_alerts,
         tmdb_extra=tmdb_extra,
+        rows_per_page=rows_per_page,
     )
 
 
@@ -1039,6 +1046,11 @@ def admin_settings():
             new_rows_per_page = max(5, min(100, int(request.form.get("rows_per_page", old_rows_per_page))))
         except (ValueError, TypeError):
             new_rows_per_page = old_rows_per_page
+        old_movies_per_page = _get_setting_int("movies_per_page", 50)
+        try:
+            new_movies_per_page = max(10, min(200, int(request.form.get("movies_per_page", old_movies_per_page))))
+        except (ValueError, TypeError):
+            new_movies_per_page = old_movies_per_page
         old_log_retention = _get_setting_int("log_retention_days", 30)
         try:
             new_log_retention = max(1, min(365, int(request.form.get("log_retention_days", old_log_retention))))
@@ -1080,6 +1092,7 @@ def admin_settings():
             ("venue_crawl_interval_days",      str(new_crawl)),
             ("cleanup_interval_hours",         str(new_cleanup)),
             ("rows_per_page",                  str(new_rows_per_page)),
+            ("movies_per_page",                str(new_movies_per_page)),
             ("log_retention_days",             str(new_log_retention)),
             ("on_demand_fetch_cooldown_hours", str(new_on_demand_cooldown)),
             ("session_timeout_minutes",        str(new_session_timeout)),
