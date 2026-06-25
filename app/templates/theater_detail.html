@@ -266,7 +266,7 @@
 
 {% block scripts %}
 <script>
-initSortableTable('showtimes-table');
+initSortableTable('showtimes-table', {{ rows_per_page }});
 // ── On-demand showtime fetch ──────────────────────────────────────────────
 var _fetchPollTimer = null;
 

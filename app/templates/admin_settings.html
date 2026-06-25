@@ -105,14 +105,25 @@
               </small>
             </div>
 
-            <div class="form-group">
-              <label for="rows_per_page">Dashboard rows per page</label>
+            <div class="form-group" style="margin-bottom:16px">
+              <label for="rows_per_page">Rows per page (tables)</label>
               <input type="number" id="rows_per_page" name="rows_per_page"
                      min="5" max="100"
                      value="{{ settings.get('rows_per_page', '15') }}"
                      style="width:120px" />
               <small class="text-muted" style="font-size:11px;margin-top:2px">
-                Rows shown per page in Available Showtimes and Active Alerts lists. Min: 5, Max: 100.
+                Rows shown per page in the Dashboard, Alerts, and Showtimes tables. Min: 5, Max: 100.
+              </small>
+            </div>
+
+            <div class="form-group">
+              <label for="movies_per_page">Movies grid — cards per page</label>
+              <input type="number" id="movies_per_page" name="movies_per_page"
+                     min="10" max="200"
+                     value="{{ settings.get('movies_per_page', '50') }}"
+                     style="width:120px" />
+              <small class="text-muted" style="font-size:11px;margin-top:2px">
+                Movie cards shown per page on the Movies tab. Min: 10, Max: 200.
               </small>
             </div>
           </div>

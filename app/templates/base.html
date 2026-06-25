@@ -198,12 +198,12 @@
      Mark sortable <th> with data-sort-col="key".
      Mark each <td> with data-sort-{key}="value" (strings sort
      lexicographically; ISO timestamps sort correctly as strings). */
-  function initSortableTable(tableId) {
+  function initSortableTable(tableId, pageSize) {
     var table = document.getElementById(tableId);
     if (!table) return;
     var tbody = table.querySelector('tbody');
     var rows  = Array.from(tbody.querySelectorAll('tr'));
-    var PAGE  = 25;
+    var PAGE  = (pageSize && pageSize > 0) ? pageSize : 25;
     var page  = 0;
     var col   = null;
     var asc   = true;
