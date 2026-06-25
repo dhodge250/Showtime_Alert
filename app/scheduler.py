@@ -9,13 +9,128 @@ Uses APScheduler to run four jobs on independent schedules:
   - Showtime cleanup:  every N hours   (default 24)
 """
 import logging
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
 
 _scheduler: BackgroundScheduler | None = None
+
+# Tracks whether the scheduled health-check job is currently running.
+# Mutated in-place so the reference stays stable for callers.
+_health_check_state: dict = {
+    "running": False,
+    "chain_name": None,
+    "started_at": None,
+    "completed": 0,
+    "total": 0,
+}
+
+# Theater IDs currently being fetched on-demand (shared across threads).
+_on_demand_fetch_in_progress: set[int] = set()
+
+
+def get_health_check_state() -> dict:
+    """Return a snapshot of the current health-check job state."""
+    return dict(_health_check_state)
+
+
+def trigger_health_check(app) -> bool:
+    """
+    Spawn _health_check_job in a daemon thread.
+
+    Returns True if the job was started, False if it was already running.
+    """
+    import threading
+    if _health_check_state["running"]:
+        return False
+    thread = threading.Thread(
+        target=_health_check_job,
+        args=(app,),
+        daemon=True,
+        name="health-check-manual",
+    )
+    thread.start()
+    return True
+
+
+def is_on_demand_fetch_running(theater_id: int) -> bool:
+    """Return True if an on-demand showtime fetch is in progress for this theater."""
+    return theater_id in _on_demand_fetch_in_progress
+
+
+def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
+    """
+    Start a per-theater on-demand showtime fetch in a background daemon thread.
+
+    Returns True if the fetch was started, False if one is already in progress.
+    """
+    import threading
+    if theater_id in _on_demand_fetch_in_progress:
+        return False
+    _on_demand_fetch_in_progress.add(theater_id)
+
+    def _run():
+        try:
+            with app.app_context():
+                _theater_fetch_job(theater_id, scraper)
+        finally:
+            _on_demand_fetch_in_progress.discard(theater_id)
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"on-demand-fetch-{theater_id}",
+    ).start()
+    return True
+
+
+def _theater_fetch_job(theater_id: int, scraper) -> None:
+    """Background job: scrape all showtimes for one theater as on-demand rows."""
+    from datetime import datetime, timezone
+    from app import db
+    from app.models import Showtime, Theater
+    from app.scrapers.base import on_demand_scrape
+
+    theater = Theater.query.get(theater_id)
+    if theater is None:
+        return
+
+    # Remove stale on-demand showtimes; alert showtimes (on_demand=False) are untouched.
+    Showtime.query.filter_by(theater_id=theater_id, on_demand=True).delete()
+    db.session.commit()
+
+    try:
+        with on_demand_scrape():
+            scraper.scrape_theater(theater, {None})
+        theater.on_demand_fetched_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.session.commit()
+        logger.info("On-demand fetch complete for theater %s (%s)", theater_id, theater.name)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("On-demand fetch failed for theater %s: %s", theater_id, exc)
+
+
+def trigger_single_health_check(scraper, app) -> None:
+    """
+    Run a single-chain health check in a background daemon thread.
+
+    Returns immediately — the result is written to the DB by the thread.
+    """
+    import threading
+    from app.scrapers.health import run_health_check
+
+    def _run():
+        with app.app_context():
+            run_health_check(scraper)
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"health-check-{scraper.chain_name}",
+    ).start()
 
 
 def _scrape_job(app):
@@ -131,31 +246,78 @@ def _cleanup_job(app):
 
 def _health_check_job(app):
     """Scheduled job: run a lightweight health check against every registered scraper chain."""
-    with app.app_context():
-        from app.log_utils import write_log
-        from app.scrapers import ALL_SCRAPERS
-        from app.scrapers.health import run_health_check
+    _health_check_state["running"] = True
+    _health_check_state["chain_name"] = None
+    _health_check_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    _health_check_state["completed"] = 0
+    _health_check_state["total"] = 0
+    try:
+        with app.app_context():
+            from app.log_utils import write_log
+            from app.scrapers import ALL_SCRAPERS
+            from app.scrapers.health import run_health_check
 
-        logger.info("Scraper health check starting...")
-        write_log("scrape", "Scraper health check starting")
-        results = []
-        for scraper in ALL_SCRAPERS:
-            result = run_health_check(scraper, app)
-            results.append(result)
-            logger.info(
-                "Health check %s: status=%s showtimes=%s",
-                scraper.chain_name,
-                result["status"],
-                result.get("showtime_count"),
+            logger.info("Scraper health check starting...")
+            write_log("scrape", "Scraper health check starting")
+            _health_check_state["total"] = len(ALL_SCRAPERS)
+            results = []
+            for scraper in ALL_SCRAPERS:
+                _health_check_state["chain_name"] = scraper.chain_name
+                result = run_health_check(scraper)
+                _health_check_state["completed"] += 1
+                results.append(result)
+                logger.info(
+                    "Health check %s: status=%s showtimes=%s",
+                    scraper.chain_name,
+                    result["status"],
+                    result.get("showtime_count"),
+                )
+            ok = sum(1 for r in results if r["status"] == "ok")
+            warn = sum(1 for r in results if r["status"] == "warning")
+            err = sum(1 for r in results if r["status"] == "error")
+            write_log(
+                "scrape",
+                f"Scraper health check complete: {ok} OK, {warn} Warning, {err} Error",
+                details={"results": results},
             )
-        ok = sum(1 for r in results if r["status"] == "ok")
-        warn = sum(1 for r in results if r["status"] == "warning")
-        err = sum(1 for r in results if r["status"] == "error")
-        write_log(
-            "scrape",
-            f"Scraper health check complete: {ok} OK, {warn} Warning, {err} Error",
-            details={"results": results},
-        )
+    finally:
+        _health_check_state["running"] = False
+        _health_check_state["chain_name"] = None
+        _health_check_state["started_at"] = None
+        _health_check_state["completed"] = 0
+        _health_check_state["total"] = 0
+
+
+def _build_health_trigger(
+    frequency: str,
+    time_str: str,
+    day_of_week: str,
+    day_of_month: str,
+    timezone: str = "UTC",
+) -> CronTrigger:
+    """Return a CronTrigger for the health check job from validated settings strings."""
+    try:
+        h, m = (int(x) for x in str(time_str or "00:00").split(":"))
+    except (ValueError, AttributeError):
+        h, m = 0, 0
+    h = max(0, min(23, h))
+    m = max(0, min(59, m))
+    tz = timezone or "UTC"
+
+    if frequency == "weekly":
+        try:
+            dow = max(0, min(6, int(day_of_week)))
+        except (ValueError, TypeError):
+            dow = 0
+        return CronTrigger(day_of_week=dow, hour=h, minute=m, timezone=tz)
+    elif frequency == "monthly":
+        try:
+            dom = max(1, min(31, int(day_of_month)))
+        except (ValueError, TypeError):
+            dom = 1
+        return CronTrigger(day=dom, hour=h, minute=m, timezone=tz)
+    else:
+        return CronTrigger(hour=h, minute=m, timezone=tz)
 
 
 def start_scheduler(app) -> None:
@@ -182,6 +344,16 @@ def start_scheduler(app) -> None:
         except Exception:  # noqa: BLE001
             return app.config.get(config_key, default)
 
+    def _setting_str(key: str, default: str) -> str:
+        """Read a string scheduler setting from the DB, with a fallback."""
+        try:
+            from app.models import Settings
+            with app.app_context():
+                s = Settings.query.filter_by(key=key).first()
+                return s.value if s and s.value else default
+        except Exception:  # noqa: BLE001
+            return default
+
     interval_minutes = _setting_int(
         "scraper_interval_minutes", "SCRAPER_INTERVAL_MINUTES", 30
     )
@@ -194,6 +366,11 @@ def start_scheduler(app) -> None:
     cleanup_hours = _setting_int(
         "cleanup_interval_hours", "CLEANUP_INTERVAL_HOURS", 24
     )
+    hc_freq = _setting_str("health_check_frequency", "daily")
+    hc_time = _setting_str("health_check_time", "00:00")
+    hc_dow  = _setting_str("health_check_day_of_week", "0")
+    hc_dom  = _setting_str("health_check_day_of_month", "1")
+    hc_tz   = _setting_str("health_check_timezone", "UTC")
 
     _scheduler = BackgroundScheduler()
 
@@ -233,10 +410,10 @@ def start_scheduler(app) -> None:
         replace_existing=True,
     )
 
-    # Scraper health check — runs once daily
+    # Scraper health check — cron schedule configured in Settings
     _scheduler.add_job(
         func=lambda: _health_check_job(app),
-        trigger=IntervalTrigger(hours=24),
+        trigger=_build_health_trigger(hc_freq, hc_time, hc_dow, hc_dom, hc_tz),
         id="imax_health_check",
         name="Scraper health check",
         replace_existing=True,
@@ -318,4 +495,23 @@ def reschedule_jobs(
         alert_minutes,
         crawl_days,
         cleanup_hours,
+    )
+
+
+def reschedule_health_check(
+    frequency: str,
+    time_str: str,
+    day_of_week: str,
+    day_of_month: str,
+    timezone: str = "UTC",
+) -> None:
+    """Update the health check job trigger without restarting the scheduler."""
+    if not _scheduler or not _scheduler.running:
+        logger.warning("reschedule_health_check called but scheduler not running; ignoring.")
+        return
+    trigger = _build_health_trigger(frequency, time_str, day_of_week, day_of_month, timezone)
+    _scheduler.reschedule_job("imax_health_check", trigger=trigger)
+    logger.info(
+        "Health check rescheduled: frequency=%s time=%s dow=%s dom=%s tz=%s",
+        frequency, time_str, day_of_week, day_of_month, timezone,
     )

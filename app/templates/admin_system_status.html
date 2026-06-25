@@ -3,16 +3,36 @@
 
 {% block content %}
 <div class="page-header">
-  <h1>System Status</h1>
-  <p class="subtitle">Scraper health across all registered chains</p>
+  <div class="page-header-row">
+    <div>
+      <h1>System Status</h1>
+      <p class="subtitle">Scraper health across all registered chains</p>
+    </div>
+    <div class="page-header-actions">
+      <button id="run-all-btn" class="btn btn-outline"
+              onclick="runAllChecks(this)">Check All Now</button>
+      <button id="enrich-btn" class="btn btn-outline"
+              onclick="enrichMovieStubs(this)"
+              title="Re-enrich all movies without TMDB data and fix messy titles">Re-enrich Movies</button>
+    </div>
+  </div>
 </div>
 
-{# ── Signal strip ─────────────────────────────────────────────────── #}
-<div class="scraper-signal-strip" aria-label="Scraper health overview">
-  {% for row in rows %}
-  <div class="signal-segment signal-{{ row.status }}"
-       title="{{ row.chain_name }}: {{ row.status | upper }}"></div>
-  {% endfor %}
+{# ── Scheduled health-check progress bar (real signal: completed/total) ── #}
+<div id="health-check-bar" class="admin-crawl-summary"
+     style="--progress:0%;{% if not health_running.running %}display:none{% endif %}">
+  <span class="bar-text" id="health-check-bar-text">
+    {% if health_running.running %}
+      Checking {{ health_running.completed }}/{{ health_running.total }}:
+      <strong>{{ health_running.chain_name or '…' }}</strong>
+    {% endif %}
+  </span>
+</div>
+
+{# ── Run Now spinner (no real progress possible for single-chain) ──────── #}
+<div id="run-now-status" class="run-now-status">
+  <span class="spinner" id="run-now-spinner"></span>
+  <span id="run-now-text">Checking…</span>
 </div>
 
 {# ── Summary banner ───────────────────────────────────────────────── #}
@@ -20,26 +40,24 @@
   <div class="scraper-summary-stats">
     <div class="summary-stat summary-stat-ok">
       <span class="summary-dot status-dot-ok"></span>
-      <strong>{{ ok_count }}</strong>
+      <strong id="count-ok">{{ ok_count }}</strong>
       <span class="summary-label">OK</span>
     </div>
     <div class="summary-stat summary-stat-warning">
       <span class="summary-dot status-dot-warning"></span>
-      <strong>{{ warning_count }}</strong>
+      <strong id="count-warning">{{ warning_count }}</strong>
       <span class="summary-label">Warning</span>
     </div>
     <div class="summary-stat summary-stat-error">
       <span class="summary-dot status-dot-error"></span>
-      <strong>{{ error_count }}</strong>
+      <strong id="count-error">{{ error_count }}</strong>
       <span class="summary-label">Error</span>
     </div>
-    {% if never_count > 0 %}
     <div class="summary-stat summary-stat-never">
       <span class="summary-dot status-dot-never"></span>
-      <strong>{{ never_count }}</strong>
+      <strong id="count-never">{{ never_count }}</strong>
       <span class="summary-label">Never run</span>
     </div>
-    {% endif %}
   </div>
   <div class="scraper-summary-meta">
     {% if health_job and health_job.next_run_iso %}
@@ -60,7 +78,6 @@
           <th>Chain</th>
           <th>Theaters</th>
           <th>Last Checked</th>
-          <th>Showtimes Found</th>
           <th>Issue</th>
           <th>Action</th>
         </tr>
@@ -84,15 +101,6 @@
             <span class="text-muted">Never</span>
             {% endif %}
           </td>
-          <td>
-            {% if row.status == 'error' %}
-            <span class="text-muted">—</span>
-            {% elif row.showtime_count is not none %}
-            {{ row.showtime_count }}
-            {% else %}
-            <span class="text-muted">—</span>
-            {% endif %}
-          </td>
           <td class="scraper-issue-cell">
             {% if row.error_summary %}
             <span class="scraper-issue-text">{{ row.error_summary }}</span>
@@ -101,7 +109,7 @@
           <td>
             <button class="btn btn-outline btn-sm run-now-btn"
                     data-chain="{{ row.chain_name }}"
-                    onclick="runHealthCheck(this, {{ row.chain_name | tojson }})">
+                    onclick='runHealthCheck(this, {{ row.chain_name | tojson }})'>
               Run Now
             </button>
           </td>
@@ -141,48 +149,159 @@
 
 {% block scripts %}
 <script>
+// ── Summary count helpers ─────────────────────────────────────────────
+function adjustCount(status, delta) {
+  var ids = { ok: 'count-ok', warning: 'count-warning', error: 'count-error', never: 'count-never' };
+  if (!ids[status]) return;
+  var el = document.getElementById(ids[status]);
+  if (el) el.textContent = Math.max(0, parseInt(el.textContent || '0') + delta);
+}
+
+// ── Run Now: spinner + status text (no real progress signal) ──────────
 function runHealthCheck(btn, chainName) {
   btn.disabled = true;
   btn.textContent = 'Checking…';
 
+  var statusEl = document.getElementById('run-now-status');
+  var textEl   = document.getElementById('run-now-text');
+  statusEl.classList.add('is-visible');
+  textEl.textContent = 'Checking ' + chainName + '…';
+
+  var row       = btn.closest('tr');
+  var prevStatus = (row.className.match(/scraper-row-(\w+)/) || [])[1] || 'never';
+  row.classList.add('scraper-row-checking');
+
   fetch('/api/admin/scraper-check/' + encodeURIComponent(chainName), { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
-      if (data.ok) {
-        // Update the row status without a full reload
-        var row = btn.closest('tr');
-        var statusBadge = row.querySelector('.scraper-status-badge');
-        var foundCell = row.cells[4];
-        var issueCell = row.querySelector('.scraper-issue-text');
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      row.classList.remove('scraper-row-checking');
 
-        row.className = 'scraper-row scraper-row-' + data.status;
-        statusBadge.className = 'scraper-status-badge scraper-status-' + data.status;
-        statusBadge.textContent = data.status.toUpperCase();
-
-        if (data.status === 'error') {
-          foundCell.innerHTML = '<span class="text-muted">—</span>';
-        } else {
-          foundCell.textContent = data.showtime_count !== null ? data.showtime_count : '—';
-        }
-
-        if (issueCell) {
-          issueCell.textContent = data.error_summary || '';
-        } else if (data.error_summary) {
-          var td = row.querySelector('.scraper-issue-cell');
-          if (td) td.innerHTML = '<span class="scraper-issue-text">' + data.error_summary + '</span>';
-        }
-
-        var checkedCell = row.cells[3];
-        checkedCell.textContent = 'Just now';
-      } else {
-        alert('Health check failed: ' + (data.error || 'Unknown error'));
+      if (data.ok && data.status === 'started') {
+        // Check runs in a background thread — reload when it completes
+        textEl.textContent = 'Checking ' + chainName + '… page will refresh shortly';
+        setTimeout(function() { location.reload(); }, 12000);
+      } else if (!data.ok) {
+        textEl.textContent = chainName + ': check failed — ' + (data.error || 'unknown error');
+        document.getElementById('run-now-spinner').style.display = 'none';
+        setTimeout(function() {
+          statusEl.classList.remove('is-visible');
+          document.getElementById('run-now-spinner').style.display = '';
+          btn.disabled = false;
+          btn.textContent = 'Run Now';
+        }, 5000);
       }
     })
-    .catch(err => alert('Request failed: ' + err))
-    .finally(() => {
-      btn.disabled = false;
-      btn.textContent = 'Run Now';
+    .catch(function(err) {
+      row.classList.remove('scraper-row-checking');
+      textEl.textContent = 'Request failed: ' + err;
+      document.getElementById('run-now-spinner').style.display = 'none';
+      setTimeout(function() {
+        statusEl.classList.remove('is-visible');
+        document.getElementById('run-now-spinner').style.display = '';
+        btn.disabled = false;
+        btn.textContent = 'Run Now';
+      }, 5000);
     });
 }
+
+// ── Re-enrich Movies button ───────────────────────────────────────────
+function enrichMovieStubs(btn) {
+  btn.disabled = true;
+  btn.textContent = 'Enriching…';
+  fetch('/api/movies/enrich-stubs', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      btn.textContent = 'Queued (' + (data.stubs_queued || 0) + ' stubs)';
+      setTimeout(function() { btn.disabled = false; btn.textContent = 'Re-enrich Movies'; }, 5000);
+    })
+    .catch(function() {
+      btn.disabled = false;
+      btn.textContent = 'Re-enrich Movies';
+    });
+}
+
+// ── Check All Now button ──────────────────────────────────────────────
+function runAllChecks(btn) {
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+
+  fetch('/api/admin/health-check/run-all', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'started') {
+        btn.textContent = 'Running…';
+        // Continuous poll will pick it up and show the progress bar
+      } else if (data.status === 'already_running') {
+        btn.textContent = 'Already Running';
+        setTimeout(function() { btn.disabled = false; btn.textContent = 'Check All Now'; }, 3000);
+      }
+    })
+    .catch(function() {
+      btn.disabled = false;
+      btn.textContent = 'Check All Now';
+    });
+}
+
+// ── Scheduled / all-chains progress bar (real signal: completed/total) ──
+function updateScheduledBar(data) {
+  var bar     = document.getElementById('health-check-bar');
+  var barText = document.getElementById('health-check-bar-text');
+  var pct     = data.total > 0 ? Math.round(data.completed / data.total * 100) : 0;
+  bar.style.display = '';
+  bar.style.setProperty('--progress', pct + '%');
+  barText.textContent = 'Checking ' + data.completed + '/' + data.total
+    + ': ' + (data.chain_name || '…');
+}
+
+// ── Continuous idle poll — detects scheduled job start automatically ──
+// Polls every 10s when idle, every 3s when a job is running.
+var _pollInterval  = null;
+var _pollIsActive  = false;  // true = job is/was running, faster poll
+
+function _doPoll() {
+  fetch('/api/admin/health-check/status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var bar     = document.getElementById('health-check-bar');
+      var runBtn  = document.getElementById('run-all-btn');
+
+      if (data.running) {
+        updateScheduledBar(data);
+        runBtn.disabled = true;
+        runBtn.textContent = 'Running…';
+
+        if (!_pollIsActive) {
+          // Job just started while we were idle-polling — switch to fast poll
+          _pollIsActive = true;
+          clearInterval(_pollInterval);
+          _pollInterval = setInterval(_doPoll, 3000);
+        }
+      } else {
+        if (_pollIsActive) {
+          // Job just finished — reload to show updated statuses
+          _pollIsActive = false;
+          bar.style.setProperty('--progress', '100%');
+          document.getElementById('health-check-bar-text').textContent =
+            'Health check complete — reloading…';
+          setTimeout(function() { location.reload(); }, 1000);
+          return;
+        }
+        // Idle: job not running — keep bar hidden
+        bar.style.display = 'none';
+      }
+    })
+    .catch(function() { /* network hiccup — keep polling */ });
+}
+
+// Start continuous polling immediately
+_pollInterval = setInterval(_doPoll, 10000);
+
+{% if health_running.running %}
+// Job was already running when the page loaded — show bar and switch to fast poll
+_pollIsActive = true;
+updateScheduledBar({{ health_running | tojson }});
+clearInterval(_pollInterval);
+_pollInterval = setInterval(_doPoll, 3000);
+{% endif %}
 </script>
 {% endblock %}
