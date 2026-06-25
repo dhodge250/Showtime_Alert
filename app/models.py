@@ -317,6 +317,7 @@ class Theater(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     crawl_source = db.Column(db.String(100))
     last_crawled_at = db.Column(db.DateTime)
+    on_demand_fetched_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime,
@@ -541,6 +542,7 @@ class Showtime(db.Model):
     format_type = db.Column(db.String(100))
     first_seen = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_checked = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    on_demand = db.Column(db.Boolean, default=False, nullable=False, server_default="0")
 
     theater = db.relationship("Theater", back_populates="showtimes")
     movie = db.relationship("Movie", back_populates="showtimes")

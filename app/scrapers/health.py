@@ -3,6 +3,8 @@ Scraper health check utilities.
 
 run_health_check() executes a lightweight test scrape for one theater of the
 given chain, classifies the result, and persists a ScraperStatus row.
+
+The caller is responsible for providing an active Flask app context.
 """
 import logging
 from datetime import datetime, timezone
@@ -46,12 +48,14 @@ def _classify_error(exc: Exception) -> tuple[str, str]:
     return exc_type, f"{exc_type}: {first_line}"
 
 
-def run_health_check(scraper, app) -> dict:
+def run_health_check(scraper) -> dict:
     """
     Run a lightweight health check for one scraper chain.
 
     Picks one active theater for the chain, calls scrape_theater(), and
     writes a ScraperStatus row.  Returns a summary dict.
+
+    Requires an active Flask app context from the caller.
     """
     from app import db
     from app.models import ScraperStatus, Theater
@@ -59,59 +63,65 @@ def run_health_check(scraper, app) -> dict:
     chain_name = scraper.chain_name
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    with app.app_context():
-        theater = (
-            Theater.query.filter(
-                Theater.is_active == True,  # noqa: E712
-                Theater.chain == chain_name,
-            )
-            .first()
-        )
+    health_website = getattr(scraper, "health_website", None)
+    theater_q = Theater.query.filter(
+        Theater.is_active == True,  # noqa: E712
+        Theater.chain == chain_name,
+    )
+    if health_website:
+        theater_q = theater_q.filter(Theater.website.contains(health_website))
+    theater = theater_q.first()
 
-        theater_count = Theater.query.filter(
-            Theater.is_active == True,  # noqa: E712
-            Theater.chain == chain_name,
-        ).count()
+    theater_count = Theater.query.filter(
+        Theater.is_active == True,  # noqa: E712
+        Theater.chain == chain_name,
+    ).count()
 
-        status = "error"
-        showtime_count = None
-        error_class = None
-        error_summary = None
+    status = "error"
+    error_class = None
+    error_summary = None
+    showtime_count = None
 
-        if theater is None:
-            error_class = "NoTheater"
-            error_summary = "No active theaters configured for this chain"
-        else:
-            try:
-                # {None} is the "any movie" sentinel — bypasses demand-driven filtering
-                new_showtimes = scraper.scrape_theater(theater, {None})
-                showtime_count = len(new_showtimes) if new_showtimes is not None else 0
-                if showtime_count > 0:
-                    status = "ok"
-                else:
-                    status = "warning"
-                    error_summary = "Scraper ran successfully but found no showtimes — page structure may have changed"
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Health check failed for %s: %s", chain_name, exc)
-                error_class, error_summary = _classify_error(exc)
+    if theater is None:
+        error_class = "NoTheater"
+        error_summary = "No active theaters configured for this chain"
+    else:
+        # Wrap the scrape in a savepoint so nothing persists to the DB.
+        # If scrape_theater() calls db.session.commit() internally (Regal does),
+        # that only releases the savepoint into the outer transaction; the
+        # db.session.rollback() in the finally block discards all of it.
+        db.session.begin_nested()
+        try:
+            found_showtimes = scraper.scrape_theater(theater, {None})
+            showtime_count = len(found_showtimes)
+            if showtime_count > 0:
+                status = "ok"
+            else:
+                status = "warning"
+                error_summary = "Scraper ran successfully but found no showtimes — page structure may have changed"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Health check failed for %s: %s", chain_name, exc)
+            error_class, error_summary = _classify_error(exc)
+        finally:
+            db.session.rollback()  # discard all writes from the probe scrape
 
-        row = ScraperStatus(
-            chain_name=chain_name,
-            checked_at=now,
-            status=status,
-            showtime_count=showtime_count,
-            theater_count=theater_count,
-            error_class=error_class,
-            error_summary=error_summary,
-        )
-        db.session.add(row)
-        db.session.commit()
+    row = ScraperStatus(
+        chain_name=chain_name,
+        checked_at=now,
+        status=status,
+        theater_count=theater_count,
+        showtime_count=showtime_count,
+        error_class=error_class,
+        error_summary=error_summary,
+    )
+    db.session.add(row)
+    db.session.commit()
 
-        return {
-            "chain_name": chain_name,
-            "status": status,
-            "showtime_count": showtime_count,
-            "theater_count": theater_count,
-            "error_class": error_class,
-            "error_summary": error_summary,
-        }
+    return {
+        "chain_name": chain_name,
+        "status": status,
+        "theater_count": theater_count,
+        "showtime_count": showtime_count,
+        "error_class": error_class,
+        "error_summary": error_summary,
+    }

@@ -4,43 +4,20 @@
 {% block content %}
 {% set _chain = theater.chain_name or theater.chain %}
 
-{# ── Integrated hero ──────────────────────────────────────────────── #}
-<div class="theater-detail-hero">
-  <div class="theater-hero-top">
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
     <a href="{{ url_for('main.theaters') }}" class="back-link">← Back to Theaters</a>
-    {% if _chain %}
-    <span class="chain-badge chain-{{ _chain|lower|replace(' ','-') }}">{{ _chain }}</span>
+    <h1>{{ theater.name }}</h1>
+    <p class="subtitle">
+      {{ theater.city_name or theater.city }}{% if theater.region_name or theater.state %}, {{ theater.region_name or theater.state }}{% endif %}{% if _chain %} &middot; {{ _chain }}{% endif %}{% if user_distance %} &middot; {{ user_distance }}{% endif %}
+    </p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+    {% if theater.screen_width_m and theater.screen_height_m %}
+    <a href="{{ url_for('main.theater_compare') }}?t={{ theater.id }}" class="btn btn-outline btn-sm">Compare Screen</a>
     {% endif %}
+    <a href="{{ url_for('main.alerts') }}?theater_id={{ theater.id }}" class="btn btn-primary btn-sm">Set Alert</a>
   </div>
-  <div class="theater-hero-identity">
-    <div class="theater-hero-name-block">
-      <h1 class="theater-hero-name">{{ theater.name }}</h1>
-      {% if user_distance or (theater.city_name or theater.city) %}
-      <p class="theater-hero-meta">
-        {% if user_distance %}<span class="theater-hero-distance">{{ user_distance }}</span>{% endif %}
-        {% if user_distance and (theater.city_name or theater.city) %} &middot; {% endif %}
-        <span class="theater-hero-city">{{ theater.city_name or theater.city }}{% if theater.region_name or theater.state %}, {{ theater.region_name or theater.state }}{% endif %}</span>
-      </p>
-      {% endif %}
-    </div>
-    <a href="{{ url_for('main.alerts') }}?theater_id={{ theater.id }}" class="btn btn-primary theater-hero-cta">
-      Set Alert
-    </a>
-  </div>
-</div>
-
-{# ── Image banner ─────────────────────────────────────────────────── #}
-<div class="theater-image-banner">
-  {% if theater.image_url %}
-  <img src="{{ theater.image_url }}" alt="{{ theater.name }}" class="theater-banner-img">
-  {% else %}
-  <div class="theater-banner-placeholder">
-    <div class="theater-banner-screen-rect"></div>
-    {% if _chain %}
-    <span class="theater-banner-chain-name">{{ _chain }}</span>
-    {% endif %}
-  </div>
-  {% endif %}
 </div>
 
 {# ── Top grid: specs + location ───────────────────────────────────── #}
@@ -197,23 +174,58 @@
 </section>
 
 {# ── Showtimes (full width) ──────────────────────────────────────── #}
-<section class="card">
-  <h2>Upcoming Showtimes</h2>
+<section class="card" id="showtimes-card">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+    <h2 style="margin:0">Upcoming Showtimes</h2>
+    <div>
+      {% if not has_scraper %}
+      <button class="btn btn-outline btn-sm" disabled
+              title="No scraper is available for {{ theater.chain or 'this chain' }}. Showtimes can only be fetched for supported chains.">
+        Get Showtimes
+      </button>
+      {% elif fetch_running %}
+      <button class="btn btn-outline btn-sm" id="fetch-btn" disabled>Fetching…</button>
+      <p class="text-muted" style="font-size:12px;margin:4px 0 0">Fetching showtimes, page will refresh shortly…</p>
+      {% else %}
+        {% if cooldown_active %}
+        <button class="btn btn-outline btn-sm" id="fetch-btn" disabled>Get Showtimes</button>
+        <p class="text-muted" style="font-size:12px;margin:4px 0 0">
+          Last fetched <time class="utc-time" datetime="{{ theater.on_demand_fetched_at.isoformat() }}Z" data-fmt="relative">{{ theater.on_demand_fetched_at.strftime('%b %d at %I:%M %p') }}</time>
+          &middot; available again in <span id="cooldown-countdown"></span>
+        </p>
+        {% else %}
+        <button class="btn btn-outline btn-sm" id="fetch-btn"
+                onclick="fetchShowtimes({{ theater.id }})">Get Showtimes</button>
+        {% if theater.on_demand_fetched_at %}
+        <p class="text-muted" style="font-size:12px;margin:4px 0 0">
+          Last fetched <time class="utc-time" datetime="{{ theater.on_demand_fetched_at.isoformat() }}Z" data-fmt="relative">{{ theater.on_demand_fetched_at.strftime('%b %d at %I:%M %p') }}</time>
+        </p>
+        {% endif %}
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div id="fetch-status" style="display:none" class="run-now-status is-visible" aria-live="polite">
+    <span class="spinner" id="fetch-spinner"></span>
+    <span id="fetch-status-text">Fetching showtimes…</span>
+  </div>
+
   {% if showtimes %}
   <div class="table-wrap">
-    <table class="data-table">
+    <table class="data-table" id="showtimes-table">
       <thead>
         <tr>
-          <th>Movie</th>
-          <th>Format</th>
-          <th>Date / Time <span class="text-muted" style="font-size:11px;font-weight:400">(your local time)</span></th>
+          <th data-sort-col="movie">Movie</th>
+          <th data-sort-col="fmt">Format</th>
+          <th data-sort-col="dt">Date / Time <span class="text-muted" style="font-size:11px;font-weight:400">(your local time)</span></th>
           <th>Tickets</th>
         </tr>
       </thead>
       <tbody>
         {% for st in showtimes %}
         <tr>
-          <td>
+          <td data-sort-movie="{{ st.movie.title if st.movie else '' }}">
             {% if st.movie %}
             <a href="{{ url_for('main.movie_detail', movie_id=st.movie.id) }}" class="table-link">
               <strong>{{ st.movie.title }}</strong>
@@ -221,9 +233,10 @@
             {% else %}
             <span class="text-muted">–</span>
             {% endif %}
+            {% if st.on_demand %}<span class="badge badge-muted" style="margin-left:6px;font-size:10px">manual</span>{% endif %}
           </td>
-          <td><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
-          <td><time class="utc-time" datetime="{{ st.show_datetime.isoformat() }}Z" data-fmt="long">{{ st.show_datetime.strftime('%A, %B %d, %Y at %I:%M %p') }}</time></td>
+          <td data-sort-fmt="{{ st.format_type or 'IMAX' }}"><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
+          <td data-sort-dt="{{ st.show_datetime.isoformat() }}"><time class="utc-time" datetime="{{ st.show_datetime.isoformat() }}Z" data-fmt="long">{{ st.show_datetime.strftime('%A, %B %d, %Y at %I:%M %p') }}</time></td>
           <td>
             {% if st.tickets_available and st.tickets_url %}
             <a href="{{ st.tickets_url }}" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Buy</a>
@@ -239,9 +252,13 @@
     </table>
   </div>
   {% else %}
-  <div class="empty-state">
+  <div class="empty-state" id="showtimes-empty">
     <p>No upcoming showtimes found for this theater.</p>
-    <p class="text-muted">Check back after the next scheduled scrape.</p>
+    {% if has_scraper %}
+    <p class="text-muted">Click <strong>Get Showtimes</strong> above to fetch the latest showtimes directly from the theater website.</p>
+    {% else %}
+    <p class="text-muted">Check back after the next scheduled scrape, or set an alert to be notified when showtimes appear.</p>
+    {% endif %}
   </div>
   {% endif %}
 </section>
@@ -249,6 +266,86 @@
 
 {% block scripts %}
 <script>
+initSortableTable('showtimes-table');
+// ── On-demand showtime fetch ──────────────────────────────────────────────
+var _fetchPollTimer = null;
+
+function fetchShowtimes(theaterId) {
+  var btn        = document.getElementById('fetch-btn');
+  var statusEl   = document.getElementById('fetch-status');
+  var statusText = document.getElementById('fetch-status-text');
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+  statusEl.style.display = '';
+  statusText.textContent = 'Fetching showtimes… this may take up to a minute for some theaters.';
+
+  fetch('/api/theaters/' + theaterId + '/fetch-showtimes', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.status === 'started' || data.status === 'in_progress') {
+        _startFetchPoll(theaterId);
+      } else if (data.status === 'cooldown') {
+        statusText.textContent = 'Showtimes were fetched recently — please wait before fetching again.';
+        document.getElementById('fetch-spinner').style.display = 'none';
+        setTimeout(function() { location.reload(); }, 3000);
+      } else if (data.status === 'no_scraper') {
+        statusText.textContent = 'No scraper is available for this theater chain.';
+        document.getElementById('fetch-spinner').style.display = 'none';
+        if (btn) { btn.disabled = false; btn.textContent = 'Get Showtimes'; }
+      }
+    })
+    .catch(function(err) {
+      statusText.textContent = 'Request failed: ' + err;
+      document.getElementById('fetch-spinner').style.display = 'none';
+      if (btn) { btn.disabled = false; btn.textContent = 'Get Showtimes'; }
+    });
+}
+
+function _startFetchPoll(theaterId) {
+  if (_fetchPollTimer) return;
+  _fetchPollTimer = setInterval(function() {
+    fetch('/api/theaters/' + theaterId + '/fetch-showtimes/status')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.running) {
+          clearInterval(_fetchPollTimer);
+          _fetchPollTimer = null;
+          var statusText = document.getElementById('fetch-status-text');
+          if (data.on_demand_count > 0) {
+            statusText.textContent = 'Found ' + data.on_demand_count + ' showtime(s) — reloading…';
+          } else {
+            statusText.textContent = 'Fetch complete — no upcoming showtimes found. Reloading…';
+          }
+          setTimeout(function() { location.reload(); }, 1000);
+        }
+      })
+      .catch(function() { /* network hiccup — keep polling */ });
+  }, 3000);
+}
+
+{% if fetch_running %}
+// Fetch was already running when the page loaded — start polling immediately.
+_startFetchPoll({{ theater.id }});
+{% endif %}
+
+{% if cooldown_active %}
+// Cooldown countdown: tick down from server-computed remaining seconds.
+(function() {
+  var remaining = {{ cooldown_remaining_sec }};
+  var el = document.getElementById('cooldown-countdown');
+  if (!el) return;
+  function _tick() {
+    if (remaining <= 0) { location.reload(); return; }
+    var h = Math.floor(remaining / 3600);
+    var m = Math.floor((remaining % 3600) / 60);
+    el.textContent = h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+    remaining -= 30;
+    setTimeout(_tick, 30000);
+  }
+  _tick();
+})();
+{% endif %}
+
 {% if theater.latitude and theater.longitude %}
 (function () {
   var map = L.map('theater-mini-map').setView([{{ theater.latitude }}, {{ theater.longitude }}], 15);

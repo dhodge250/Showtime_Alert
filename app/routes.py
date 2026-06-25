@@ -71,6 +71,12 @@ def _get_setting_int(key: str, default: int) -> int:
         return default
 
 
+def _get_setting_str(key: str, default: str) -> str:
+    """Read a string setting from the Settings table, falling back to default."""
+    s = Settings.query.filter_by(key=key).first()
+    return s.value if s and s.value else default
+
+
 # ---------------------------------------------------------------------------
 # Helper: current user's measurement unit (falls back to metric)
 # ---------------------------------------------------------------------------
@@ -115,6 +121,7 @@ def index():
     now = datetime.now(timezone.utc)
     base_q = (
         Showtime.query
+        .filter(Showtime.on_demand == False)  # noqa: E712 — exclude manually-fetched rows
         .filter(Showtime.tickets_available.is_(True))
         .filter(Showtime.show_datetime >= now)
         .order_by(Showtime.show_datetime.asc())
@@ -178,7 +185,9 @@ def theaters():
 def theater_detail(theater_id):
     """Theater detail page."""
     import json
+    from app.scrapers import ALL_SCRAPERS
     from app.scrapers.base import _haversine_km
+    from app.scheduler import is_on_demand_fetch_running
 
     theater = Theater.query.get_or_404(theater_id)
     showtimes = (
@@ -213,6 +222,20 @@ def theater_detail(theater_id):
         except (ValueError, TypeError):
             pass
 
+    has_scraper = any(s.chain_name == theater.chain for s in ALL_SCRAPERS)
+    cooldown_hours = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
+    fetch_running = is_on_demand_fetch_running(theater_id)
+
+    cooldown_active = False
+    cooldown_remaining_sec = 0
+    if theater.on_demand_fetched_at and not fetch_running:
+        from datetime import timedelta
+        elapsed = datetime.now(timezone.utc).replace(tzinfo=None) - theater.on_demand_fetched_at
+        remaining = timedelta(hours=cooldown_hours) - elapsed
+        if remaining.total_seconds() > 0:
+            cooldown_active = True
+            cooldown_remaining_sec = int(remaining.total_seconds())
+
     return render_template(
         "theater_detail.html",
         theater=theater,
@@ -220,6 +243,59 @@ def theater_detail(theater_id):
         unit=unit,
         user_distance=user_distance,
         amenities_list=amenities_list,
+        has_scraper=has_scraper,
+        cooldown_hours=cooldown_hours,
+        fetch_running=fetch_running,
+        cooldown_active=cooldown_active,
+        cooldown_remaining_sec=cooldown_remaining_sec,
+    )
+
+
+@main_bp.route("/theaters/compare")
+def theater_compare():
+    """IMAX screen size comparison page — public, no login required."""
+    theaters_with_dims = (
+        Theater.query
+        .filter(
+            Theater.is_active == True,
+            Theater.screen_width_m.isnot(None),
+            Theater.screen_height_m.isnot(None),
+        )
+        .order_by(Theater.name)
+        .all()
+    )
+
+    raw_t = request.args.get("t", "")
+    selected_ids = []
+    if raw_t:
+        for part in raw_t.split(","):
+            try:
+                selected_ids.append(int(part.strip()))
+            except ValueError:
+                pass
+    selected_ids = selected_ids[:15]
+
+    def _cmp_dict(t):
+        return {
+            "id": t.id,
+            "name": t.name,
+            "city": t.city_name or t.city or "",
+            "state": t.region_name or t.state or "",
+            "country": t.country_name or t.country or "",
+            "w": t.screen_width_m,
+            "h": t.screen_height_m,
+            "wft": t.screen_width_ft,
+            "hft": t.screen_height_ft,
+            "chain": t.chain_name or "",
+            "proj": t.projector_type_name or "",
+        }
+
+    return render_template(
+        "theater_compare.html",
+        theaters=theaters_with_dims,
+        theaters_json=[_cmp_dict(t) for t in theaters_with_dims],
+        selected_ids=selected_ids,
+        unit=_current_unit(),
     )
 
 
@@ -437,34 +513,44 @@ def profile_mfa_disable():
 @main_bp.route("/movies")
 @login_required
 def movies():
-    """Movies tab — all movies the user has ever had an alert for, regardless of alert status."""
+    """Movies tab — all movies the user has ever had an alert for, plus on-demand scraped movies."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # Include movies from fired/deleted alerts so tiles persist beyond the alert lifecycle
-    rows = (
+    # Alert-linked movies (include fired/deleted so tiles persist beyond the alert lifecycle)
+    alert_rows = (
         db.session.query(AlertMovie.movie_id, func.count(AlertMovie.id).label("alert_count"))
         .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
         .filter(AlertPreference.user_id == current_user.id)
         .group_by(AlertMovie.movie_id)
         .all()
     )
+    alert_movie_ids = [r.movie_id for r in alert_rows]
+    alert_counts = {r.movie_id: r.alert_count for r in alert_rows}
 
-    if not rows:
+    # On-demand movies: movies surfaced by manual theater fetches with upcoming showtimes
+    on_demand_id_rows = (
+        db.session.query(Showtime.movie_id)
+        .filter(Showtime.on_demand == True, Showtime.show_datetime >= now)  # noqa: E712
+        .distinct()
+        .all()
+    )
+    on_demand_movie_ids = [r.movie_id for r in on_demand_id_rows]
+
+    all_movie_ids = list(set(alert_movie_ids) | set(on_demand_movie_ids))
+    if not all_movie_ids:
         return render_template("movies.html", movie_list=[])
 
-    movie_ids = [r.movie_id for r in rows]
-    alert_counts = {r.movie_id: r.alert_count for r in rows}
-    movies_map = {m.id: m for m in Movie.query.filter(Movie.id.in_(movie_ids)).all()}
+    movies_map = {m.id: m for m in Movie.query.filter(Movie.id.in_(all_movie_ids)).all()}
 
     next_dt_rows = (
         db.session.query(Showtime.movie_id, func.min(Showtime.show_datetime).label("next_dt"))
-        .filter(Showtime.movie_id.in_(movie_ids), Showtime.show_datetime >= now)
+        .filter(Showtime.movie_id.in_(all_movie_ids), Showtime.show_datetime >= now)
         .group_by(Showtime.movie_id)
         .all()
     )
     next_dt_map = {r.movie_id: r.next_dt for r in next_dt_rows}
 
-    # Count distinct theaters the user has configured alerts for (not showtime theaters)
+    # Count distinct theaters the user has configured alerts for (alert movies only)
     theater_count_rows = (
         db.session.query(
             AlertMovie.movie_id,
@@ -472,7 +558,7 @@ def movies():
         )
         .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
         .filter(
-            AlertMovie.movie_id.in_(movie_ids),
+            AlertMovie.movie_id.in_(alert_movie_ids),
             AlertPreference.user_id == current_user.id,
             AlertPreference.theater_id.isnot(None),
         )
@@ -482,7 +568,7 @@ def movies():
     theater_counts = {r.movie_id: r.cnt for r in theater_count_rows}
 
     movie_list = []
-    for mid in movie_ids:
+    for mid in all_movie_ids:
         movie = movies_map.get(mid)
         if not movie:
             continue
@@ -511,7 +597,7 @@ def movie_detail(movie_id):
     movie = Movie.query.get_or_404(movie_id)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # Allow access to any movie the user has ever tracked, regardless of alert status
+    # Allow access if user has an alert for this movie, or if it has on-demand showtimes
     has_alert = (
         db.session.query(AlertMovie.id)
         .join(AlertPreference, AlertMovie.alert_id == AlertPreference.id)
@@ -521,7 +607,16 @@ def movie_detail(movie_id):
         )
         .first()
     )
-    if not has_alert:
+    has_on_demand = (
+        Showtime.query
+        .filter(
+            Showtime.movie_id == movie_id,
+            Showtime.on_demand == True,  # noqa: E712
+            Showtime.show_datetime >= now,
+        )
+        .first()
+    )
+    if not has_alert and not has_on_demand:
         abort(404)
 
     showtimes = (
@@ -949,6 +1044,11 @@ def admin_settings():
             new_log_retention = max(1, min(365, int(request.form.get("log_retention_days", old_log_retention))))
         except (ValueError, TypeError):
             new_log_retention = old_log_retention
+        old_on_demand_cooldown = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
+        try:
+            new_on_demand_cooldown = max(1, min(168, int(request.form.get("on_demand_fetch_cooldown_hours", old_on_demand_cooldown))))
+        except (ValueError, TypeError):
+            new_on_demand_cooldown = old_on_demand_cooldown
         old_session_timeout = _get_setting_int("session_timeout_minutes", 60)
         try:
             raw_timeout = int(request.form.get("session_timeout_minutes", old_session_timeout))
@@ -975,13 +1075,65 @@ def admin_settings():
             db.session.delete(setting)
 
         for key, val in (
-            ("scraper_interval_minutes",  str(new_scraper)),
-            ("alert_interval_minutes",    str(new_alert)),
-            ("venue_crawl_interval_days", str(new_crawl)),
-            ("cleanup_interval_hours",    str(new_cleanup)),
-            ("rows_per_page",             str(new_rows_per_page)),
-            ("log_retention_days",        str(new_log_retention)),
-            ("session_timeout_minutes",   str(new_session_timeout)),
+            ("scraper_interval_minutes",       str(new_scraper)),
+            ("alert_interval_minutes",         str(new_alert)),
+            ("venue_crawl_interval_days",      str(new_crawl)),
+            ("cleanup_interval_hours",         str(new_cleanup)),
+            ("rows_per_page",                  str(new_rows_per_page)),
+            ("log_retention_days",             str(new_log_retention)),
+            ("on_demand_fetch_cooldown_hours", str(new_on_demand_cooldown)),
+            ("session_timeout_minutes",        str(new_session_timeout)),
+        ):
+            setting = Settings.query.filter_by(key=key).first()
+            if setting:
+                setting.value = val
+            else:
+                db.session.add(Settings(key=key, value=val))
+
+        # --- Health check schedule ---
+        old_hc_freq = _get_setting_str("health_check_frequency", "daily")
+        old_hc_time = _get_setting_str("health_check_time", "00:00")
+        old_hc_dow  = _get_setting_str("health_check_day_of_week", "0")
+        old_hc_dom  = _get_setting_str("health_check_day_of_month", "1")
+        old_hc_tz   = _get_setting_str("health_check_timezone", "UTC")
+
+        new_hc_freq = request.form.get("health_check_frequency", "daily")
+        if new_hc_freq not in ("daily", "weekly", "monthly"):
+            new_hc_freq = "daily"
+
+        raw_hc_time = request.form.get("health_check_time", "00:00").strip()
+        try:
+            hh, mm = (int(x) for x in raw_hc_time.split(":"))
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                raise ValueError
+            new_hc_time = f"{hh:02d}:{mm:02d}"
+        except (ValueError, TypeError):
+            new_hc_time = "00:00"
+
+        try:
+            new_hc_dow = str(max(0, min(6, int(request.form.get("health_check_day_of_week", "0")))))
+        except (ValueError, TypeError):
+            new_hc_dow = "0"
+
+        try:
+            new_hc_dom = str(max(1, min(31, int(request.form.get("health_check_day_of_month", "1")))))
+        except (ValueError, TypeError):
+            new_hc_dom = "1"
+
+        raw_hc_tz = request.form.get("health_check_timezone", "UTC").strip()
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(raw_hc_tz)
+            new_hc_tz = raw_hc_tz
+        except Exception:
+            new_hc_tz = old_hc_tz or "UTC"
+
+        for key, val in (
+            ("health_check_frequency",    new_hc_freq),
+            ("health_check_time",         new_hc_time),
+            ("health_check_day_of_week",  new_hc_dow),
+            ("health_check_day_of_month", new_hc_dom),
+            ("health_check_timezone",     new_hc_tz),
         ):
             setting = Settings.query.filter_by(key=key).first()
             if setting:
@@ -1008,6 +1160,15 @@ def admin_settings():
                 reschedule_jobs(new_scraper, new_crawl, new_cleanup, new_alert)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not reschedule jobs: %s", exc)
+
+        if (new_hc_freq != old_hc_freq or new_hc_time != old_hc_time
+                or new_hc_dow != old_hc_dow or new_hc_dom != old_hc_dom
+                or new_hc_tz != old_hc_tz):
+            try:
+                from app.scheduler import reschedule_health_check
+                reschedule_health_check(new_hc_freq, new_hc_time, new_hc_dow, new_hc_dom, new_hc_tz)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not reschedule health check: %s", exc)
 
         return redirect(url_for("main.admin_settings"))
 
@@ -1114,27 +1275,49 @@ def admin_logs():
 @require_role("admin")
 def admin_system_status():
     """Admin: scraper health status dashboard."""
+    from sqlalchemy import func
+    from app import db
     from app.models import ScraperStatus, Theater
     from app.scrapers import ALL_SCRAPERS
-    from app.scheduler import get_scheduler_status
+    from app.scheduler import get_scheduler_status, get_health_check_state
 
-    # Build one entry per chain from ALL_SCRAPERS — latest status row each
     chain_names = [s.chain_name for s in ALL_SCRAPERS]
+
+    # Latest ScraperStatus per chain — 1 query via self-join on max checked_at
+    subq = (
+        db.session.query(
+            ScraperStatus.chain_name,
+            func.max(ScraperStatus.checked_at).label("max_at"),
+        )
+        .group_by(ScraperStatus.chain_name)
+        .subquery()
+    )
+    latest_rows = (
+        db.session.query(ScraperStatus)
+        .join(
+            subq,
+            (ScraperStatus.chain_name == subq.c.chain_name)
+            & (ScraperStatus.checked_at == subq.c.max_at),
+        )
+        .all()
+    )
+    latest_by_chain = {r.chain_name: r for r in latest_rows}
+
+    # Theater counts per chain — 1 query via GROUP BY
+    count_rows = (
+        db.session.query(Theater.chain, func.count(Theater.id).label("cnt"))
+        .filter(Theater.is_active == True)  # noqa: E712
+        .group_by(Theater.chain)
+        .all()
+    )
+    theater_count_by_chain = {r.chain: r.cnt for r in count_rows}
+
     rows = []
     for chain_name in chain_names:
-        latest = (
-            ScraperStatus.query
-            .filter_by(chain_name=chain_name)
-            .order_by(ScraperStatus.checked_at.desc())
-            .first()
-        )
-        theater_count = Theater.query.filter(
-            Theater.is_active == True,  # noqa: E712
-            Theater.chain == chain_name,
-        ).count()
+        latest = latest_by_chain.get(chain_name)
         rows.append({
             "chain_name": chain_name,
-            "theater_count": theater_count,
+            "theater_count": theater_count_by_chain.get(chain_name, 0),
             "status": latest.status if latest else "never",
             "checked_at": latest.checked_at if latest else None,
             "showtime_count": latest.showtime_count if latest else None,
@@ -1160,6 +1343,7 @@ def admin_system_status():
         error_count=error_count,
         never_count=never_count,
         health_job=health_job,
+        health_running=get_health_check_state(),
     )
 
 
@@ -1415,6 +1599,60 @@ def api_theater(theater_id):
     return jsonify(theater.to_dict())
 
 
+@api_bp.route("/theaters/<int:theater_id>/fetch-showtimes", methods=["POST"])
+@login_required
+def api_theater_fetch_showtimes(theater_id: int):
+    """Trigger an on-demand showtime fetch for a single theater."""
+    from datetime import timedelta
+    from flask import current_app
+    from app.scrapers import ALL_SCRAPERS
+    from app.scheduler import trigger_theater_fetch, is_on_demand_fetch_running
+
+    theater = Theater.query.get_or_404(theater_id)
+
+    if is_on_demand_fetch_running(theater_id):
+        return jsonify({"status": "in_progress"})
+
+    cooldown_hours = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
+    if theater.on_demand_fetched_at:
+        elapsed = datetime.now(timezone.utc).replace(tzinfo=None) - theater.on_demand_fetched_at
+        if elapsed < timedelta(hours=cooldown_hours):
+            remaining = timedelta(hours=cooldown_hours) - elapsed
+            return jsonify({
+                "status": "cooldown",
+                "fetched_at": theater.on_demand_fetched_at.isoformat(),
+                "next_available_in_seconds": int(remaining.total_seconds()),
+            })
+
+    scraper = next((s for s in ALL_SCRAPERS if s.chain_name == theater.chain), None)
+    if scraper is None:
+        return jsonify({"status": "no_scraper", "chain": theater.chain}), 422
+
+    trigger_theater_fetch(theater_id, scraper, current_app._get_current_object())
+    return jsonify({"status": "started"})
+
+
+@api_bp.route("/theaters/<int:theater_id>/fetch-showtimes/status")
+@login_required
+def api_theater_fetch_status(theater_id: int):
+    """Return on-demand fetch state for a single theater."""
+    from app.models import Showtime
+    from app.scheduler import is_on_demand_fetch_running
+
+    theater = Theater.query.get_or_404(theater_id)
+    on_demand_count = (
+        Showtime.query
+        .filter_by(theater_id=theater_id, on_demand=True)
+        .filter(Showtime.show_datetime >= datetime.now(timezone.utc))
+        .count()
+    )
+    return jsonify({
+        "running": is_on_demand_fetch_running(theater_id),
+        "fetched_at": theater.on_demand_fetched_at.isoformat() if theater.on_demand_fetched_at else None,
+        "on_demand_count": on_demand_count,
+    })
+
+
 @api_bp.route("/theaters/<int:theater_id>", methods=["PATCH"])
 @require_role("admin", "editor")
 def api_patch_theater(theater_id):
@@ -1470,6 +1708,32 @@ def api_movies():
     """Return all movies ordered by title."""
     movies = Movie.query.order_by(Movie.title).all()
     return jsonify([m.to_dict() for m in movies])
+
+
+@api_bp.route("/movies/enrich-stubs", methods=["POST"])
+@require_role("admin")
+def api_enrich_movie_stubs():
+    """Re-enrich all Movie rows that have no tmdb_id (background thread)."""
+    def _run(app):
+        with app.app_context():
+            from app.scrapers.base import _enrich_movie_from_tmdb
+            stubs = Movie.query.filter(Movie.tmdb_id.is_(None)).all()
+            fixed = 0
+            for m in stubs:
+                old_title = m.title
+                try:
+                    _enrich_movie_from_tmdb(m)
+                    if m.tmdb_id or m.title != old_title:
+                        fixed += 1
+                except Exception as exc:
+                    logger.warning("Enrich stub failed for '%s': %s", m.title, exc)
+            db.session.commit()
+            logger.info("enrich-stubs: processed %d stubs, fixed %d", len(stubs), fixed)
+
+    t = threading.Thread(target=_run, args=(current_app._get_current_object(),), daemon=True)
+    t.start()
+    stub_count = Movie.query.filter(Movie.tmdb_id.is_(None)).count()
+    return jsonify({"ok": True, "stubs_queued": stub_count})
 
 
 @api_bp.route("/movies/search")
@@ -2654,7 +2918,7 @@ def api_scraper_health_check(chain_name: str):
     """Trigger an on-demand health check for a single scraper chain."""
     from flask import current_app
     from app.scrapers import ALL_SCRAPERS
-    from app.scrapers.health import run_health_check
+    from app.scheduler import trigger_single_health_check
 
     scraper = next((s for s in ALL_SCRAPERS if s.chain_name == chain_name), None)
     if scraper is None:
@@ -2663,11 +2927,33 @@ def api_scraper_health_check(chain_name: str):
     from app.log_utils import write_log
     write_log("scrape", f"On-demand health check triggered for {chain_name}", user_id=current_user.id)
 
-    try:
-        result = run_health_check(scraper, current_app._get_current_object())
-        return jsonify({"ok": True, **result})
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"ok": False, "error": str(exc)}), 500
+    trigger_single_health_check(scraper, current_app._get_current_object())
+    return jsonify({"ok": True, "status": "started", "chain_name": chain_name})
+
+
+@api_bp.route("/admin/health-check/status")
+@require_role("admin")
+def api_health_check_status():
+    """Return the current running state of the scheduled health-check job."""
+    from app.scheduler import get_health_check_state
+    return jsonify(get_health_check_state())
+
+
+@api_bp.route("/admin/health-check/run-all", methods=["POST"])
+@require_role("admin")
+def api_health_check_run_all():
+    """Trigger an on-demand full health check (all chains) in a background thread."""
+    from app.scheduler import trigger_health_check, get_health_check_state
+    from app.log_utils import write_log
+
+    if get_health_check_state()["running"]:
+        return jsonify({"status": "already_running"}), 409
+
+    write_log("scrape", "On-demand full health check triggered", user_id=current_user.id)
+    started = trigger_health_check(current_app._get_current_object())
+    if started:
+        return jsonify({"status": "started"})
+    return jsonify({"status": "already_running"}), 409
 
 
 # ---------------------------------------------------------------------------

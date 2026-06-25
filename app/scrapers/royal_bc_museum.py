@@ -24,6 +24,7 @@ class RoyalBCMuseumScraper(BaseScraper):
     """
 
     chain_name = "Royal BC Museum"
+    health_website = "royalbcmuseum.bc.ca"
     BASE_URL = "https://sales.royalbcmuseum.bc.ca"
 
     def _parse_atms_dt(self, text: str, theater: Theater) -> Optional[datetime]:

@@ -2,9 +2,12 @@
 {% block title %}Theaters – IMAX Alert{% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <h1>IMAX Theaters</h1>
-  <p class="subtitle">Browse IMAX locations, specs, and showtimes worldwide</p>
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <div>
+    <h1>IMAX Theaters</h1>
+    <p class="subtitle">Browse IMAX locations, specs, and showtimes worldwide</p>
+  </div>
+  <a href="{{ url_for('main.theater_compare') }}" class="btn btn-outline btn-sm" style="margin-top:4px">Compare Screen Sizes</a>
 </div>
 
 <!-- Filter bar (spans both columns) -->

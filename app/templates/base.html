@@ -30,7 +30,7 @@
     </button>
     <ul class="nav-links">
       <li><a href="{{ url_for('main.index') }}" {% if request.endpoint == 'main.index' %}class="active"{% endif %}>Dashboard</a></li>
-      <li><a href="{{ url_for('main.theaters') }}" {% if request.endpoint in ['main.theaters','main.theater_detail'] %}class="active"{% endif %}>Theaters</a></li>
+      <li><a href="{{ url_for('main.theaters') }}" {% if request.endpoint in ['main.theaters','main.theater_detail','main.theater_compare'] %}class="active"{% endif %}>Theaters</a></li>
       <li><a href="{{ url_for('main.alerts') }}" {% if request.endpoint in ['main.alerts','main.alert_detail'] %}class="active"{% endif %}>Alerts</a></li>
       <li><a href="{{ url_for('main.movies') }}" {% if request.endpoint in ['main.movies','main.movie_detail'] %}class="active"{% endif %}>Movies</a></li>
       <li><a href="{{ url_for('main.settings_account') }}" {% if request.endpoint in ['main.settings_account','main.profile_mfa_setup'] or (request.endpoint and request.endpoint.startswith('main.admin')) %}class="active"{% endif %}>Settings</a></li>
@@ -86,6 +86,7 @@
       {% set _settings_label = 'Settings' %}
     {% endif %}
   {% endif %}
+  {% block page_hero %}{% endblock %}
   <main class="main-content{% if _on_settings %} settings-main{% endif %}">
     {% if _on_settings %}
     <aside class="settings-sidebar">
@@ -191,6 +192,78 @@
     <p>IMAX Alert &mdash; Never miss an IMAX showing</p>
   </footer>
 
+  <script>
+  /* Reusable sortable + paginated table.
+     Usage: give the table an id and call initSortableTable('that-id').
+     Mark sortable <th> with data-sort-col="key".
+     Mark each <td> with data-sort-{key}="value" (strings sort
+     lexicographically; ISO timestamps sort correctly as strings). */
+  function initSortableTable(tableId) {
+    var table = document.getElementById(tableId);
+    if (!table) return;
+    var tbody = table.querySelector('tbody');
+    var rows  = Array.from(tbody.querySelectorAll('tr'));
+    var PAGE  = 25;
+    var page  = 0;
+    var col   = null;
+    var asc   = true;
+
+    var ths = Array.from(table.querySelectorAll('thead th[data-sort-col]'));
+    ths.forEach(function(th) {
+      th.classList.add('sortable-th');
+      th.addEventListener('click', function() {
+        var c = th.getAttribute('data-sort-col');
+        if (col === c) { asc = !asc; } else { col = c; asc = true; }
+        page = 0;
+        ths.forEach(function(h) { h.removeAttribute('data-sort-dir'); });
+        th.setAttribute('data-sort-dir', asc ? 'asc' : 'desc');
+        render();
+      });
+    });
+
+    var pager = document.createElement('div');
+    pager.className = 'st-pagination';
+    table.parentNode.insertBefore(pager, table.nextSibling);
+
+    function key(row) {
+      var td = col && row.querySelector('td[data-sort-' + col + ']');
+      return td ? td.getAttribute('data-sort-' + col) : '';
+    }
+
+    function render() {
+      var sorted = rows.slice();
+      if (col) {
+        sorted.sort(function(a, b) {
+          var ka = key(a), kb = key(b);
+          var cmp = ka < kb ? -1 : ka > kb ? 1 : 0;
+          return asc ? cmp : -cmp;
+        });
+      }
+      var total  = sorted.length;
+      var start  = page * PAGE;
+      var end    = Math.min(start + PAGE, total);
+      tbody.innerHTML = '';
+      sorted.slice(start, end).forEach(function(r) { tbody.appendChild(r); });
+
+      if (total <= PAGE) { pager.style.display = 'none'; return; }
+      pager.style.display = '';
+      var pages = Math.ceil(total / PAGE);
+      pager.innerHTML =
+        '<span class="st-page-info">' + (start + 1) + '–' + end + ' of ' + total + '</span>' +
+        '<span class="st-page-controls">' +
+          '<button class="btn btn-ghost btn-sm" id="st-prev-' + tableId + '"' + (page === 0 ? ' disabled' : '') + '>← Prev</button>' +
+          '<span class="st-page-label">' + (page + 1) + ' / ' + pages + '</span>' +
+          '<button class="btn btn-ghost btn-sm" id="st-next-' + tableId + '"' + (page >= pages - 1 ? ' disabled' : '') + '>Next →</button>' +
+        '</span>';
+      var prevBtn = document.getElementById('st-prev-' + tableId);
+      var nextBtn = document.getElementById('st-next-' + tableId);
+      if (prevBtn) prevBtn.addEventListener('click', function() { page--; render(); });
+      if (nextBtn) nextBtn.addEventListener('click', function() { page++; render(); });
+    }
+
+    render();
+  }
+  </script>
   {% block scripts %}{% endblock %}
   <script>
     /* UTC → browser-local time conversion for all <time class="utc-time"> elements.
@@ -202,12 +275,24 @@
         'long':      { weekday: 'long',  month: 'long',  day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
         'date-only': { month: 'short',  day: 'numeric', year: 'numeric' },
       };
+      function _relativeTime(dt) {
+        var diff = (Date.now() - dt.getTime()) / 1000;
+        if (diff < 60)    return 'Just now';
+        if (diff < 3600)  return Math.floor(diff / 60) + ' min ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + ' hr ago';
+        if (diff < 604800) return Math.floor(diff / 86400) + ' days ago';
+        return dt.toLocaleString('en-US', FMTS['short']);
+      }
       function convertUtcTimes() {
         document.querySelectorAll('time.utc-time').forEach(function (el) {
           var dt = new Date(el.getAttribute('datetime'));
           if (isNaN(dt)) return;
-          var opts = FMTS[el.dataset.fmt] || FMTS['short'];
-          el.textContent = dt.toLocaleString('en-US', opts);
+          if (el.dataset.fmt === 'relative') {
+            el.textContent = _relativeTime(dt);
+          } else {
+            var opts = FMTS[el.dataset.fmt] || FMTS['short'];
+            el.textContent = dt.toLocaleString('en-US', opts);
+          }
           /* Keep data-date on the parent row in sync with the local calendar date
              so the date filter on the dashboard works correctly. */
           var row = el.closest('[data-date]');
