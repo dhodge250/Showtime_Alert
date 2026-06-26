@@ -540,8 +540,9 @@ def movies():
     on_demand_movie_ids = [r.movie_id for r in on_demand_id_rows]
 
     all_movie_ids = list(set(alert_movie_ids) | set(on_demand_movie_ids))
+    movies_per_page = _get_setting_int("movies_per_page", 50)
     if not all_movie_ids:
-        return render_template("movies.html", movie_list=[])
+        return render_template("movies.html", movie_list=[], movies_per_page=movies_per_page)
 
     movies_map = {m.id: m for m in Movie.query.filter(Movie.id.in_(all_movie_ids)).all()}
 
@@ -588,7 +589,6 @@ def movies():
         x["movie"].title.lower(),
     ))
 
-    movies_per_page = _get_setting_int("movies_per_page", 50)
     return render_template("movies.html", movie_list=movie_list, movies_per_page=movies_per_page)
 
 

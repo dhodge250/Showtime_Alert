@@ -330,9 +330,11 @@ class BaseScraper:
 
         # 3. TMDB lookup — raw title first, then cleaned
         tmdb_result = None
+        tmdb_tried = False
         try:
             from app.tmdb import find_movie_by_title, is_configured
             if is_configured():
+                tmdb_tried = True
                 tmdb_result = find_movie_by_title(title)
                 if not tmdb_result and cleaned != title:
                     tmdb_result = find_movie_by_title(cleaned)
@@ -368,7 +370,8 @@ class BaseScraper:
 
         if tmdb_result:
             _apply_tmdb_to_movie(movie, tmdb_result)
-        else:
+        elif not tmdb_tried:
+            # TMDB was not configured or raised an exception in step 3 — try now
             _enrich_movie_from_tmdb(movie)
         return movie
 
@@ -581,6 +584,7 @@ def _merge_duplicate_movie(stub: Movie, canonical: Movie) -> None:
             stub.id, stub.title, canonical.id, canonical.title,
         )
     except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
         logger.warning("Failed to merge Movie stub id=%s into id=%s: %s", stub.id, canonical.id, exc)
 
 
