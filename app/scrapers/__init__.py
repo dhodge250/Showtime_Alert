@@ -339,8 +339,10 @@ def run_browse_schedules() -> list[Showtime]:
         len(all_theater_ids), len(processed_schedules),
     )
 
+    from app.scrapers.base import browse_schedule_scrape
     start = datetime.utcnow()
-    new_showtimes = queue_theaters_for_scrape(all_theater_ids, targets=None, force=False)
+    with browse_schedule_scrape():
+        new_showtimes = queue_theaters_for_scrape(all_theater_ids, targets=None, force=False)
     elapsed = (datetime.utcnow() - start).total_seconds()
 
     write_log(

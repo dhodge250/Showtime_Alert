@@ -121,7 +121,8 @@ def index():
     now = datetime.now(timezone.utc)
     base_q = (
         Showtime.query
-        .filter(Showtime.on_demand == False)  # noqa: E712 — exclude manually-fetched rows
+        .filter(Showtime.on_demand == False)    # noqa: E712 — exclude manually-fetched rows
+        .filter(Showtime.browse_only == False)  # noqa: E712 — exclude browse-schedule-only rows
         .filter(Showtime.tickets_available.is_(True))
         .filter(Showtime.show_datetime >= now)
         .order_by(Showtime.show_datetime.asc())
@@ -590,7 +591,9 @@ def api_browse_schedule_run_now():
 
     def _run():
         with _app.app_context():
-            queue_theaters_for_scrape(theater_ids, targets=None, force=True)
+            from app.scrapers.base import browse_schedule_scrape
+            with browse_schedule_scrape():
+                queue_theaters_for_scrape(theater_ids, targets=None, force=True)
             # Update last_run/next_run so the status endpoint and page reload reflect completion
             from app.models import BrowseSchedule
             from datetime import datetime

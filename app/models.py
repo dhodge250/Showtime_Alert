@@ -544,6 +544,7 @@ class Showtime(db.Model):
     first_seen = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_checked = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     on_demand = db.Column(db.Boolean, default=False, nullable=False, server_default="0")
+    browse_only = db.Column(db.Boolean, default=False, nullable=False, server_default="0")
 
     theater = db.relationship("Theater", back_populates="showtimes")
     movie = db.relationship("Movie", back_populates="showtimes")

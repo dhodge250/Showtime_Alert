@@ -609,6 +609,12 @@ def _run_migrations():
             "ALTER TABLE browse_schedules ADD COLUMN preferred_day_of_week INTEGER",
             None,
         ),
+        # Browse-schedule showtimes: visible on theater/movie pages but not the Dashboard.
+        (
+            "browse_only", "showtimes",
+            "ALTER TABLE showtimes ADD COLUMN browse_only BOOLEAN NOT NULL DEFAULT 0",
+            "UPDATE showtimes SET browse_only = 0 WHERE browse_only IS NULL",
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:
@@ -623,6 +629,23 @@ def _run_migrations():
                 logger.info("Migration applied: added column '%s' to '%s'.", col_name, table_name)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Schema migration error for %s.%s (non-fatal): %s", table_name, col_name, exc)
+
+    # Idempotent data normalisations — safe to run on every startup.
+    _data_cleanups = [
+        # Collapse "IMAX 2D", "IMAX 4K", "IMAX with Laser" etc. → "IMAX".
+        # Only "IMAX 3D" keeps its suffix (the 3D format is meaningful to users).
+        (
+            "UPDATE showtimes SET format_type = 'IMAX' "
+            "WHERE format_type LIKE 'IMAX %' AND format_type NOT LIKE '%3D%'"
+        ),
+    ]
+    for cleanup_sql in _data_cleanups:
+        try:
+            with db.engine.connect() as conn:
+                conn.execute(db.text(cleanup_sql))
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Data cleanup error (non-fatal): %s", exc)
 
 
 def _seed_roles_and_admin():
