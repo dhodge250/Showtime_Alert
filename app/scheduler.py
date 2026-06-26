@@ -29,9 +29,6 @@ _health_check_state: dict = {
     "total": 0,
 }
 
-# Theater IDs currently being fetched on-demand (shared across threads).
-_on_demand_fetch_in_progress: set[int] = set()
-
 
 def get_health_check_state() -> dict:
     """Return a snapshot of the current health-check job state."""
@@ -58,8 +55,9 @@ def trigger_health_check(app) -> bool:
 
 
 def is_on_demand_fetch_running(theater_id: int) -> bool:
-    """Return True if an on-demand showtime fetch is in progress for this theater."""
-    return theater_id in _on_demand_fetch_in_progress
+    """Return True if any scrape is currently in progress for this theater."""
+    from app.scrapers import is_scraping_in_flight
+    return is_scraping_in_flight(theater_id)
 
 
 def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
@@ -67,18 +65,33 @@ def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
     Start a per-theater on-demand showtime fetch in a background daemon thread.
 
     Returns True if the fetch was started, False if one is already in progress.
+    The fetch acquires the coordinator semaphore and updates last_scraped_at.
     """
     import threading
-    if theater_id in _on_demand_fetch_in_progress:
+    from app.scrapers import _scraping_in_flight, _get_semaphore, PLAYWRIGHT_CHAIN_NAMES
+
+    if theater_id in _scraping_in_flight:
         return False
-    _on_demand_fetch_in_progress.add(theater_id)
+
+    # Mark in-flight before spawning so concurrent callers see it immediately.
+    _scraping_in_flight.add(theater_id)
 
     def _run():
         try:
-            with app.app_context():
-                _theater_fetch_job(theater_id, scraper)
+            sem = _get_semaphore(scraper.chain_name)
+            acquired = sem.acquire(blocking=True, timeout=300)
+            if not acquired:
+                logger.warning(
+                    "On-demand fetch: semaphore timeout for theater %d", theater_id
+                )
+                return
+            try:
+                with app.app_context():
+                    _theater_fetch_job(theater_id, scraper)
+            finally:
+                sem.release()
         finally:
-            _on_demand_fetch_in_progress.discard(theater_id)
+            _scraping_in_flight.discard(theater_id)
 
     threading.Thread(
         target=_run,
@@ -106,7 +119,9 @@ def _theater_fetch_job(theater_id: int, scraper) -> None:
     try:
         with on_demand_scrape():
             scraper.scrape_theater(theater, {None})
-        theater.on_demand_fetched_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        theater.on_demand_fetched_at = now
+        theater.last_scraped_at = now
         db.session.commit()
         logger.info("On-demand fetch complete for theater %s (%s)", theater_id, theater.name)
     except Exception as exc:  # noqa: BLE001
@@ -117,14 +132,25 @@ def trigger_single_health_check(scraper, app) -> None:
     """
     Run a single-chain health check in a background daemon thread.
 
+    Acquires the coordinator semaphore for the chain so the probe does not
+    run concurrently with a scheduled or on-demand scrape of the same chain.
     Returns immediately — the result is written to the DB by the thread.
     """
     import threading
+    from app.scrapers import _get_semaphore
     from app.scrapers.health import run_health_check
 
     def _run():
-        with app.app_context():
-            run_health_check(scraper)
+        sem = _get_semaphore(scraper.chain_name)
+        acquired = sem.acquire(blocking=True, timeout=120)
+        if not acquired:
+            logger.warning("Health check: semaphore timeout for %s", scraper.chain_name)
+            return
+        try:
+            with app.app_context():
+                run_health_check(scraper)
+        finally:
+            sem.release()
 
     threading.Thread(
         target=_run,
@@ -259,11 +285,19 @@ def _health_check_job(app):
 
             logger.info("Scraper health check starting...")
             write_log("scrape", "Scraper health check starting")
+            from app.scrapers import _get_semaphore
+
             _health_check_state["total"] = len(ALL_SCRAPERS)
             results = []
             for scraper in ALL_SCRAPERS:
                 _health_check_state["chain_name"] = scraper.chain_name
-                result = run_health_check(scraper)
+                sem = _get_semaphore(scraper.chain_name)
+                acquired = sem.acquire(blocking=True, timeout=120)
+                try:
+                    result = run_health_check(scraper)
+                finally:
+                    if acquired:
+                        sem.release()
                 _health_check_state["completed"] += 1
                 results.append(result)
                 logger.info(

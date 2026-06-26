@@ -318,6 +318,7 @@ class Theater(db.Model):
     crawl_source = db.Column(db.String(100))
     last_crawled_at = db.Column(db.DateTime)
     on_demand_fetched_at = db.Column(db.DateTime, nullable=True)
+    last_scraped_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime,
