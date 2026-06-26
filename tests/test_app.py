@@ -1820,6 +1820,130 @@ class TestScraperCoordinator:
                 assert theater.id not in coord_mod._scraping_in_flight
 
 
+# ── Browse schedule ───────────────────────────────────────────────────
+
+
+class TestBrowseSchedule:
+    """Unit tests for run_browse_schedules() job function."""
+
+    def _make_schedule(self, user_id, enabled=True, next_run_offset_min=-1,
+                       radius=50.0, radius_unit="km", frequency_minutes=60):
+        """Create a BrowseSchedule row with next_run in the past by default."""
+        from datetime import datetime, timedelta
+        from app.models import BrowseSchedule
+        now = datetime.utcnow()
+        schedule = BrowseSchedule(
+            user_id=user_id,
+            radius=radius,
+            radius_unit=radius_unit,
+            frequency_minutes=frequency_minutes,
+            enabled=enabled,
+            next_run=now + timedelta(minutes=next_run_offset_min),
+        )
+        db.session.add(schedule)
+        db.session.commit()
+        return schedule
+
+    def test_no_due_schedules_returns_empty(self, app, sample_user):
+        from app.scrapers import run_browse_schedules
+        with app.app_context():
+            # next_run is 60 minutes in the future — not due yet
+            self._make_schedule(sample_user, next_run_offset_min=60)
+            result = run_browse_schedules()
+            assert result == []
+
+    def test_skipped_schedule_no_location_does_not_advance_next_run(self, app, sample_user):
+        from datetime import datetime
+        from app.scrapers import run_browse_schedules
+        from app.models import BrowseSchedule, User
+
+        with app.app_context():
+            user = User.query.get(sample_user)
+            user.location_lat = None
+            user.location_lon = None
+            db.session.commit()
+
+            schedule = self._make_schedule(sample_user, next_run_offset_min=-5)
+            original_next_run = schedule.next_run
+
+            run_browse_schedules()
+
+            db.session.refresh(schedule)
+            # next_run must not have advanced — user had no location
+            assert schedule.next_run == original_next_run
+            assert schedule.last_run is None
+
+    def test_processed_schedule_advances_next_run(self, app, sample_user, sample_theater):
+        from unittest.mock import patch
+        from datetime import datetime
+        from app.scrapers import run_browse_schedules
+        from app.models import BrowseSchedule, User, Theater
+
+        with app.app_context():
+            user = User.query.get(sample_user)
+            user.location_lat = 34.05
+            user.location_lon = -118.24
+            db.session.commit()
+
+            # Theater within 1 km of user (same coords)
+            theater = Theater.query.get(sample_theater)
+            theater.latitude = 34.05
+            theater.longitude = -118.24
+            db.session.commit()
+
+            schedule = self._make_schedule(sample_user, next_run_offset_min=-5)
+            original_next_run = schedule.next_run
+
+            with patch("app.scrapers.queue_theaters_for_scrape", return_value=[]):
+                run_browse_schedules()
+
+            db.session.refresh(schedule)
+            assert schedule.last_run is not None
+            assert schedule.next_run > original_next_run
+
+    def test_theater_union_across_users(self, app, sample_user, sample_theater):
+        """Overlapping radii from two users produce one combined theater set."""
+        from unittest.mock import patch, call
+        from app.scrapers import run_browse_schedules
+        from app.models import User, Theater, Role
+
+        with app.app_context():
+            # Reuse existing user and theater
+            user1 = User.query.get(sample_user)
+            user1.location_lat = 34.05
+            user1.location_lon = -118.24
+            db.session.commit()
+
+            theater = Theater.query.get(sample_theater)
+            theater.latitude = 34.05
+            theater.longitude = -118.24
+            db.session.commit()
+
+            # Create a second user with a slightly different location
+            role = Role.query.filter_by(name="user").first()
+            user2 = User(name="User Two", email="user2@test.com",
+                         location_lat=34.06, location_lon=-118.24,
+                         role_id=role.id if role else None)
+            user2.set_password("password")
+            db.session.add(user2)
+            db.session.commit()
+
+            self._make_schedule(user1.id, next_run_offset_min=-5)
+            self._make_schedule(user2.id, next_run_offset_min=-5)
+
+            captured = []
+            def fake_queue(theater_ids, **kwargs):
+                captured.append(set(theater_ids))
+                return []
+
+            with patch("app.scrapers.queue_theaters_for_scrape", side_effect=fake_queue):
+                run_browse_schedules()
+
+            # queue_theaters_for_scrape called exactly once with the union of both sets
+            assert len(captured) == 1
+            assert theater.id in captured[0]
+
+
 # ── TMDB module ───────────────────────────────────────────────────────
 
 

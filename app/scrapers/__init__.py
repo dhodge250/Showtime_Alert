@@ -6,7 +6,7 @@ shim app.scraper) — callers should not import individual modules directly.
 """
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.scrapers.base import (
     HEADERS,
@@ -245,6 +245,117 @@ def _update_last_scraped(theaters: list) -> None:
         logger.warning("Coordinator: could not update last_scraped_at: %s", exc)
 
 
+def run_browse_schedules() -> list[Showtime]:
+    """
+    Consolidated browse-schedule job: scrapes all showtimes from every theater
+    within each due user's configured radius and stores them for passive browsing.
+
+    No alerts are created or sent.  All coordination (deduplication across users
+    with overlapping radii, cooldown, in-flight tracking, and concurrency caps)
+    is handled entirely by the coordinator — this function only computes the
+    union of theater sets and delegates to queue_theaters_for_scrape().
+
+    Execution flow:
+      1. Query all enabled BrowseSchedule rows where next_run <= now(UTC).
+      2. For each due schedule compute theaters within the user's radius.
+      3. Union all theater sets from all due schedules.
+      4. Call queue_theaters_for_scrape() with the combined set.
+      5. Update last_run + next_run for every processed schedule.
+    """
+    from app import db
+    from app.models import BrowseSchedule, Theater, User
+    from app.scrapers.base import _haversine_km
+    from app.log_utils import write_log
+
+    now = datetime.utcnow()
+    due = BrowseSchedule.query.filter_by(enabled=True).filter(
+        BrowseSchedule.next_run <= now
+    ).all()
+
+    if not due:
+        logger.debug("Browse schedules: no schedules due")
+        return []
+
+    logger.info("Browse schedules: %d schedule(s) due", len(due))
+
+    active_theaters = (
+        Theater.query.filter_by(is_active=True)
+        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+        .all()
+    )
+
+    all_theater_ids: set[int] = set()
+    schedule_info = []
+    # Only schedules with a valid user location are considered "processed".
+    # Skipped schedules are left unchanged so they're retried on the next tick
+    # rather than being silently delayed by frequency_minutes.
+    processed_schedules = []
+
+    for schedule in due:
+        user = User.query.get(schedule.user_id)
+        if user is None or user.location_lat is None or user.location_lon is None:
+            logger.debug(
+                "Browse schedule %d: user has no saved location — skipping", schedule.id
+            )
+            continue
+
+        radius_km = (
+            schedule.radius if schedule.radius_unit == "km"
+            else schedule.radius * 1.60934
+        )
+        in_radius = [
+            t for t in active_theaters
+            if _haversine_km(
+                user.location_lat, user.location_lon, t.latitude, t.longitude
+            ) <= radius_km
+        ]
+        theater_ids = {t.id for t in in_radius}
+        all_theater_ids |= theater_ids
+        schedule_info.append({
+            "user": user.name,
+            "radius": schedule.radius,
+            "unit": schedule.radius_unit,
+            "theaters_in_radius": len(theater_ids),
+        })
+        processed_schedules.append(schedule)
+
+    # Advance last_run/next_run only for schedules that were actually processed.
+    # Skipped schedules (missing location) retain their current next_run so
+    # they remain eligible on the next job tick.
+    for schedule in processed_schedules:
+        schedule.last_run = now
+        schedule.next_run = now + timedelta(minutes=schedule.frequency_minutes)
+    db.session.commit()
+
+    if not all_theater_ids:
+        logger.info("Browse schedules: no theaters found in any user radius — done")
+        return []
+
+    logger.info(
+        "Browse schedules: %d theater(s) in combined radius across %d processed schedule(s)",
+        len(all_theater_ids), len(processed_schedules),
+    )
+
+    start = datetime.utcnow()
+    new_showtimes = queue_theaters_for_scrape(all_theater_ids, targets=None, force=False)
+    elapsed = (datetime.utcnow() - start).total_seconds()
+
+    write_log(
+        "scrape",
+        f"Browse schedules: {len(new_showtimes)} new showtime(s) from "
+        f"{len(all_theater_ids)} theater(s) "
+        f"({len(processed_schedules)}/{len(due)} schedule(s) processed, {elapsed:.1f}s)",
+        details={
+            "schedules": schedule_info,
+            "theaters_dispatched": len(all_theater_ids),
+            "new_showtimes": len(new_showtimes),
+            "due_count": len(due),
+            "processed_count": len(processed_schedules),
+        },
+    )
+    return new_showtimes
+
+
 def run_all_scrapers() -> list[Showtime]:
     """
     Collect all alert-targeted theaters and dispatch through the coordinator.
@@ -297,4 +408,5 @@ __all__ = [
     "is_scraping_in_flight",
     "queue_theaters_for_scrape",
     "run_all_scrapers",
+    "run_browse_schedules",
 ]

@@ -802,6 +802,8 @@ def _seed_default_settings():
         ("playwright_concurrency", "2"),
         # Scraper coordinator: max simultaneous plain-HTTP scrapers
         ("http_concurrency", "5"),
+        # Browse schedule: how often the runner job checks for due schedules (minutes)
+        ("browse_schedule_check_minutes", "30"),
     ]
     for key, default_value in defaults:
         if not Settings.query.filter_by(key=key).first():

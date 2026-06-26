@@ -433,6 +433,138 @@ def settings_account():
     return render_template("settings_account.html", user=user, saved=saved, unit=user.measurement_unit or "metric")
 
 
+@main_bp.route("/settings/browse-schedule", methods=["GET", "POST"])
+@login_required
+def settings_browse_schedule():
+    """Browse Schedule — configure and manage the user's proximity scrape schedule."""
+    from app.models import BrowseSchedule
+    from datetime import datetime
+
+    user = current_user._get_current_object()
+    schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
+    saved = False
+    error = None
+
+    VALID_FREQUENCIES = {30, 60, 360, 720, 1440, 10080}
+
+    if request.method == "POST":
+        action = request.form.get("action", "save")
+
+        if action == "delete" and schedule:
+            db.session.delete(schedule)
+            db.session.commit()
+            return redirect(url_for("main.settings_browse_schedule"))
+
+        if action in ("save", "toggle"):
+            try:
+                radius = float(request.form.get("radius", 0))
+                if radius <= 0:
+                    raise ValueError("Radius must be positive")
+            except (ValueError, TypeError):
+                error = "Please enter a valid radius greater than zero."
+                has_location = user.location_lat is not None and user.location_lon is not None
+                return render_template(
+                    "settings_browse_schedule.html",
+                    user=user, schedule=schedule, error=error,
+                    has_location=has_location,
+                    frequency_labels=BrowseSchedule.FREQUENCY_LABELS,
+                )
+
+            radius_unit = request.form.get("radius_unit", user.measurement_unit == "imperial" and "miles" or "km")
+            if radius_unit not in ("km", "miles"):
+                radius_unit = "km"
+
+            try:
+                freq = int(request.form.get("frequency_minutes", 60))
+            except (ValueError, TypeError):
+                freq = 60
+            if freq not in VALID_FREQUENCIES:
+                freq = 60
+
+            if action == "toggle":
+                enabled = not (schedule.enabled if schedule else True)
+            else:
+                enabled = request.form.get("enabled") == "on"
+
+            now = datetime.utcnow()
+            if schedule is None:
+                schedule = BrowseSchedule(user_id=user.id)
+                db.session.add(schedule)
+            schedule.radius = radius
+            schedule.radius_unit = radius_unit
+            schedule.frequency_minutes = freq
+            schedule.enabled = enabled
+            if schedule.next_run is None:
+                schedule.next_run = now
+            db.session.commit()
+            saved = True
+
+    has_location = user.location_lat is not None and user.location_lon is not None
+    return render_template(
+        "settings_browse_schedule.html",
+        user=user,
+        schedule=schedule,
+        saved=saved,
+        error=error,
+        has_location=has_location,
+        frequency_labels=BrowseSchedule.FREQUENCY_LABELS,
+    )
+
+
+@api_bp.route("/browse-schedule/run-now", methods=["POST"])
+@login_required
+def api_browse_schedule_run_now():
+    """Trigger an immediate browse-schedule scrape for the current user."""
+    import threading
+    from app.models import BrowseSchedule
+    from app.scrapers import queue_theaters_for_scrape, is_scraping_in_flight
+    from app.scrapers.base import _haversine_km
+    from app.models import Theater
+
+    user = current_user._get_current_object()
+    schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
+
+    if schedule is None:
+        return jsonify({"error": "No browse schedule configured"}), 404
+    if user.location_lat is None or user.location_lon is None:
+        return jsonify({"error": "No location saved in your profile"}), 400
+
+    radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
+    active_theaters = (
+        Theater.query.filter_by(is_active=True)
+        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+        .all()
+    )
+    theater_ids = {
+        t.id for t in active_theaters
+        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km
+    }
+
+    if not theater_ids:
+        return jsonify({"status": "ok", "message": "No theaters found within your radius"}), 200
+
+    in_flight = [tid for tid in theater_ids if is_scraping_in_flight(tid)]
+    if in_flight:
+        return jsonify({
+            "status": "busy",
+            "message": (
+                f"A scrape is already in progress for {len(in_flight)} theater(s) "
+                "in your radius — try again shortly"
+            ),
+        }), 409
+
+    def _run():
+        with current_app._get_current_object().app_context():
+            queue_theaters_for_scrape(theater_ids, targets=None, force=True)
+
+    threading.Thread(target=_run, daemon=True, name=f"browse-run-now-{user.id}").start()
+    return jsonify({
+        "status": "started",
+        "theaters": len(theater_ids),
+        "message": f"Scraping {len(theater_ids)} theater(s) in your radius",
+    }), 202
+
+
 @main_bp.route("/profile/mfa-setup", methods=["GET", "POST"])
 @login_required
 def profile_mfa_setup():

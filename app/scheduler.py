@@ -273,6 +273,24 @@ def _cleanup_job(app):
         )
 
 
+def _browse_schedules_job(app):
+    """Scheduled job: run all due browse schedules and store scraped showtimes."""
+    from app.scrapers import run_browse_schedules
+
+    with app.app_context():
+        from app.log_utils import write_log
+        logger.info("Browse schedules job starting...")
+        try:
+            new_showtimes = run_browse_schedules()
+            if new_showtimes:
+                logger.info("Browse schedules job complete. %d new showtime(s).", len(new_showtimes))
+            else:
+                logger.debug("Browse schedules job complete. No new showtimes.")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Browse schedules job failed: %s", exc)
+            write_log("scrape", f"Browse schedules job failed: {exc}", level="ERROR")
+
+
 def _health_check_job(app):
     """Scheduled job: run a lightweight health check against every registered scraper chain."""
     _health_check_state["running"] = True
@@ -414,6 +432,9 @@ def start_scheduler(app) -> None:
     cleanup_hours = _setting_int(
         "cleanup_interval_hours", "CLEANUP_INTERVAL_HOURS", 24
     )
+    browse_check_minutes = _setting_int(
+        "browse_schedule_check_minutes", "BROWSE_SCHEDULE_CHECK_MINUTES", 30
+    )
     hc_freq = _setting_str("health_check_frequency", "daily")
     hc_time = _setting_str("health_check_time", "00:00")
     hc_dow  = _setting_str("health_check_day_of_week", "0")
@@ -461,6 +482,15 @@ def start_scheduler(app) -> None:
         trigger=IntervalTrigger(hours=cleanup_hours),
         id="imax_cleanup",
         name="Showtime cleanup",
+        replace_existing=True,
+    )
+
+    # Browse schedule runner — checks due schedules every N minutes (default 30)
+    _scheduler.add_job(
+        func=lambda: _browse_schedules_job(app),
+        trigger=IntervalTrigger(minutes=browse_check_minutes),
+        id="imax_browse_schedules",
+        name="Browse schedule runner",
         replace_existing=True,
     )
 
