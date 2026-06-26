@@ -199,11 +199,12 @@
     var start = page * PAGE;
     var end   = Math.min(start + PAGE, total);
 
-    // Hide only the filtered set, then show and reorder the current page's slice.
-    // Cards already hidden by a previous filter pass are not touched.
-    visible.forEach(function (c) { c.style.display = 'none'; });
+    // Single pass: show cards in the current page slice, hide everything else.
+    // Using allCards (not visible) ensures cards dropped by a filter are hidden.
     var slice = visible.slice(start, end);
-    slice.forEach(function (c) { c.style.display = ''; grid.appendChild(c); });
+    var sliceSet = new Set(slice);
+    allCards.forEach(function (c) { c.style.display = sliceSet.has(c) ? '' : 'none'; });
+    slice.forEach(function (c) { grid.appendChild(c); });
 
     // Empty-filter state
     if (emptyEl) emptyEl.style.display = total === 0 ? '' : 'none';

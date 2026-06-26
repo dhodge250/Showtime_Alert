@@ -827,6 +827,9 @@ a.stat-card-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba
   outline: none;
   -webkit-tap-highlight-color: transparent;
 }
+.theater-card-link:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px rgba(0,136,255,0.25);
+}
 .theater-card-header {
   display: flex;
   align-items: flex-start;
