@@ -101,7 +101,7 @@
 {# ── Pagination ────────────────────────────────────────────────────────── #}
 <div class="movies-pager" id="movies-pager" style="display:none">
   <span class="movies-pager-info" id="movies-pager-info"></span>
-  <span class="movies-pager-controls">
+  <span class="st-page-controls">
     <button class="btn btn-ghost btn-sm" id="movies-prev">← Prev</button>
     <span class="movies-pager-label" id="movies-pager-label"></span>
     <button class="btn btn-ghost btn-sm" id="movies-next">Next →</button>
@@ -166,7 +166,7 @@
   sortEl.addEventListener('change', function () {
     sortKey = sortEl.value;
     page    = 0;
-    filter();
+    sort();
   });
 
   function filter() {
@@ -180,13 +180,12 @@
     visible.sort(function (a, b) {
       if (sortKey === 'title-asc')  return a.dataset.title < b.dataset.title ? -1 : a.dataset.title > b.dataset.title ? 1 : 0;
       if (sortKey === 'title-desc') return a.dataset.title > b.dataset.title ? -1 : a.dataset.title < b.dataset.title ? 1 : 0;
-      if (sortKey === 'release-desc') {
-        var ra = a.dataset.release || '0000-01-01', rb = b.dataset.release || '0000-01-01';
-        return ra > rb ? -1 : ra < rb ? 1 : 0;
-      }
-      if (sortKey === 'release-asc') {
-        var ra = a.dataset.release || '9999-12-31', rb = b.dataset.release || '9999-12-31';
-        return ra < rb ? -1 : ra > rb ? 1 : 0;
+      if (sortKey === 'release-desc' || sortKey === 'release-asc') {
+        var def = sortKey === 'release-asc' ? '9999-12-31' : '0000-01-01';
+        var ra  = a.dataset.release || def;
+        var rb  = b.dataset.release || def;
+        var cmp = ra < rb ? -1 : ra > rb ? 1 : 0;
+        return sortKey === 'release-asc' ? cmp : -cmp;
       }
       // next-asc (default): soonest first, no-showtime last
       var na = a.dataset.next, nb = b.dataset.next;
@@ -200,13 +199,11 @@
     var start = page * PAGE;
     var end   = Math.min(start + PAGE, total);
 
-    // Hide all cards, then show the current page's slice
-    allCards.forEach(function (c) { c.style.display = 'none'; });
+    // Hide only the filtered set, then show and reorder the current page's slice.
+    // Cards already hidden by a previous filter pass are not touched.
+    visible.forEach(function (c) { c.style.display = 'none'; });
     var slice = visible.slice(start, end);
-    slice.forEach(function (c) { c.style.display = ''; });
-
-    // Re-order in DOM so grid layout is correct
-    slice.forEach(function (c) { grid.appendChild(c); });
+    slice.forEach(function (c) { c.style.display = ''; grid.appendChild(c); });
 
     // Empty-filter state
     if (emptyEl) emptyEl.style.display = total === 0 ? '' : 'none';

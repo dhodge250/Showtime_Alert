@@ -2798,7 +2798,6 @@ select.placeholder-active option:not([value=""]) { color: var(--text-primary); }
   border-top: 1px solid var(--border);
   margin-top: 16px;
 }
-.movies-pager-controls { display: flex; align-items: center; gap: 8px; }
 .movies-pager-label { font-size: 13px; color: var(--text-muted); min-width: 50px; text-align: center; }
 
 /* ── Movie cards (Movies tab) ────────────────────────────────────────── */
