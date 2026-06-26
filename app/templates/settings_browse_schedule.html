@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Browse Schedule – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Browse Schedule</h1>
+</div>
+
+{% if saved %}
+<div class="flash-message flash-success">Browse schedule saved.</div>
+{% endif %}
+{% if error %}
+<div class="flash-message flash-error">{{ error }}</div>
+{% endif %}
+
+{% if not has_location %}
+<div class="flash-message flash-warning">
+  No location saved in your profile. Set your location in
+  <a href="{{ url_for('main.settings_account') }}">My Account → Location</a>
+  before activating your browse schedule.
+</div>
+{% endif %}
+
+<div class="settings-account-grid">
+  <div class="form-section">
+    <h2 class="form-section-title">What is Browse Schedule?</h2>
+    <p class="form-hint" style="margin-bottom:0">
+      A recurring background task that scrapes all showtimes from every theater
+      within your chosen radius. No alerts are sent — the data is stored so you
+      can browse the <a href="{{ url_for('main.movies') }}">Movies</a> and
+      <a href="{{ url_for('main.theaters') }}">Theaters</a> pages and discover
+      what is playing near you.
+    </p>
+  </div>
+
+  <div class="form-section">
+    <h2 class="form-section-title">
+      Schedule Configuration
+      {% if schedule %}
+      <span class="badge {% if schedule.enabled %}badge-success{% else %}badge-neutral{% endif %}"
+            style="font-size:0.75rem;margin-left:8px;vertical-align:middle">
+        {{ 'Active' if schedule.enabled else 'Paused' }}
+      </span>
+      {% endif %}
+    </h2>
+
+    <form method="post" action="{{ url_for('main.settings_browse_schedule') }}" id="browse-schedule-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" id="bs-action" name="action" value="save">
+
+      <div class="form-group">
+        <label for="bs-radius">Search radius</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" id="bs-radius" name="radius" class="form-control" style="width:120px"
+                 min="1" max="500" step="1"
+                 value="{{ schedule.radius if schedule else (50 if (user.measurement_unit or 'metric') == 'metric' else 30) }}"
+                 required>
+          <div class="segmented-unit" style="display:flex;gap:0">
+            <button type="button" class="seg-btn{% if not schedule or schedule.radius_unit == 'km' %} active{% endif %}"
+                    data-unit="km" onclick="setUnit('km')">km</button>
+            <button type="button" class="seg-btn{% if schedule and schedule.radius_unit == 'miles' %} active{% endif %}"
+                    data-unit="miles" onclick="setUnit('miles')">mi</button>
+          </div>
+          <input type="hidden" id="bs-radius-unit" name="radius_unit"
+                 value="{{ schedule.radius_unit if schedule else ('miles' if (user.measurement_unit or 'metric') == 'imperial' else 'km') }}">
+        </div>
+        <span class="form-hint">Theaters within this distance of your saved location will be scraped.</span>
+      </div>
+
+      <div class="form-group">
+        <label for="bs-frequency">How often</label>
+        <select id="bs-frequency" name="frequency_minutes" class="form-control" style="max-width:280px">
+          {% for mins, label in frequency_labels.items() %}
+          <option value="{{ mins }}"
+                  {% if schedule and schedule.frequency_minutes == mins %}selected{% elif not schedule and mins == 60 %}selected{% endif %}>
+            {{ label }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <input type="checkbox" name="enabled" {% if not schedule or schedule.enabled %}checked{% endif %}>
+          Enable this schedule
+        </label>
+        <span class="form-hint">Uncheck to pause without deleting your configuration.</span>
+      </div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:20px">
+        <button type="submit" class="btn btn-primary" {% if not has_location %}disabled title="Set your location first"{% endif %}>
+          {{ 'Save Changes' if schedule else 'Create Schedule' }}
+        </button>
+
+        {% if schedule %}
+        <button type="button" class="btn btn-secondary" id="run-now-btn"
+                {% if not has_location or not schedule.enabled %}disabled{% endif %}
+                onclick="runNow()">
+          Run Now
+        </button>
+        <button type="submit" class="btn btn-danger-outline"
+                onclick="document.getElementById('bs-action').value='delete';return confirm('Delete your browse schedule?');">
+          Delete Schedule
+        </button>
+        {% endif %}
+      </div>
+    </form>
+
+    {% if schedule %}
+    <div class="settings-info-rows" style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px">
+      <div class="settings-info-row">
+        <span class="info-label">Last run</span>
+        <span class="info-value">
+          {% if schedule.last_run %}
+          <time class="utc-time" datetime="{{ schedule.last_run.strftime('%Y-%m-%dT%H:%M:%S') }}Z" data-fmt="short">
+            {{ schedule.last_run.strftime('%b %d at %I:%M %p UTC') }}
+          </time>
+          {% else %}
+          Never
+          {% endif %}
+        </span>
+      </div>
+      <div class="settings-info-row">
+        <span class="info-label">Next run</span>
+        <span class="info-value">
+          {% if schedule.next_run and schedule.enabled %}
+          <time class="utc-time" datetime="{{ schedule.next_run.strftime('%Y-%m-%dT%H:%M:%S') }}Z" data-fmt="short">
+            {{ schedule.next_run.strftime('%b %d at %I:%M %p UTC') }}
+          </time>
+          {% else %}
+          Paused
+          {% endif %}
+        </span>
+      </div>
+      <div class="settings-info-row">
+        <span class="info-label">Frequency</span>
+        <span class="info-value">{{ schedule.frequency_label() }}</span>
+      </div>
+    </div>
+    {% endif %}
+
+    <div id="run-now-status" style="display:none;margin-top:12px" class="flash-message flash-info"></div>
+  </div>
+</div>
+
+<script>
+function setUnit(unit) {
+  document.getElementById('bs-radius-unit').value = unit;
+  document.querySelectorAll('.seg-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.unit === unit);
+  });
+}
+
+function runNow() {
+  var btn = document.getElementById('run-now-btn');
+  var status = document.getElementById('run-now-status');
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  fetch('{{ url_for("api.api_browse_schedule_run_now") }}', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': document.querySelector('[name=csrf_token]').value,
+    },
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    status.style.display = '';
+    status.textContent = data.message || 'Scrape started.';
+    btn.textContent = 'Run Now';
+    btn.disabled = false;
+  })
+  .catch(function() {
+    status.style.display = '';
+    status.textContent = 'Failed to start scrape. Try again.';
+    btn.textContent = 'Run Now';
+    btn.disabled = false;
+  });
+}
+</script>
+{% endblock %}
