@@ -257,20 +257,27 @@ class RegalScraper(BaseScraper):
         # Hand Playwright CF cookies to requests for all subsequent API calls.
         session = _make_session(pw_cookies)
 
-        # If we have dates_with_shows, use them; otherwise fetch via the first
-        # API call which returns available dates in the JSON.
-        if dates_with_shows:
-            for date_iso in [d[:10] for d in dates_with_shows[1:]]:
-                shows = self._fetch_date(session, theatre_code, date_iso)
-                all_shows.extend(shows)
+        from datetime import date as _date, timedelta
+        browse_only = getattr(_scrape_ctx, "browse_only", False)
+
+        # In browse mode we want the full forward schedule; datesWithShows from
+        # the page is often limited to the next 1-2 days (Regal lazy-loads the
+        # rest client-side). Always probe the API for the next 60 days so nothing
+        # is missed. In alert mode keep the page's list as-is — it's usually
+        # complete and avoids unnecessary API calls.
+        if dates_with_shows and not browse_only:
+            future_dates = [d[:10] for d in dates_with_shows[1:]]
         else:
-            # No dates from __NEXT_DATA__ — pull directly from the API
-            from datetime import date, timedelta
-            today = date.today()
-            for offset in range(14):
-                d = (today + timedelta(days=offset)).isoformat()
-                shows = self._fetch_date(session, theatre_code, d)
-                all_shows.extend(shows)
+            today = _date.today()
+            days_ahead = 60 if browse_only else 14
+            future_dates = [
+                (today + timedelta(days=i)).isoformat()
+                for i in range(1, days_ahead + 1)
+            ]
+
+        for date_iso in future_dates:
+            shows = self._fetch_date(session, theatre_code, date_iso)
+            all_shows.extend(shows)
 
         return _parse_shows(self, theater, movie_ids, all_shows, theatre_code)
 

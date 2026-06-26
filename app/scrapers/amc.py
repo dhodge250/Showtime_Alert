@@ -62,10 +62,15 @@ def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: 
         for format_li in format_lis:
             if not format_li:
                 continue
+            aria = format_li.get("aria-label", "")
+            # AMC sometimes injects placeholder li elements with "undefined" in
+            # the label before the page fully hydrates — skip them.
+            if "undefined" in aria.lower():
+                continue
             # In alert mode we're always in the IMAX li → hardcode "IMAX".
             # In all-formats mode normalize the aria-label to a clean format name.
             format_type = (
-                _amc_format_label(format_li.get("aria-label", "IMAX"))
+                _amc_format_label(aria or "IMAX")
                 if all_formats else "IMAX"
             )
 
