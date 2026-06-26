@@ -806,8 +806,7 @@ class TestScraper:
             movie = scraper.get_or_create_movie("Avatar IMAX")
             db.session.commit()
             assert movie.id is not None
-            # "Avatar IMAX" → format suffix stripped → stored as "Avatar"
-            assert movie.title == "Avatar"
+            assert movie.title == "Avatar IMAX"
 
     def test_get_or_create_movie_deduplicates(self, app):
         from app.scraper import AMCScraper
@@ -1339,8 +1338,7 @@ class TestCinemarkScraper:
             results = _parse_imax_showtimes(scraper, theater, {None}, soup, "2026-06-15")
 
         assert len(results) == 2
-        # Fixture uses data-print-type-name="IMAX 2D" — format stored verbatim
-        assert all(st.format_type == "IMAX 2D" for st in results)
+        assert all(st.format_type == "IMAX" for st in results)
         urls = {st.tickets_url for st in results}
         assert any("706168" in u for u in urls)
         assert any("706169" in u for u in urls)

@@ -311,13 +311,9 @@ class Theater(db.Model):
     website = db.Column(db.String(500))
     phone = db.Column(db.String(30))
     image_url = db.Column(db.String(500))
-    description = db.Column(db.Text, nullable=True)
-    amenities = db.Column(db.Text, nullable=True)   # JSON list, e.g. '["Parking","Dining"]'
-    seating_capacity = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, default=True)
     crawl_source = db.Column(db.String(100))
     last_crawled_at = db.Column(db.DateTime)
-    on_demand_fetched_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime,
@@ -542,7 +538,6 @@ class Showtime(db.Model):
     format_type = db.Column(db.String(100))
     first_seen = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_checked = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    on_demand = db.Column(db.Boolean, default=False, nullable=False, server_default="0")
 
     theater = db.relationship("Theater", back_populates="showtimes")
     movie = db.relationship("Movie", back_populates="showtimes")
@@ -973,21 +968,3 @@ class LogEntry(db.Model):
 
     def __repr__(self):
         return f"<LogEntry [{self.level}] {self.category}: {self.message[:60]}>"
-
-
-class ScraperStatus(db.Model):
-    """Health check result for one scraper chain, written by the daily health-check job."""
-
-    __tablename__ = "scraper_status"
-
-    id = db.Column(db.Integer, primary_key=True)
-    chain_name = db.Column(db.String(100), nullable=False, index=True)
-    checked_at = db.Column(db.DateTime, nullable=False)
-    status = db.Column(db.String(20), nullable=False)  # 'ok', 'warning', 'error'
-    showtime_count = db.Column(db.Integer, nullable=True)
-    theater_count = db.Column(db.Integer, nullable=True)
-    error_class = db.Column(db.String(100), nullable=True)
-    error_summary = db.Column(db.String(500), nullable=True)
-
-    def __repr__(self):
-        return f"<ScraperStatus chain={self.chain_name} status={self.status}>"

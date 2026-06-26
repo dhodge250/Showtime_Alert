@@ -127,19 +127,19 @@
   <h2>Upcoming Showtimes</h2>
   {% if showtimes %}
   <div class="table-wrap">
-    <table class="data-table" id="showtimes-table">
+    <table class="data-table">
       <thead>
         <tr>
-          <th data-sort-col="theater">Theater</th>
-          <th data-sort-col="fmt">Format</th>
-          <th data-sort-col="dt">Date / Time <span class="text-muted" style="font-size:11px;font-weight:400">(your local time)</span></th>
+          <th>Theater</th>
+          <th>Format</th>
+          <th>Date / Time <span class="text-muted" style="font-size:11px;font-weight:400">(your local time)</span></th>
           <th>Tickets</th>
         </tr>
       </thead>
       <tbody>
         {% for st in showtimes %}
         <tr>
-          <td data-sort-theater="{{ st.theater.name if st.theater else '' }}">
+          <td>
             <strong>{{ st.theater.name if st.theater else '–' }}</strong>
             {% if st.theater and (st.theater.city or st.theater.state) %}
             <div class="text-muted" style="font-size:12px">
@@ -147,8 +147,8 @@
             </div>
             {% endif %}
           </td>
-          <td data-sort-fmt="{{ st.format_type or 'IMAX' }}"><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
-          <td data-sort-dt="{{ st.show_datetime.isoformat() }}"><time class="utc-time" datetime="{{ st.show_datetime.isoformat() }}Z" data-fmt="medium">{{ st.show_datetime.strftime('%a, %b %d, %Y at %I:%M %p') }}</time></td>
+          <td><span class="badge">{{ st.format_type or 'IMAX' }}</span></td>
+          <td><time class="utc-time" datetime="{{ st.show_datetime.isoformat() }}Z" data-fmt="medium">{{ st.show_datetime.strftime('%a, %b %d, %Y at %I:%M %p') }}</time></td>
           <td>
             {% if st.tickets_url %}
             <a href="{{ st.tickets_url }}" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Buy</a>
@@ -165,10 +165,4 @@
   <p class="text-muted">No upcoming showtimes found at your tracked theaters.</p>
   {% endif %}
 </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-initSortableTable('showtimes-table', {{ rows_per_page }});
-</script>
 {% endblock %}
