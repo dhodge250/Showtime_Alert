@@ -627,16 +627,18 @@ def api_browse_schedule_status():
         return jsonify({"in_flight": 0, "total": 0, "last_run": None, "next_run": None})
 
     radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
-    theater_ids = [
-        t.id for t in Theater.query.filter_by(is_active=True)
-        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
-        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km
-    ]
-    in_flight = sum(1 for tid in theater_ids if is_scraping_in_flight(tid))
+    total = 0
+    in_flight = 0
+    for t in (Theater.query.filter_by(is_active=True)
+              .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))):
+        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km:
+            total += 1
+            if is_scraping_in_flight(t.id):
+                in_flight += 1
 
     return jsonify({
         "in_flight": in_flight,
-        "total": len(theater_ids),
+        "total": total,
         "last_run": schedule.last_run.strftime("%Y-%m-%dT%H:%M:%S") + "Z" if schedule.last_run else None,
         "next_run": schedule.next_run.strftime("%Y-%m-%dT%H:%M:%S") + "Z" if schedule.next_run else None,
     })

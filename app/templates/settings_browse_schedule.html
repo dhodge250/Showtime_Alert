@@ -63,7 +63,7 @@
           <span class="info-value">
             {{ schedule.frequency_label() }}
             {% if schedule.frequency_minutes >= 1440 %}
-            {% set h = schedule.preferred_hour or 0 %}
+            {% set h = schedule.preferred_hour if schedule.preferred_hour is not none else 8 %}
             {% if h == 0 %}at 12:00 AM
             {% elif h < 12 %}at {{ h }}:00 AM
             {% elif h == 12 %}at 12:00 PM
@@ -149,7 +149,7 @@
                       data-unit="km" onclick="setUnit('km')">km</button>
               <button type="button"
                       class="unit-strip-btn{% if schedule and schedule.radius_unit == 'miles' %} active{% endif %}"
-                      data-unit="miles" onclick="setUnit('mi')">mi</button>
+                      data-unit="miles" onclick="setUnit('miles')">mi</button>
             </div>
             <input type="hidden" id="bs-radius-unit" name="radius_unit"
                    value="{{ schedule.radius_unit if schedule else ('miles' if (user.measurement_unit or 'metric') == 'imperial' else 'km') }}">
@@ -246,7 +246,8 @@ function bsViewMode() {
   document.getElementById('bs-edit').style.display = 'none';
 }
 function bsEditMode() {
-  document.getElementById('bs-view').style.display = 'none';
+  var view = document.getElementById('bs-view');
+  if (view) view.style.display = 'none';
   document.getElementById('bs-edit').style.display = '';
   updateFreqFields();
 }
@@ -263,8 +264,7 @@ bsEditMode();
 
 // ── km / mi unit toggle ───────────────────────────────────────────────
 function setUnit(unit) {
-  var stored = (unit === 'mi') ? 'miles' : unit;
-  document.getElementById('bs-radius-unit').value = stored;
+  document.getElementById('bs-radius-unit').value = unit;
   document.querySelectorAll('.unit-strip-btn').forEach(function(btn) {
     btn.classList.toggle('active', btn.dataset.unit === unit);
   });

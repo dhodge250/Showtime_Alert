@@ -1820,6 +1820,94 @@ class TestScraperCoordinator:
                 assert theater.id not in coord_mod._scraping_in_flight
 
 
+# ── BrowseSchedule.compute_next_run ───────────────────────────────────
+
+
+class TestComputeNextRun:
+    """Unit tests for BrowseSchedule.compute_next_run() timezone/scheduling logic."""
+
+    def _schedule(self, freq, hour=8, dow=None):
+        from app.models import BrowseSchedule
+        return BrowseSchedule(
+            user_id=0,
+            radius=50.0,
+            radius_unit="km",
+            frequency_minutes=freq,
+            preferred_hour=hour,
+            preferred_day_of_week=dow,
+        )
+
+    def test_subdaily_ignores_preferred_hour(self, app):
+        """Sub-daily frequencies just add the interval; preferred_hour is irrelevant."""
+        from datetime import datetime
+        with app.app_context():
+            s = self._schedule(freq=60, hour=8)
+            base = datetime(2026, 6, 26, 10, 0, 0)  # 10:00 UTC
+            result = s.compute_next_run(base, "America/New_York")
+            assert result == datetime(2026, 6, 26, 11, 0, 0)
+
+    def test_daily_future_hour_same_day(self, app):
+        """Daily: preferred hour still ahead today → schedules later today."""
+        from datetime import datetime
+        with app.app_context():
+            # 08:00 UTC = 04:00 ET (EDT, UTC-4); preferred_hour=10 ET is 14:00 UTC today
+            s = self._schedule(freq=1440, hour=10)
+            base = datetime(2026, 6, 26, 8, 0, 0)  # 04:00 ET
+            result = s.compute_next_run(base, "America/New_York")
+            assert result == datetime(2026, 6, 26, 14, 0, 0)
+
+    def test_daily_past_hour_schedules_tomorrow(self, app):
+        """Daily: preferred hour already passed today → schedules for tomorrow."""
+        from datetime import datetime
+        with app.app_context():
+            # 20:00 UTC = 16:00 ET (EDT); preferred_hour=8 ET already passed → next day
+            s = self._schedule(freq=1440, hour=8)
+            base = datetime(2026, 6, 26, 20, 0, 0)  # 16:00 ET
+            result = s.compute_next_run(base, "America/New_York")
+            assert result == datetime(2026, 6, 27, 12, 0, 0)  # 08:00 ET next day = 12:00 UTC
+
+    def test_weekly_correct_day(self, app):
+        """Weekly: schedules the next occurrence of the preferred day."""
+        from datetime import datetime
+        with app.app_context():
+            # 2026-06-26 is a Friday (weekday=4). preferred_dow=0 (Monday) → next Monday.
+            # Monday 2026-06-29 at 08:00 ET = 12:00 UTC (EDT, UTC-4)
+            s = self._schedule(freq=10080, hour=8, dow=0)
+            base = datetime(2026, 6, 26, 14, 0, 0)  # Friday 10:00 ET
+            result = s.compute_next_run(base, "America/New_York")
+            assert result == datetime(2026, 6, 29, 12, 0, 0)
+
+    def test_weekly_same_day_past_hour_advances_one_week(self, app):
+        """Weekly: preferred day is today but hour has passed → schedules 7 days out."""
+        from datetime import datetime
+        with app.app_context():
+            # 2026-06-26 is Friday (weekday=4). preferred_dow=4 (Friday) at 08:00 ET.
+            # Current local time is 10:00 ET → hour already passed → next Friday.
+            s = self._schedule(freq=10080, hour=8, dow=4)
+            base = datetime(2026, 6, 26, 14, 0, 0)  # Friday 10:00 ET (UTC-4)
+            result = s.compute_next_run(base, "America/New_York")
+            assert result == datetime(2026, 7, 3, 12, 0, 0)  # next Friday 08:00 ET
+
+    def test_invalid_timezone_falls_back_to_utc(self, app):
+        """An unrecognised timezone string silently falls back to UTC."""
+        from datetime import datetime
+        with app.app_context():
+            s = self._schedule(freq=1440, hour=9)
+            base = datetime(2026, 6, 26, 20, 0, 0)  # 20:00 UTC; 09:00 already past in UTC
+            result = s.compute_next_run(base, "Not/ATimezone")
+            # Falls back to UTC: 09:00 UTC passed → tomorrow 09:00 UTC
+            assert result == datetime(2026, 6, 27, 9, 0, 0)
+
+    def test_null_preferred_hour_defaults_to_8(self, app):
+        """NULL preferred_hour falls back to 8, matching compute_next_run's documented default."""
+        from datetime import datetime
+        with app.app_context():
+            s = self._schedule(freq=1440, hour=None)
+            base = datetime(2026, 6, 26, 6, 0, 0)  # 06:00 UTC; 08:00 UTC still ahead
+            result = s.compute_next_run(base, "UTC")
+            assert result == datetime(2026, 6, 26, 8, 0, 0)
+
+
 # ── Browse schedule ───────────────────────────────────────────────────
 
 
