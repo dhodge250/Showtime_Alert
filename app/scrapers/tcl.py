@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 import requests
 from playwright.sync_api import sync_playwright
 
-from app.scrapers.base import BaseScraper, _local_to_utc
+from app.scrapers.base import BaseScraper, _local_to_utc, _scrape_ctx
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,7 @@ class TCLScraper(BaseScraper):
     """Scraper for TCL Chinese Theatre IMAX showtimes."""
 
     chain_name = "TCL"
+    health_website = "tclchinesetheatres.com"
 
     def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
         if not theater.website:
@@ -106,6 +107,7 @@ class TCLScraper(BaseScraper):
             return []
 
         hdrs = _api_headers(gas_token)
+        on_demand = getattr(_scrape_ctx, "on_demand", False)
 
         try:
             r = requests.get(
@@ -115,12 +117,17 @@ class TCLScraper(BaseScraper):
                 timeout=_REQUEST_TIMEOUT,
             )
             r.raise_for_status()
-            dates = _imax_dates(r.json().get("filmScreeningDates", []))
+            all_dates_data = r.json().get("filmScreeningDates", [])
+            # In on-demand mode use all dates; otherwise only dates with IMAX showtimes
+            if on_demand:
+                dates = [e["businessDate"] for e in all_dates_data]
+            else:
+                dates = _imax_dates(all_dates_data)
         except Exception as exc:
             logger.warning("TCL: film-screening-dates failed: %s", exc)
             return []
 
-        logger.debug("TCL: %d IMAX dates to scrape", len(dates))
+        logger.debug("TCL: %d dates to scrape (on_demand=%s)", len(dates), on_demand)
         new_showtimes: list[Showtime] = []
         for date_iso in dates:
             new_showtimes.extend(self._scrape_date(theater, movie_ids, hdrs, date_iso))
@@ -148,9 +155,11 @@ class TCLScraper(BaseScraper):
             for f in data.get("relatedData", {}).get("films", [])
         }
 
+        on_demand = getattr(_scrape_ctx, "on_demand", False)
         new_showtimes: list[Showtime] = []
         for show in data.get("showtimes", []):
-            if _IMAX_ATTR_ID not in show.get("attributeIds", []):
+            attr_ids = show.get("attributeIds", [])
+            if not on_demand and _IMAX_ATTR_ID not in attr_ids:
                 continue
 
             raw_title = films.get(show.get("filmId", ""), "")
@@ -181,6 +190,15 @@ class TCLScraper(BaseScraper):
                 else ""
             )
 
+            # Derive format: use title prefix or IMAX attribute presence
+            title_prefix_m = _TITLE_PREFIX_RE.match(raw_title)
+            if title_prefix_m:
+                format_type = title_prefix_m.group(0).strip("() ")
+            elif _IMAX_ATTR_ID in attr_ids:
+                format_type = "IMAX"
+            else:
+                format_type = "Standard"
+
             movie = self.get_or_create_movie(title)
             if not self._movie_wanted(movie, movie_ids):
                 continue
@@ -191,7 +209,7 @@ class TCLScraper(BaseScraper):
                 show_dt,
                 tickets_available=not show.get("isSoldOut", False),
                 tickets_url=tickets_url,
-                format_type="IMAX",
+                format_type=format_type,
             )
             if is_new:
                 new_showtimes.append(showtime)

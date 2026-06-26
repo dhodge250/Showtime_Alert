@@ -11,7 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Use virtualenv (bundles pip, bypasses ensurepip) — python:3.11-slim on Trixie
 # has no python3.11-venv apt package, so ensurepip fails with plain `python -m venv`.
-RUN pip install --no-cache-dir virtualenv && virtualenv /venv
+# Upgrade pip first: pip 24.0 in the base image has a hash() TypeError that breaks
+# dependency resolution when installing virtualenv.
+RUN pip install --upgrade pip && pip install --no-cache-dir virtualenv && virtualenv /venv
 
 # Upgrade pip and wheel to patched versions (CVE-2026-24049, CVE-2025-8869 et al.)
 RUN /venv/bin/pip install --upgrade "pip==26.1" "wheel==0.46.2"

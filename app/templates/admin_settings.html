@@ -105,14 +105,25 @@
               </small>
             </div>
 
-            <div class="form-group">
-              <label for="rows_per_page">Dashboard rows per page</label>
+            <div class="form-group" style="margin-bottom:16px">
+              <label for="rows_per_page">Rows per page (tables)</label>
               <input type="number" id="rows_per_page" name="rows_per_page"
                      min="5" max="100"
                      value="{{ settings.get('rows_per_page', '15') }}"
                      style="width:120px" />
               <small class="text-muted" style="font-size:11px;margin-top:2px">
-                Rows shown per page in Available Showtimes and Active Alerts lists. Min: 5, Max: 100.
+                Rows shown per page in the Dashboard, Alerts, and Showtimes tables. Min: 5, Max: 100.
+              </small>
+            </div>
+
+            <div class="form-group">
+              <label for="movies_per_page">Movies grid — cards per page</label>
+              <input type="number" id="movies_per_page" name="movies_per_page"
+                     min="10" max="200"
+                     value="{{ settings.get('movies_per_page', '50') }}"
+                     style="width:120px" />
+              <small class="text-muted" style="font-size:11px;margin-top:2px">
+                Movie cards shown per page on the Movies tab. Min: 10, Max: 200.
               </small>
             </div>
           </div>
@@ -382,7 +393,112 @@
                   Log entries older than this are deleted by the cleanup job. Min: 1, Max: 365 days.
                 </small>
               </div>
+
+              <div class="form-group">
+                <label for="on_demand_fetch_cooldown_hours">On-demand showtime fetch cooldown (hours)</label>
+                <input type="number" id="on_demand_fetch_cooldown_hours" name="on_demand_fetch_cooldown_hours"
+                       min="1" max="168"
+                       value="{{ settings.get('on_demand_fetch_cooldown_hours', '24') }}"
+                       style="width:120px" />
+                <small class="text-muted" style="font-size:11px;margin-top:2px">
+                  How long before a user can manually re-fetch showtimes for a theater. Min: 1 hr, Max: 168 hrs (7 days).
+                </small>
+              </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {# ── Scraper Health Check ── #}
+      <div class="settings-accordion-item">
+        <button class="settings-accordion-trigger" type="button"
+                aria-expanded="false" data-accordion="acc-health-check">
+          <span>Scraper Health Check</span>
+          <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="settings-accordion-content" id="acc-health-check">
+          <div class="settings-accordion-inner">
+            <p class="text-muted" style="font-size:12px;margin-bottom:14px">
+              Controls when the automated scraper health check runs. The check probes one theater
+              per chain to confirm each scraper can still reach its site.
+            </p>
+
+            {% if scheduler_status.running %}
+              {% set health_job = scheduler_status.jobs | selectattr("id","equalto","imax_health_check") | first | default(None) %}
+            {% else %}
+              {% set health_job = None %}
+            {% endif %}
+
+            <div class="form-group" style="margin-bottom:16px">
+              <label style="display:block;margin-bottom:6px">Frequency</label>
+              <div class="targeting-options" style="max-width:280px">
+                <input type="radio" class="targeting-radio" id="hc-freq-daily"
+                       name="health_check_frequency" value="daily"
+                       onchange="updateHealthCheckFields()"
+                       {% if settings.get('health_check_frequency', 'daily') == 'daily' %}checked{% endif %}>
+                <label for="hc-freq-daily">Daily</label>
+                <input type="radio" class="targeting-radio" id="hc-freq-weekly"
+                       name="health_check_frequency" value="weekly"
+                       onchange="updateHealthCheckFields()"
+                       {% if settings.get('health_check_frequency') == 'weekly' %}checked{% endif %}>
+                <label for="hc-freq-weekly">Weekly</label>
+                <input type="radio" class="targeting-radio" id="hc-freq-monthly"
+                       name="health_check_frequency" value="monthly"
+                       onchange="updateHealthCheckFields()"
+                       {% if settings.get('health_check_frequency') == 'monthly' %}checked{% endif %}>
+                <label for="hc-freq-monthly">Monthly</label>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:12px">
+
+              <div class="form-group" id="hc-dow-group"
+                   style="display:{% if settings.get('health_check_frequency') == 'weekly' %}block{% else %}none{% endif %}">
+                <label for="health_check_day_of_week">Day of Week</label>
+                <select id="health_check_day_of_week" name="health_check_day_of_week">
+                  {% set dow = settings.get('health_check_day_of_week', '0') %}
+                  <option value="0" {% if dow == '0' %}selected{% endif %}>Monday</option>
+                  <option value="1" {% if dow == '1' %}selected{% endif %}>Tuesday</option>
+                  <option value="2" {% if dow == '2' %}selected{% endif %}>Wednesday</option>
+                  <option value="3" {% if dow == '3' %}selected{% endif %}>Thursday</option>
+                  <option value="4" {% if dow == '4' %}selected{% endif %}>Friday</option>
+                  <option value="5" {% if dow == '5' %}selected{% endif %}>Saturday</option>
+                  <option value="6" {% if dow == '6' %}selected{% endif %}>Sunday</option>
+                </select>
+              </div>
+
+              <div class="form-group" id="hc-dom-group"
+                   style="display:{% if settings.get('health_check_frequency') == 'monthly' %}block{% else %}none{% endif %}">
+                <label for="health_check_day_of_month">Day of Month</label>
+                <select id="health_check_day_of_month" name="health_check_day_of_month">
+                  {% set dom = settings.get('health_check_day_of_month', '1') %}
+                  {% for d in range(1, 32) %}
+                  <option value="{{ d }}" {% if dom == d|string %}selected{% endif %}>{{ d }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="health_check_time">Time (24-hour)</label>
+                <input type="time" id="health_check_time" name="health_check_time"
+                       value="{{ settings.get('health_check_time', '00:00') }}"
+                       style="width:120px" />
+              </div>
+
+            </div>
+            <input type="hidden" id="health_check_timezone" name="health_check_timezone"
+                   value="{{ settings.get('health_check_timezone', 'UTC') }}">
+
+            {% if health_job and health_job.next_run_iso %}
+            <small style="font-size:11px;color:var(--text-primary)">
+              Next run: <strong class="local-time" data-iso="{{ health_job.next_run_iso }}"></strong>
+            </small>
+            {% elif not scheduler_status.running %}
+            <small style="font-size:11px;color:var(--warning)">Scheduler not running.</small>
+            {% endif %}
+
           </div>
         </div>
       </div>
@@ -433,6 +549,24 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 });
+
+function updateHealthCheckFields() {
+  var freq   = document.querySelector('input[name="health_check_frequency"]:checked');
+  var dowGrp = document.getElementById('hc-dow-group');
+  var domGrp = document.getElementById('hc-dom-group');
+  if (!freq || !dowGrp || !domGrp) return;
+  dowGrp.style.display = freq.value === 'weekly'  ? 'block' : 'none';
+  domGrp.style.display = freq.value === 'monthly' ? 'block' : 'none';
+}
+
+// Capture the browser's IANA timezone so the server can build a CronTrigger
+// that fires at the user's local time, not UTC.
+(function () {
+  try {
+    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) document.getElementById('health_check_timezone').value = tz;
+  } catch (e) {}
+})();
 
 function toggleKeyVisibility() {
   var input    = document.getElementById('tmdb_api_key');
