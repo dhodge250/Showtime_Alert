@@ -1339,8 +1339,8 @@ class TestCinemarkScraper:
             results = _parse_imax_showtimes(scraper, theater, {None}, soup, "2026-06-15")
 
         assert len(results) == 2
-        # Fixture uses data-print-type-name="IMAX 2D" — format stored verbatim
-        assert all(st.format_type == "IMAX 2D" for st in results)
+        # "IMAX 2D" is normalised to "IMAX" by upsert_showtime (only 3D keeps its suffix)
+        assert all(st.format_type == "IMAX" for st in results)
         urls = {st.tickets_url for st in results}
         assert any("706168" in u for u in urls)
         assert any("706169" in u for u in urls)
