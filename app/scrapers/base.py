@@ -95,9 +95,48 @@ def on_demand_scrape():
         _scrape_ctx.on_demand = False
 
 
+class _BrowseLogCapture(logging.Handler):
+    """Captures WARNING+ records from app.scrapers during a browse-schedule scrape.
+
+    Appends (level_str, message) tuples to the calling thread's log_buffer so
+    the caller can bulk-write them to LogEntry after the scrape completes —
+    safely outside the scraper's DB session.  Installed once at startup by
+    install_browse_log_handler(); does nothing when log_buffer is absent.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < logging.WARNING:
+            return
+        buf = getattr(_scrape_ctx, "log_buffer", None)
+        if buf is None:
+            return
+        try:
+            buf.append((record.levelname, self.format(record)))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_browse_log_handler = _BrowseLogCapture()
+_browse_log_handler.setFormatter(logging.Formatter("%(name)s — %(message)s"))
+_browse_handler_installed = False
+
+
+def install_browse_log_handler() -> None:
+    """Install the browse-schedule log-capture handler once at app startup."""
+    global _browse_handler_installed  # noqa: PLW0603
+    if not _browse_handler_installed:
+        logging.getLogger("app.scrapers").addHandler(_browse_log_handler)
+        _browse_handler_installed = True
+
+
 @contextlib.contextmanager
 def browse_schedule_scrape():
     """Mark all upsert_showtime calls on this thread as browse_only=True.
+
+    Yields a list that accumulates (level, message) tuples for WARNING+ log
+    records emitted by app.scrapers during the scrape.  The caller should
+    write this buffer to the DB *after* the scrape context exits so there are
+    no session conflicts with the scraper's own commits.
 
     Browse-schedule showtimes are visible on theater/movie detail pages but
     excluded from the Dashboard 'Available Showtimes' list.  If an alert-driven
@@ -105,10 +144,12 @@ def browse_schedule_scrape():
     row becomes Dashboard-visible.
     """
     _scrape_ctx.browse_only = True
+    _scrape_ctx.log_buffer = []
     try:
-        yield
+        yield _scrape_ctx.log_buffer
     finally:
         _scrape_ctx.browse_only = False
+        _scrape_ctx.log_buffer = None
 
 # ---------------------------------------------------------------------------
 # Theater timezone helpers

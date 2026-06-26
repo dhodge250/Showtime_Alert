@@ -47,6 +47,19 @@ ALL_SCRAPERS: list[BaseScraper] = [
 _scraping_in_flight: set[int] = set()
 _inflight_lock = threading.Lock()
 
+# User IDs whose browse-schedule Run Now job is still running (including the
+# post-scrape last_run DB commit).  Separate from _scraping_in_flight so the
+# status endpoint can tell the client "all theaters done but job still
+# finishing" and avoid the race where the page reloads before last_run lands.
+_browse_run_users: set[int] = set()
+_browse_run_lock = threading.Lock()
+
+
+def is_browse_run_in_progress(user_id: int) -> bool:
+    """Return True if a Run Now job is still in progress for this user."""
+    with _browse_run_lock:
+        return user_id in _browse_run_users
+
 # Chain names that require a Playwright browser (expensive — RAM + CPU).
 PLAYWRIGHT_CHAIN_NAMES: frozenset[str] = frozenset(["AMC", "Regal", "TCL"])
 
@@ -277,6 +290,7 @@ def run_browse_schedules() -> list[Showtime]:
         return []
 
     logger.info("Browse schedules: %d schedule(s) due", len(due))
+    write_log("scrape", f"Browse schedules: {len(due)} schedule(s) due — starting scrape")
 
     active_theaters = (
         Theater.query.filter_by(is_active=True)
@@ -339,11 +353,17 @@ def run_browse_schedules() -> list[Showtime]:
         len(all_theater_ids), len(processed_schedules),
     )
 
+    from app import db
+    from app.models import LogEntry
     from app.scrapers.base import browse_schedule_scrape
     start = datetime.utcnow()
-    with browse_schedule_scrape():
+    with browse_schedule_scrape() as log_buf:
         new_showtimes = queue_theaters_for_scrape(all_theater_ids, targets=None, force=False)
     elapsed = (datetime.utcnow() - start).total_seconds()
+
+    # Flush scraper WARNING/ERROR records captured during the scrape.
+    for level, msg in log_buf:
+        db.session.add(LogEntry(level=level, category="scrape", message=msg))
 
     write_log(
         "scrape",
