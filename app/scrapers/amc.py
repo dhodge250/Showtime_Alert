@@ -95,20 +95,10 @@ class AMCScraper(BaseScraper):
     chain_name = "AMC"
     health_website = "amctheatres.com"
 
-    def scrape_all(self) -> list[Showtime]:
-        """Share one Playwright browser across all AMC theater scrapes."""
-        targets = _get_active_targets()
-        if not targets:
-            logger.debug("AMC: no active alerts — skipping scrape")
-            return []
-
-        query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
-        if None not in targets:
-            query = query.filter(Theater.id.in_(targets.keys()))
-        theaters = query.all()
+    def scrape_theaters_batch(self, theaters: list, targets: dict) -> list[Showtime]:
+        """Share one Playwright browser across all provided AMC theaters."""
         if not theaters:
             return []
-
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -137,6 +127,17 @@ class AMCScraper(BaseScraper):
 
         db.session.commit()
         return new_showtimes
+
+    def scrape_all(self) -> list[Showtime]:
+        """Alert-demand scrape: share one Playwright browser across all AMC theaters."""
+        targets = _get_active_targets()
+        if not targets:
+            logger.debug("AMC: no active alerts — skipping scrape")
+            return []
+        theaters = self._get_chain_theaters(targets)
+        if not theaters:
+            return []
+        return self.scrape_theaters_batch(theaters, targets)
 
     def _scrape_with_context(self, theater: Theater, movie_ids: set, context) -> list[Showtime]:
         if not theater.website:

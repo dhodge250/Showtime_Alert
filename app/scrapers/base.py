@@ -428,39 +428,23 @@ class BaseScraper:
         """Scrape a single theater. Override in subclasses."""
         raise NotImplementedError
 
-    def scrape_all(self) -> list[Showtime]:
+    def scrape_theaters_batch(self, theaters: list, targets: dict) -> list[Showtime]:
         """
-        Scrape theaters for this chain that have at least one active, unsent alert.
+        Scrape an explicit list of theaters with movie-scoped targets.
 
-        Movies are scoped per theater so that an "any movie" alert at theater A
-        does not cause unrelated movies to be recorded at theater B.
+        targets: {theater_id: set[movie_id]}; targets[None] = any-theater movie set.
+        Override in Playwright scrapers to share a single browser across theaters.
+        Default implementation calls scrape_theater() per theater.
         """
-        targets = _get_active_targets()
-
-        if not targets:
-            logger.debug("%s: no active alerts — skipping scrape", self.chain_name)
-            return []
-
-        query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
-        if None not in targets:
-            query = query.filter(Theater.id.in_(targets.keys()))
-
-        theaters = query.all()
-        if not theaters:
-            return []
-
         new_showtimes: list[Showtime] = []
         for theater in theaters:
-            # Merge movie sets: any-theater alerts + this-theater-specific alerts
             movie_ids: set = set()
             if None in targets:
                 movie_ids |= targets[None]
             if theater.id in targets:
                 movie_ids |= targets[theater.id]
-
             if not movie_ids:
                 continue
-
             try:
                 results = self.scrape_theater(theater, movie_ids)
                 new_showtimes.extend(results)
@@ -468,6 +452,29 @@ class BaseScraper:
                 logger.error("Error scraping %s: %s", theater.name, exc)
         db.session.commit()
         return new_showtimes
+
+    def _get_chain_theaters(self, targets: dict) -> list:
+        """Return active theaters for this chain scoped to the given alert targets."""
+        query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
+        if None not in targets:
+            query = query.filter(Theater.id.in_(targets.keys()))
+        return query.all()
+
+    def scrape_all(self) -> list[Showtime]:
+        """
+        Scrape theaters for this chain that have at least one active, unsent alert.
+
+        Delegates to scrape_theaters_batch() so Playwright scrapers can share
+        a browser across theaters via their override of that method.
+        """
+        targets = _get_active_targets()
+        if not targets:
+            logger.debug("%s: no active alerts — skipping scrape", self.chain_name)
+            return []
+        theaters = self._get_chain_theaters(targets)
+        if not theaters:
+            return []
+        return self.scrape_theaters_batch(theaters, targets)
 
 
 # ---------------------------------------------------------------------------

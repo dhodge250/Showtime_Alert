@@ -1748,6 +1748,78 @@ class TestScheduler:
         assert status["running"] is False
 
 
+# ── Scraper coordinator ───────────────────────────────────────────────
+
+
+class TestScraperCoordinator:
+    """Unit tests for the three safeguards in queue_theaters_for_scrape."""
+
+    def _amc_scraper(self):
+        import app.scrapers as coord_mod
+        return next(s for s in coord_mod.ALL_SCRAPERS if s.chain_name == "AMC")
+
+    def test_inflight_theater_is_skipped(self, app, sample_theater):
+        from unittest.mock import patch
+        import app.scrapers as coord_mod
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            amc = self._amc_scraper()
+
+            with coord_mod._inflight_lock:
+                coord_mod._scraping_in_flight.add(theater.id)
+            try:
+                with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+                    result = coord_mod.queue_theaters_for_scrape({theater.id})
+                assert result == []
+                mock_batch.assert_not_called()
+            finally:
+                with coord_mod._inflight_lock:
+                    coord_mod._scraping_in_flight.discard(theater.id)
+
+    def test_cooldown_skips_unless_force(self, app, sample_theater):
+        from unittest.mock import patch
+        from datetime import datetime
+        import app.scrapers as coord_mod
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            theater.last_scraped_at = datetime.utcnow()
+            db.session.commit()
+            amc = self._amc_scraper()
+
+            # Within cooldown window → skipped
+            with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+                coord_mod.queue_theaters_for_scrape({theater.id}, force=False)
+            mock_batch.assert_not_called()
+
+            # force=True bypasses cooldown → scrape is attempted
+            with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+                coord_mod.queue_theaters_for_scrape({theater.id}, force=True)
+            mock_batch.assert_called_once()
+
+    def test_semaphore_timeout_clears_inflight_and_skips_last_scraped(self, app, sample_theater):
+        from unittest.mock import patch, MagicMock
+        import threading
+        import app.scrapers as coord_mod
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            theater.last_scraped_at = None
+            db.session.commit()
+
+            mock_sem = MagicMock(spec=threading.Semaphore)
+            mock_sem.acquire.return_value = False
+
+            with patch("app.scrapers._get_semaphore", return_value=mock_sem):
+                coord_mod.queue_theaters_for_scrape({theater.id})
+
+            db.session.refresh(theater)
+            assert theater.last_scraped_at is None
+            with coord_mod._inflight_lock:
+                assert theater.id not in coord_mod._scraping_in_flight
+
+
 # ── TMDB module ───────────────────────────────────────────────────────
 
 
