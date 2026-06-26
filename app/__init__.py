@@ -566,6 +566,32 @@ def _run_migrations():
             "ALTER TABLE users ADD COLUMN last_login_at DATETIME",
             None,
         ),
+        (
+            "description", "theaters",
+            "ALTER TABLE theaters ADD COLUMN description TEXT",
+            None,
+        ),
+        (
+            "amenities", "theaters",
+            "ALTER TABLE theaters ADD COLUMN amenities TEXT",
+            None,
+        ),
+        (
+            "seating_capacity", "theaters",
+            "ALTER TABLE theaters ADD COLUMN seating_capacity INTEGER",
+            None,
+        ),
+        # On-demand showtime fetch
+        (
+            "on_demand", "showtimes",
+            "ALTER TABLE showtimes ADD COLUMN on_demand BOOLEAN DEFAULT 0",
+            "UPDATE showtimes SET on_demand = 0 WHERE on_demand IS NULL",
+        ),
+        (
+            "on_demand_fetched_at", "theaters",
+            "ALTER TABLE theaters ADD COLUMN on_demand_fetched_at DATETIME",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:
@@ -763,6 +789,8 @@ def _seed_default_settings():
         ("alert_interval_minutes", "15"),
         # Session security
         ("session_timeout_minutes", "60"),
+        # On-demand showtime fetch cooldown (hours)
+        ("on_demand_fetch_cooldown_hours", "24"),
     ]
     for key, default_value in defaults:
         if not Settings.query.filter_by(key=key).first():

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import requests
 
 from app import db
-from app.scrapers.base import BaseScraper, _get_active_targets
+from app.scrapers.base import BaseScraper, _get_active_targets, _scrape_ctx
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,8 @@ def _parse_shows(
 ) -> list[Showtime]:
     """Parse Regal show entries and return newly inserted Showtime rows."""
     new_showtimes: list[Showtime] = []
+    on_demand = getattr(_scrape_ctx, "on_demand", False)
+
     for day_entry in shows:
         show_date = (day_entry.get("AdvertiseShowDate") or "")[:10]
         for film in day_entry.get("Film", []):
@@ -66,7 +68,7 @@ def _parse_shows(
 
             for perf in film.get("Performances", []):
                 attrs = perf.get("PerformanceAttributes") or []
-                if not any("IMAX" in a.upper() for a in attrs):
+                if not on_demand and not any("IMAX" in a.upper() for a in attrs):
                     continue
 
                 show_dt = _parse_utc_showtime(perf.get("UtcShowTime", ""))
@@ -82,6 +84,10 @@ def _parse_shows(
                         f"/{master_code}/{theatre_code}/{perf_id}/{api_date}"
                     )
 
+                # Use first IMAX attr if present, else first attr, else "Standard"
+                imax_attrs = [a for a in attrs if "IMAX" in a.upper()]
+                format_type = (imax_attrs or attrs or ["Standard"])[0]
+
                 stop_sales = perf.get("StopSales", False)
                 showtime, is_new = scraper.upsert_showtime(
                     theater,
@@ -89,7 +95,7 @@ def _parse_shows(
                     show_dt,
                     tickets_available=not stop_sales,
                     tickets_url=tickets_url,
-                    format_type="IMAX",
+                    format_type=format_type,
                 )
                 if is_new:
                     new_showtimes.append(showtime)
@@ -130,6 +136,7 @@ class RegalScraper(BaseScraper):
     """
 
     chain_name = "Regal"
+    health_website = "regmovies.com"
 
     def scrape_all(self) -> list[Showtime]:
         """Share one Playwright browser across all Regal theater scrapes."""

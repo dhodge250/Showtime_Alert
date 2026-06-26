@@ -3,15 +3,61 @@
 
 {% block content %}
 <div class="page-header">
-  <h1>My Movies</h1>
-  <p class="subtitle">Movies you have active alerts for</p>
+  <div class="page-header-row">
+    <div>
+      <h1>My Movies</h1>
+      <p class="subtitle" id="movies-subtitle">
+        {%- if movie_list -%}
+          {{ movie_list | length }} movie{{ 's' if movie_list | length != 1 else '' }} tracked
+        {%- else -%}
+          Movies you have active alerts for
+        {%- endif -%}
+      </p>
+    </div>
+  </div>
 </div>
 
 {% if movie_list %}
-<div class="movie-cards">
+{# ── Filter / Sort toolbar ─────────────────────────────────────────────── #}
+<div class="movies-toolbar">
+  <div class="movies-toolbar-search">
+    <svg class="movies-search-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M13 13l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+    <input type="search" id="movies-search" class="movies-search-input"
+           placeholder="Search movies…" autocomplete="off" spellcheck="false">
+  </div>
+
+  <div class="movies-toolbar-controls">
+    <label class="movies-ctrl-label" for="movies-sort">Sort</label>
+    <select id="movies-sort" class="movies-sort-select">
+      <option value="next-asc">Next showtime</option>
+      <option value="title-asc">Title A → Z</option>
+      <option value="title-desc">Title Z → A</option>
+      <option value="release-desc">Release — newest</option>
+      <option value="release-asc">Release — oldest</option>
+    </select>
+
+    <span class="movies-ctrl-label movies-ctrl-label-page">Per page</span>
+    <div class="movies-perpage-group" role="group" aria-label="Movies per page">
+      {%- set opts = [25, 50, 100] -%}
+      {%- for n in opts -%}
+      <button type="button" class="movies-perpage-btn{% if n == movies_per_page %} active{% endif %}"
+              data-n="{{ n }}">{{ n }}</button>
+      {%- endfor -%}
+    </div>
+  </div>
+</div>
+
+{# ── Movie grid ────────────────────────────────────────────────────────── #}
+<div class="movie-cards" id="movies-grid">
   {% for item in movie_list %}
   {% set m = item.movie %}
-  <a href="{{ url_for('main.movie_detail', movie_id=m.id) }}" class="movie-card">
+  <a href="{{ url_for('main.movie_detail', movie_id=m.id) }}" class="movie-card"
+     data-title="{{ m.title | lower }}"
+     data-release="{{ m.release_date.isoformat() if m.release_date else '' }}"
+     data-next="{{ item.next_dt.isoformat() if item.next_dt else '9999-12-31' }}">
     {% if m.poster_url %}
     <img class="movie-poster" src="{{ m.poster_url }}" alt="{{ m.title }} poster" loading="lazy">
     {% else %}
@@ -26,7 +72,9 @@
         {%- if m.runtime_minutes %} &middot; {{ m.runtime_minutes }} min{% endif %}
       </div>
       <div class="movie-stats">
+        {% if item.alert_count %}
         <span class="movie-stat"><strong>{{ item.alert_count }}</strong> alert{{ 's' if item.alert_count != 1 else '' }}</span>
+        {% endif %}
         {% if item.theater_count %}
         <span class="movie-stat"><strong>{{ item.theater_count }}</strong> theater{{ 's' if item.theater_count != 1 else '' }}</span>
         {% endif %}
@@ -42,6 +90,24 @@
   </a>
   {% endfor %}
 </div>
+
+{# ── Empty-filter state ────────────────────────────────────────────────── #}
+<div id="movies-empty-filter" class="card" style="display:none;text-align:center;padding:40px 24px">
+  <p style="font-size:32px;margin:0 0 12px">&#127916;</p>
+  <h3 style="margin:0 0 6px">No movies match</h3>
+  <p class="text-muted" style="margin:0">Try a different search term.</p>
+</div>
+
+{# ── Pagination ────────────────────────────────────────────────────────── #}
+<div class="movies-pager" id="movies-pager" style="display:none">
+  <span class="movies-pager-info" id="movies-pager-info"></span>
+  <span class="st-page-controls">
+    <button class="btn btn-ghost btn-sm" id="movies-prev">← Prev</button>
+    <span class="movies-pager-label" id="movies-pager-label"></span>
+    <button class="btn btn-ghost btn-sm" id="movies-next">Next →</button>
+  </span>
+</div>
+
 {% else %}
 <section class="card" style="text-align:center;padding:48px 24px">
   <p style="font-size:48px;margin:0 0 16px">&#127916;</p>
@@ -52,4 +118,119 @@
   <a href="{{ url_for('main.alerts') }}" class="btn btn-primary">Go to Alerts</a>
 </section>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var grid       = document.getElementById('movies-grid');
+  if (!grid) return;
+
+  var allCards   = Array.from(grid.querySelectorAll('.movie-card'));
+  var searchEl   = document.getElementById('movies-search');
+  var sortEl     = document.getElementById('movies-sort');
+  var pager      = document.getElementById('movies-pager');
+  var pagerInfo  = document.getElementById('movies-pager-info');
+  var pagerLabel = document.getElementById('movies-pager-label');
+  var prevBtn    = document.getElementById('movies-prev');
+  var nextBtn    = document.getElementById('movies-next');
+  var emptyEl    = document.getElementById('movies-empty-filter');
+  var subtitle   = document.getElementById('movies-subtitle');
+
+  var PAGE       = {{ movies_per_page }};
+  var page       = 0;
+  var query      = '';
+  var sortKey    = 'next-asc';
+  var visible    = allCards.slice();
+
+  // ── Per-page buttons ──────────────────────────────────────────────────
+  document.querySelectorAll('.movies-perpage-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      PAGE = parseInt(btn.dataset.n, 10);
+      page = 0;
+      document.querySelectorAll('.movies-perpage-btn').forEach(function (b) {
+        b.classList.toggle('active', b === btn);
+      });
+      render();
+    });
+  });
+
+  // ── Search ────────────────────────────────────────────────────────────
+  searchEl.addEventListener('input', function () {
+    query = searchEl.value.trim().toLowerCase();
+    page  = 0;
+    filter();
+  });
+
+  // ── Sort ──────────────────────────────────────────────────────────────
+  sortEl.addEventListener('change', function () {
+    sortKey = sortEl.value;
+    page    = 0;
+    sort();
+  });
+
+  function filter() {
+    visible = allCards.filter(function (c) {
+      return !query || c.dataset.title.indexOf(query) !== -1;
+    });
+    sort();
+  }
+
+  function sort() {
+    visible.sort(function (a, b) {
+      if (sortKey === 'title-asc')  return a.dataset.title < b.dataset.title ? -1 : a.dataset.title > b.dataset.title ? 1 : 0;
+      if (sortKey === 'title-desc') return a.dataset.title > b.dataset.title ? -1 : a.dataset.title < b.dataset.title ? 1 : 0;
+      if (sortKey === 'release-desc' || sortKey === 'release-asc') {
+        var def = sortKey === 'release-asc' ? '9999-12-31' : '0000-01-01';
+        var ra  = a.dataset.release || def;
+        var rb  = b.dataset.release || def;
+        var cmp = ra < rb ? -1 : ra > rb ? 1 : 0;
+        return sortKey === 'release-asc' ? cmp : -cmp;
+      }
+      // next-asc (default): soonest first, no-showtime last
+      var na = a.dataset.next, nb = b.dataset.next;
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    });
+    render();
+  }
+
+  function render() {
+    var total = visible.length;
+    var start = page * PAGE;
+    var end   = Math.min(start + PAGE, total);
+
+    // Single pass: show cards in the current page slice, hide everything else.
+    // Using allCards (not visible) ensures cards dropped by a filter are hidden.
+    var slice = visible.slice(start, end);
+    var sliceSet = new Set(slice);
+    allCards.forEach(function (c) { c.style.display = sliceSet.has(c) ? '' : 'none'; });
+    slice.forEach(function (c) { grid.appendChild(c); });
+
+    // Empty-filter state
+    if (emptyEl) emptyEl.style.display = total === 0 ? '' : 'none';
+
+    // Subtitle count
+    if (subtitle) {
+      var shown = total;
+      subtitle.textContent = shown + ' movie' + (shown !== 1 ? 's' : '') + (query ? ' found' : ' tracked');
+    }
+
+    // Pagination bar
+    if (!pager) return;
+    if (total <= PAGE) { pager.style.display = 'none'; return; }
+    pager.style.display = '';
+    var pages = Math.ceil(total / PAGE);
+    pagerInfo.textContent  = (start + 1) + '–' + end + ' of ' + total;
+    pagerLabel.textContent = (page + 1) + ' / ' + pages;
+    prevBtn.disabled = page === 0;
+    nextBtn.disabled = page >= pages - 1;
+  }
+
+  prevBtn.addEventListener('click', function () { if (page > 0) { page--; render(); window.scrollTo(0,0); } });
+  nextBtn.addEventListener('click', function () { page++; render(); window.scrollTo(0,0); });
+
+  // Initial render
+  filter();
+})();
+</script>
 {% endblock %}
