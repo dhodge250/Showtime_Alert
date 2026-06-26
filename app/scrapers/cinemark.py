@@ -85,6 +85,7 @@ def _parse_imax_showtimes(
     """Extract showtimes from a Cinemark HTML page or API fragment."""
     new_showtimes: list[Showtime] = []
     on_demand = getattr(_scrape_ctx, "on_demand", False)
+    all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
 
     for block in soup.select("div.showtimeMovieBlock"):
         title_el = block.find("h3") or block.find("h2")
@@ -105,7 +106,7 @@ def _parse_imax_showtimes(
 
         for show_div in block.select("div.showtime"):
             ptype = show_div.get("data-print-type-name", "")
-            if not on_demand and "IMAX" not in ptype.upper():
+            if not all_formats and "IMAX" not in ptype.upper():
                 continue
 
             # Past showtimes render as <p class="off past"> with no link

@@ -79,6 +79,7 @@ def _parse_shows(
     """Parse Regal show entries and return newly inserted Showtime rows."""
     new_showtimes: list[Showtime] = []
     on_demand = getattr(_scrape_ctx, "on_demand", False)
+    all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
 
     for day_entry in shows:
         show_date = (day_entry.get("AdvertiseShowDate") or "")[:10]
@@ -94,7 +95,7 @@ def _parse_shows(
 
             for perf in film.get("Performances", []):
                 attrs = perf.get("PerformanceAttributes") or []
-                if not on_demand and not any("IMAX" in a.upper() for a in attrs):
+                if not all_formats and not any("IMAX" in a.upper() for a in attrs):
                     continue
 
                 show_dt = _parse_utc_showtime(perf.get("UtcShowTime", ""))
@@ -293,9 +294,16 @@ class RegalScraper(BaseScraper):
             theaters_list = (
                 props.get("theaters")
                 or props.get("allTheaters")
+                or props.get("theatres")
+                or props.get("allTheatres")
                 or []
             )
             if not theaters_list:
+                logger.warning(
+                    "Regal: theaters listing page has no theater list; "
+                    "pageProps keys: %s",
+                    list(props.keys())[:20],
+                )
                 return ""
 
             # Match by word overlap between the stored name and the Regal name

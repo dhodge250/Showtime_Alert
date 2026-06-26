@@ -37,6 +37,8 @@ def _showtimes_url(website: str) -> str:
 def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: "AMCScraper") -> list[Showtime]:
     new_showtimes: list[Showtime] = []
     on_demand = getattr(_scrape_ctx, "on_demand", False)
+    # Browse-schedule scrapes collect all formats for discovery, same as on-demand
+    all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
 
     for section in soup.find_all("section", attrs={"aria-label": _SECTION_ARIA}):
         title = section["aria-label"][len(_SECTION_PREFIX):]
@@ -50,10 +52,10 @@ def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: 
         if not scraper._movie_wanted(movie, movie_ids):
             continue
 
-        # In on-demand mode scrape all format sections; otherwise only IMAX
+        # In all-formats mode scrape every format section; otherwise only IMAX
         format_lis = (
             section.find_all("li", attrs={"aria-label": True})
-            if on_demand
+            if all_formats
             else [section.find("li", attrs={"aria-label": _IMAX_ARIA})]
         )
 
@@ -61,10 +63,10 @@ def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: 
             if not format_li:
                 continue
             # In alert mode we're always in the IMAX li → hardcode "IMAX".
-            # In on-demand mode normalize the aria-label to a clean format name.
+            # In all-formats mode normalize the aria-label to a clean format name.
             format_type = (
                 _amc_format_label(format_li.get("aria-label", "IMAX"))
-                if on_demand else "IMAX"
+                if all_formats else "IMAX"
             )
 
             showtime_ul = format_li.find("ul", attrs={"aria-label": "Showtime Group Results"})
