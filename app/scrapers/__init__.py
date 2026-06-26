@@ -42,45 +42,81 @@ ALL_SCRAPERS: list[BaseScraper] = [
 # ---------------------------------------------------------------------------
 
 # Theater IDs currently being scraped by any trigger (scheduled, on-demand,
-# health check). Checked before dispatching to prevent concurrent duplicate
-# scrapes of the same theater.
+# health check).  All reads and compound check/add/discard operations must
+# hold _inflight_lock to prevent races between concurrent callers.
 _scraping_in_flight: set[int] = set()
+_inflight_lock = threading.Lock()
 
 # Chain names that require a Playwright browser (expensive — RAM + CPU).
 PLAYWRIGHT_CHAIN_NAMES: frozenset[str] = frozenset(["AMC", "Regal", "TCL"])
 
-# Semaphores are initialised lazily on first use so Settings are available.
+# Semaphores are pre-warmed by initialize_coordinator() at startup so that
+# background threads never need an app context to call _get_semaphore().
+# If somehow called before initialisation, _get_semaphore() falls back to
+# hardcoded defaults without touching the DB.
 _playwright_semaphore: threading.Semaphore | None = None
 _http_semaphore: threading.Semaphore | None = None
 _semaphore_lock = threading.Lock()
 
 
+def initialize_coordinator() -> None:
+    """
+    Pre-warm coordinator semaphores from Settings.
+
+    Must be called once at startup inside an active app context (e.g. from
+    start_scheduler).  After this, _get_semaphore() is safe to call from any
+    background thread without requiring an app context.
+    """
+    global _playwright_semaphore, _http_semaphore  # noqa: PLW0603
+    from app.models import Settings
+    with _semaphore_lock:
+        pw_s = Settings.query.filter_by(key="playwright_concurrency").first()
+        try:
+            pw_cap = max(1, int(pw_s.value)) if pw_s and pw_s.value else 2
+        except (ValueError, TypeError):
+            pw_cap = 2
+
+        http_s = Settings.query.filter_by(key="http_concurrency").first()
+        try:
+            http_cap = max(1, int(http_s.value)) if http_s and http_s.value else 5
+        except (ValueError, TypeError):
+            http_cap = 5
+
+        _playwright_semaphore = threading.Semaphore(pw_cap)
+        _http_semaphore = threading.Semaphore(http_cap)
+        logger.debug(
+            "Coordinator semaphores initialised: playwright=%d, http=%d",
+            pw_cap, http_cap,
+        )
+
+
 def _get_semaphore(chain_name: str) -> threading.Semaphore:
-    """Return the appropriate semaphore for this chain, initialising it once."""
+    """
+    Return the appropriate semaphore for this chain.
+
+    Safe to call from any thread.  initialize_coordinator() should have been
+    called at startup; if not, falls back to hardcoded defaults without
+    querying the DB so no app context is required.
+    """
     global _playwright_semaphore, _http_semaphore  # noqa: PLW0603
     if chain_name in PLAYWRIGHT_CHAIN_NAMES:
         if _playwright_semaphore is None:
             with _semaphore_lock:
                 if _playwright_semaphore is None:
-                    from app.models import Settings
-                    s = Settings.query.filter_by(key="playwright_concurrency").first()
-                    cap = max(1, int(s.value)) if s and s.value else 2
-                    _playwright_semaphore = threading.Semaphore(cap)
+                    _playwright_semaphore = threading.Semaphore(2)
         return _playwright_semaphore
     else:
         if _http_semaphore is None:
             with _semaphore_lock:
                 if _http_semaphore is None:
-                    from app.models import Settings
-                    s = Settings.query.filter_by(key="http_concurrency").first()
-                    cap = max(1, int(s.value)) if s and s.value else 5
-                    _http_semaphore = threading.Semaphore(cap)
+                    _http_semaphore = threading.Semaphore(5)
         return _http_semaphore
 
 
 def is_scraping_in_flight(theater_id: int) -> bool:
     """Return True if any trigger is currently scraping this theater."""
-    return theater_id in _scraping_in_flight
+    with _inflight_lock:
+        return theater_id in _scraping_in_flight
 
 
 def queue_theaters_for_scrape(
@@ -112,22 +148,29 @@ def queue_theaters_for_scrape(
     now = datetime.utcnow()
 
     s = Settings.query.filter_by(key="scrape_cooldown_minutes").first()
-    cooldown_min = int(s.value) if s and s.value else 30
+    try:
+        cooldown_min = max(0, int(s.value)) if s and s.value else 30
+    except (ValueError, TypeError):
+        cooldown_min = 30
 
     to_scrape: list = []
     skipped_inflight = 0
     skipped_cooldown = 0
 
-    for theater in theaters:
-        if theater.id in _scraping_in_flight:
-            skipped_inflight += 1
-            continue
-        if not force and theater.last_scraped_at is not None:
-            age_min = (now - theater.last_scraped_at).total_seconds() / 60
-            if age_min < cooldown_min:
-                skipped_cooldown += 1
+    # Atomically filter and claim theaters so no two concurrent callers can
+    # both pass the in-flight check and dispatch the same theater.
+    with _inflight_lock:
+        for theater in theaters:
+            if theater.id in _scraping_in_flight:
+                skipped_inflight += 1
                 continue
-        to_scrape.append(theater)
+            if not force and theater.last_scraped_at is not None:
+                age_min = (now - theater.last_scraped_at).total_seconds() / 60
+                if age_min < cooldown_min:
+                    skipped_cooldown += 1
+                    continue
+            _scraping_in_flight.add(theater.id)
+            to_scrape.append(theater)
 
     logger.info(
         "Coordinator: %d/%d theaters queued (in-flight=%d, cooldown=%d, force=%s)",
@@ -144,6 +187,8 @@ def queue_theaters_for_scrape(
         chain = theater.chain_name
         if chain not in scraper_by_chain:
             logger.debug("Coordinator: no scraper registered for chain '%s'", chain)
+            with _inflight_lock:
+                _scraping_in_flight.discard(theater.id)
             continue
         chain_groups.setdefault(chain, []).append(theater)
 
@@ -161,39 +206,38 @@ def queue_theaters_for_scrape(
         scraper = scraper_by_chain[chain_name]
         sem = _get_semaphore(chain_name)
 
-        # Mark in-flight before acquiring the semaphore so other triggers
-        # see these theaters as busy while this batch is waiting to start.
-        for t in chain_theaters:
-            _scraping_in_flight.add(t.id)
-
         acquired = sem.acquire(blocking=True, timeout=300)  # 5 min max wait
         if not acquired:
             logger.warning(
                 "Coordinator: semaphore timeout for chain '%s' — skipping %d theaters",
                 chain_name, len(chain_theaters),
             )
-            for t in chain_theaters:
-                _scraping_in_flight.discard(t.id)
+            with _inflight_lock:
+                for t in chain_theaters:
+                    _scraping_in_flight.discard(t.id)
             continue
 
         try:
             new = scraper.scrape_theaters_batch(chain_theaters, resolved_targets)
             all_new.extend(new)
+            # Only advance last_scraped_at when the batch completed without exception.
+            _update_last_scraped(chain_theaters)
         except Exception as exc:  # noqa: BLE001
             logger.error("Coordinator: chain '%s' batch failed: %s", chain_name, exc)
         finally:
             sem.release()
-            _finish_theater_scrapes(chain_theaters)
+            with _inflight_lock:
+                for t in chain_theaters:
+                    _scraping_in_flight.discard(t.id)
 
     return all_new
 
 
-def _finish_theater_scrapes(theaters: list) -> None:
-    """Update last_scraped_at and remove theaters from the in-flight set."""
+def _update_last_scraped(theaters: list) -> None:
+    """Update last_scraped_at for theaters whose batch completed without exception."""
     from app import db
     now = datetime.utcnow()
     for theater in theaters:
-        _scraping_in_flight.discard(theater.id)
         theater.last_scraped_at = now
     try:
         db.session.commit()
@@ -249,6 +293,7 @@ __all__ = [
     "cleanup_orphaned_movies",
     "ALL_SCRAPERS",
     "PLAYWRIGHT_CHAIN_NAMES",
+    "initialize_coordinator",
     "is_scraping_in_flight",
     "queue_theaters_for_scrape",
     "run_all_scrapers",

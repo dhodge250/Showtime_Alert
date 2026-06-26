@@ -68,13 +68,13 @@ def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
     The fetch acquires the coordinator semaphore and updates last_scraped_at.
     """
     import threading
-    from app.scrapers import _scraping_in_flight, _get_semaphore, PLAYWRIGHT_CHAIN_NAMES
+    from app.scrapers import _scraping_in_flight, _inflight_lock, _get_semaphore
 
-    if theater_id in _scraping_in_flight:
-        return False
-
-    # Mark in-flight before spawning so concurrent callers see it immediately.
-    _scraping_in_flight.add(theater_id)
+    with _inflight_lock:
+        if theater_id in _scraping_in_flight:
+            return False
+        # Claim in-flight atomically so no concurrent caller can also claim it.
+        _scraping_in_flight.add(theater_id)
 
     def _run():
         try:
@@ -91,7 +91,8 @@ def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
             finally:
                 sem.release()
         finally:
-            _scraping_in_flight.discard(theater_id)
+            with _inflight_lock:
+                _scraping_in_flight.discard(theater_id)
 
     threading.Thread(
         target=_run,
@@ -141,6 +142,8 @@ def trigger_single_health_check(scraper, app) -> None:
     from app.scrapers.health import run_health_check
 
     def _run():
+        # _get_semaphore is safe to call here — it does not require an app
+        # context after initialize_coordinator() ran at startup.
         sem = _get_semaphore(scraper.chain_name)
         acquired = sem.acquire(blocking=True, timeout=120)
         if not acquired:
@@ -293,11 +296,22 @@ def _health_check_job(app):
                 _health_check_state["chain_name"] = scraper.chain_name
                 sem = _get_semaphore(scraper.chain_name)
                 acquired = sem.acquire(blocking=True, timeout=120)
+                if not acquired:
+                    logger.warning(
+                        "Health check: semaphore timeout for %s — skipping",
+                        scraper.chain_name,
+                    )
+                    _health_check_state["completed"] += 1
+                    results.append({
+                        "status": "error",
+                        "chain_name": scraper.chain_name,
+                        "error_summary": "Skipped — semaphore timeout",
+                    })
+                    continue
                 try:
                     result = run_health_check(scraper)
                 finally:
-                    if acquired:
-                        sem.release()
+                    sem.release()
                 _health_check_state["completed"] += 1
                 results.append(result)
                 logger.info(
@@ -405,6 +419,12 @@ def start_scheduler(app) -> None:
     hc_dow  = _setting_str("health_check_day_of_week", "0")
     hc_dom  = _setting_str("health_check_day_of_month", "1")
     hc_tz   = _setting_str("health_check_timezone", "UTC")
+
+    # Pre-warm coordinator semaphores from Settings while we still have an app
+    # context.  After this, _get_semaphore() is safe for any background thread.
+    with app.app_context():
+        from app.scrapers import initialize_coordinator
+        initialize_coordinator()
 
     _scheduler = BackgroundScheduler()
 
