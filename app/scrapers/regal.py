@@ -27,6 +27,32 @@ def _theatre_code_from_url(website: str) -> str:
     return m.group(1) if m else ""
 
 
+def _theatre_code_from_nd(nd: dict, website: str) -> str:
+    """Search __NEXT_DATA__ in multiple locations for a 4-digit theatre code.
+
+    Regal's Next.js structure varies by page type; theatreCode may live
+    directly in pageProps or nested inside a theater/venue object.
+    """
+    props = (nd.get("props") or {}).get("pageProps") or {}
+
+    # 1. Direct key (most theater pages)
+    code = str(props.get("theatreCode") or "")
+    if code.isdigit():
+        return code
+
+    # 2. Nested under common object keys
+    for obj_key in ("theater", "theatre", "theatreData", "theaterData", "venue"):
+        obj = props.get(obj_key) or {}
+        if isinstance(obj, dict):
+            for code_key in ("theatreCode", "code", "id"):
+                val = str(obj.get(code_key) or "")
+                if val.isdigit() and len(val) <= 6:
+                    return val
+
+    # 3. Fall back to extracting from the URL slug
+    return _theatre_code_from_url(website)
+
+
 def _parse_utc_showtime(utc_str: str) -> datetime | None:
     """
     Parse a Regal UtcShowTime string like '2026-06-16T16:00:00.000Z'
@@ -192,37 +218,112 @@ class RegalScraper(BaseScraper):
         try:
             page.goto(theater.website, wait_until="domcontentloaded", timeout=30_000)
             page.wait_for_timeout(_WAIT_MS)
-
             nd = page.evaluate("window.__NEXT_DATA__")
-            if not nd:
-                logger.warning("Regal: no __NEXT_DATA__ on %s", theater.website)
-                return []
+            pw_cookies = context.cookies()
+        finally:
+            page.close()
 
-            props = nd.get("props", {}).get("pageProps", {})
-            theatre_code = str(
-                props.get("theatreCode") or _theatre_code_from_url(theater.website)
+        theatre_code = ""
+        all_shows: list = []
+        dates_with_shows: list = []
+
+        if nd:
+            theatre_code = _theatre_code_from_nd(nd, theater.website)
+            props = (nd.get("props") or {}).get("pageProps") or {}
+            all_shows = list(props.get("showtimes") or [])
+            dates_with_shows = props.get("datesWithShows") or []
+        else:
+            logger.warning("Regal: no __NEXT_DATA__ on %s", theater.website)
+
+        # Fallback: when website is not a regmovies.com URL (e.g. a mall or third-party
+        # site) or the code isn't in __NEXT_DATA__, search the Regal theaters listing.
+        if not theatre_code:
+            logger.info(
+                "Regal: theatreCode not found for %s via website — searching regmovies.com",
+                theater.name,
             )
+            theatre_code = self._find_code_on_regal_site(theater, context)
             if not theatre_code:
                 logger.warning(
                     "Regal: could not determine theatreCode for %s", theater.name
                 )
                 return []
+            # We have the code now but no showtimes from the theater page;
+            # we'll fetch everything via the requests API below.
+            all_shows = []
+            dates_with_shows = []
 
-            all_shows: list = list(props.get("showtimes") or [])
-            dates_with_shows: list = props.get("datesWithShows") or []
-
-            # Extract CF cookies before closing the page
-            pw_cookies = context.cookies()
-        finally:
-            page.close()
-
-        # Hand cookies to requests — all date fetches happen outside the browser
+        # Hand Playwright CF cookies to requests for all subsequent API calls.
         session = _make_session(pw_cookies)
-        for date_iso in [d[:10] for d in dates_with_shows[1:]]:
-            shows = self._fetch_date(session, theatre_code, date_iso)
-            all_shows.extend(shows)
+
+        # If we have dates_with_shows, use them; otherwise fetch via the first
+        # API call which returns available dates in the JSON.
+        if dates_with_shows:
+            for date_iso in [d[:10] for d in dates_with_shows[1:]]:
+                shows = self._fetch_date(session, theatre_code, date_iso)
+                all_shows.extend(shows)
+        else:
+            # No dates from __NEXT_DATA__ — pull directly from the API
+            from datetime import date, timedelta
+            today = date.today()
+            for offset in range(14):
+                d = (today + timedelta(days=offset)).isoformat()
+                shows = self._fetch_date(session, theatre_code, d)
+                all_shows.extend(shows)
 
         return _parse_shows(self, theater, movie_ids, all_shows, theatre_code)
+
+    def _find_code_on_regal_site(self, theater: Theater, context) -> str:
+        """Navigate to regmovies.com/theaters and search __NEXT_DATA__ for this theater.
+
+        Used when the theater's stored website URL is not on regmovies.com (mall
+        sites, third-party listing pages, etc.) or when the theater page loads but
+        doesn't expose theatreCode in its __NEXT_DATA__.
+        """
+        page = context.new_page()
+        try:
+            page.goto(f"{_BASE_URL}/theaters", wait_until="domcontentloaded", timeout=30_000)
+            page.wait_for_timeout(_WAIT_MS)
+            nd = page.evaluate("window.__NEXT_DATA__")
+            if not nd:
+                return ""
+
+            props = (nd.get("props") or {}).get("pageProps") or {}
+            # Regal's theaters listing page exposes a theaters array in pageProps
+            theaters_list = (
+                props.get("theaters")
+                or props.get("allTheaters")
+                or []
+            )
+            if not theaters_list:
+                return ""
+
+            # Match by word overlap between the stored name and the Regal name
+            query_words = set(re.sub(r"[^a-z0-9]", " ", theater.name.lower()).split())
+            query_words -= {"imax", "and", "the", "regal", "&"}
+
+            for t in theaters_list:
+                t_name = (
+                    t.get("name") or t.get("theatreName") or t.get("displayName") or ""
+                )
+                t_words = set(re.sub(r"[^a-z0-9]", " ", t_name.lower()).split())
+                t_words -= {"imax", "and", "the", "regal", "&"}
+                # Require at least 2 meaningful words in common
+                if len(query_words & t_words) >= 2:
+                    code = str(
+                        t.get("theatreCode") or t.get("code") or t.get("id") or ""
+                    )
+                    if code.isdigit():
+                        logger.info(
+                            "Regal: matched '%s' → '%s' (code %s)",
+                            theater.name, t_name, code,
+                        )
+                        return code
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Regal: theaters listing search failed: %s", exc)
+        finally:
+            page.close()
+        return ""
 
     def _fetch_date(
         self, session: requests.Session, theatre_code: str, date_iso: str
