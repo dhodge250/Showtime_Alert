@@ -1,10 +1,12 @@
 """
 Base scraper class, shared helpers, and maintenance utilities.
 """
+import contextlib
 import json
 import logging
 import math
 import re
+import threading
 from datetime import date, datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -16,6 +18,81 @@ from app import db
 from app.models import AlertMovie, AlertPreference, Movie, Showtime, Theater, User
 
 logger = logging.getLogger(__name__)
+
+# Thread-local flag: set to True inside on_demand_scrape() context manager so
+# upsert_showtime() marks new rows as on_demand without changing the scraper API.
+_scrape_ctx = threading.local()
+
+# ---------------------------------------------------------------------------
+# Movie title normalisation for TMDB matching
+# ---------------------------------------------------------------------------
+
+# Suffixes theaters append that are NOT part of the canonical movie title.
+_TITLE_SUFFIX_RE = re.compile(
+    r"""
+    \s*
+    (?:
+        # --- Format markers ---
+        [-–]\s*imax\b
+    |   \bin\s+imax(?:\s+(?:3d|laser(?:\s+with\s+laser)?))?
+    |   \bimax(?:\s+(?:3d|laser(?:\s+with\s+laser)?))?
+    |   \b3d\b
+    |   \b4dx\b
+    |   \bscreenx\b
+    |   \bdolby\s+(?:cinema|atmos|vision)\b
+    |   \(\d{4}\)                                 # trailing year "(2025)"
+
+        # --- Accessibility / language variants ---
+        # Matches: (Open Cap/Eng Sub), (Sensory), (Sensory Friendly), (Hindi), (CC), etc.
+    |   \([^)]*\b(?:open\s+cap|closed\s+cap|eng(?:lish)?\s+sub|sensory(?:\s+friendly)?
+                  |dubbed?|hindi|sub(?:title)?s?|cc\b|caption(?:ed)?
+                  |audio\s+desc(?:ription)?)\b[^)]*\)
+
+        # --- Event / screening qualifiers ---
+    |   [-–]\s*(?:Early\s+Access|Fan\s+First\s+Screen\w*|Ghibli\s+\d{2,4})
+    |   \bFan\s+First\s+Screen\w*
+    |   \bFirst\s+Show\s+Events?
+    |   \bFan\s+Events?
+    |   \bEarly\s+Access\b
+
+        # --- Anniversary / special event ---
+        # Matches: "40th Anniv - Ghibli 2026", "85th Anniversary", "25th Anniv."
+    |   \d+(?:st|nd|rd|th)\s+Anniv(?:ersary|\.)?(?:\s*[-–].*)?
+    |   [-–]\s*\d+(?:st|nd|rd|th)\s+Anniversary
+    )
+    \s*$
+    """,
+    re.I | re.VERBOSE,
+)
+
+# Prefixes that are event/format labels, not part of the canonical title.
+# "(IMAX) Title", "3D Title", "Pride: Title", "SMX26: Title", "Fangoria: Title"
+_TITLE_PREFIX_RE = re.compile(
+    r"^\([^)]+\)\s+"                                       # (FORMAT) Title
+    r"|^3[Dd]\s+"                                          # 3D Title
+    r"|^(?:Pride|SMX\d+|Fangoria|Sensory.Sensitive):\s*"  # event series
+, re.I)
+
+
+def _clean_title_for_tmdb(title: str) -> str:
+    """Strip common theater-added format markers to get a searchable title."""
+    cleaned = title.strip()
+    cleaned = _TITLE_PREFIX_RE.sub("", cleaned)
+    prev = None
+    while prev != cleaned:
+        prev = cleaned
+        cleaned = _TITLE_SUFFIX_RE.sub("", cleaned).strip()
+    return cleaned
+
+
+@contextlib.contextmanager
+def on_demand_scrape():
+    """Mark all upsert_showtime calls on this thread as on_demand=True."""
+    _scrape_ctx.on_demand = True
+    try:
+        yield
+    finally:
+        _scrape_ctx.on_demand = False
 
 # ---------------------------------------------------------------------------
 # Theater timezone helpers
@@ -227,31 +304,75 @@ class BaseScraper:
         """
         Return existing movie by title (case-insensitive) or create a new one.
 
-        Before creating a new row, TMDB is queried to resolve the canonical
-        tmdb_id for the title.  If an existing Movie already has that id (e.g.
-        "Star Wars: The Mandalorian and Grogu" vs "The Mandalorian and Grogu"),
-        the existing row is returned instead of creating a duplicate.
+        Lookup order:
+          1. Exact ilike match on raw title.
+          2. Exact ilike match on cleaned title (format suffixes stripped).
+          3. TMDB lookup (raw title, then cleaned) → match by tmdb_id or
+             canonical title; opportunistically fix messy stored titles.
+          4. Create with canonical TMDB title (or cleaned, or raw as fallback).
         """
+        # 1. Exact match on raw title
         movie = Movie.query.filter(Movie.title.ilike(title)).first()
         if movie:
+            # Re-enrich un-enriched stubs so the title gets fixed on next scrape
+            if not movie.tmdb_id:
+                _enrich_movie_from_tmdb(movie)
             return movie
 
-        # Pre-check TMDB to catch title-format mismatches before creating a stub.
+        # 2. Exact match on cleaned title
+        cleaned = _clean_title_for_tmdb(title)
+        if cleaned != title:
+            movie = Movie.query.filter(Movie.title.ilike(cleaned)).first()
+            if movie:
+                if not movie.tmdb_id:
+                    _enrich_movie_from_tmdb(movie)
+                return movie
+
+        # 3. TMDB lookup — raw title first, then cleaned
+        tmdb_result = None
+        tmdb_tried = False
         try:
             from app.tmdb import find_movie_by_title, is_configured
             if is_configured():
-                result = find_movie_by_title(title)
-                if result and result.get("tmdb_id"):
-                    existing = Movie.query.filter_by(tmdb_id=result["tmdb_id"]).first()
-                    if existing:
-                        return existing
+                tmdb_tried = True
+                tmdb_result = find_movie_by_title(title)
+                if not tmdb_result and cleaned != title:
+                    tmdb_result = find_movie_by_title(cleaned)
         except Exception:
             pass
 
-        movie = Movie(title=title, **kwargs)
+        if tmdb_result and tmdb_result.get("tmdb_id"):
+            # Match by tmdb_id — most reliable dedup path
+            existing = Movie.query.filter_by(tmdb_id=tmdb_result["tmdb_id"]).first()
+            if existing:
+                # Opportunistically update a messy stored title to canonical
+                canonical = tmdb_result.get("title") or ""
+                if canonical and existing.title != canonical:
+                    conflict = Movie.query.filter(
+                        Movie.title.ilike(canonical), Movie.id != existing.id
+                    ).first()
+                    if not conflict:
+                        existing.title = canonical
+                return existing
+
+            # Match by canonical TMDB title (avoid creating a near-duplicate)
+            canonical = tmdb_result.get("title") or ""
+            if canonical:
+                existing = Movie.query.filter(Movie.title.ilike(canonical)).first()
+                if existing:
+                    return existing
+
+        # 4. Create new movie — prefer canonical TMDB title > cleaned > raw
+        store_title = (tmdb_result or {}).get("title") or cleaned or title
+        movie = Movie(title=store_title, **kwargs)
         db.session.add(movie)
         db.session.flush()
-        _enrich_movie_from_tmdb(movie)
+
+        if tmdb_result:
+            _apply_tmdb_to_movie(movie, tmdb_result)
+        elif not tmdb_tried:
+            # TMDB was not configured or raised an exception in step 3 — try now
+            _enrich_movie_from_tmdb(movie)
         return movie
 
     def upsert_showtime(
@@ -264,6 +385,8 @@ class BaseScraper:
         format_type: str = "IMAX",
     ) -> tuple[Showtime, bool]:
         """Insert or update a showtime row. Returns (showtime, is_new)."""
+        on_demand = getattr(_scrape_ctx, "on_demand", False)
+
         showtime = Showtime.query.filter_by(
             theater_id=theater.id,
             movie_id=movie.id,
@@ -273,6 +396,9 @@ class BaseScraper:
         if showtime:
             showtime.tickets_available = tickets_available
             showtime.last_checked = datetime.now(timezone.utc)
+            # Alert showtimes (on_demand=False) are never downgraded by an on-demand fetch.
+            if not on_demand:
+                showtime.on_demand = False
             return showtime, False
 
         showtime = Showtime(
@@ -282,6 +408,7 @@ class BaseScraper:
             tickets_available=tickets_available,
             tickets_url=tickets_url,
             format_type=format_type,
+            on_demand=on_demand,
         )
         db.session.add(showtime)
         return showtime, True
@@ -347,47 +474,118 @@ class BaseScraper:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _apply_tmdb_to_movie(movie: Movie, result: dict) -> None:
+    """Write a TMDB result dict onto a Movie row (tmdb_id, poster_url, release_date)."""
+    movie.tmdb_id    = result["tmdb_id"]
+    movie.poster_url = result.get("poster_url") or getattr(movie, "image_url", "") or ""
+    release_date_raw = result.get("release_date")
+    if release_date_raw:
+        try:
+            movie.release_date = date.fromisoformat(release_date_raw)
+        except (ValueError, TypeError):
+            movie.release_date = None
+    else:
+        movie.release_date = None
+
+
 def _enrich_movie_from_tmdb(movie: Movie) -> None:
     """
-    Attempt to populate a freshly-created Movie row with TMDB metadata.
+    Attempt to populate a Movie row with TMDB metadata.
 
-    Silently does nothing if TMDB is not configured, the title yields no
-    results, or the row already has a tmdb_id.
+    Also updates movie.title to the canonical TMDB title when the stored title
+    differs (e.g. theater added " in IMAX" or used different punctuation).
+    Silently does nothing if TMDB is not configured or no results are found.
     """
     if movie.tmdb_id:
-        return  # already enriched
+        return
 
     try:
         from app.tmdb import find_movie_by_title, is_configured
         if not is_configured():
             return
 
+        # Try stored title first, then cleaned version
         result = find_movie_by_title(movie.title)
+        if not result:
+            cleaned = _clean_title_for_tmdb(movie.title)
+            if cleaned != movie.title:
+                result = find_movie_by_title(cleaned)
         if not result:
             return
 
-        # Guard: don't create a duplicate via tmdb_id unique constraint
+        # Guard: if another movie already holds this tmdb_id, merge this stub into it
         existing = Movie.query.filter_by(tmdb_id=result["tmdb_id"]).first()
         if existing and existing.id != movie.id:
             logger.debug(
-                "TMDB id=%s already belongs to Movie id=%s; skipping enrichment of id=%s",
+                "TMDB id=%s belongs to Movie id=%s — merging stub id=%s into it",
                 result["tmdb_id"], existing.id, movie.id,
             )
+            _merge_duplicate_movie(stub=movie, canonical=existing)
             return
 
-        movie.tmdb_id    = result["tmdb_id"]
-        movie.poster_url = result.get("poster_url") or movie.image_url or ""
-        release_date_raw = result.get("release_date")
-        if release_date_raw:
-            try:
-                movie.release_date = date.fromisoformat(release_date_raw)
-            except (ValueError, TypeError):
-                movie.release_date = None
-        else:
-            movie.release_date = None
+        # Update title to canonical TMDB title when safe (no other row has it)
+        canonical = result.get("title") or ""
+        if canonical and canonical != movie.title:
+            conflict = Movie.query.filter(
+                Movie.title.ilike(canonical), Movie.id != movie.id
+            ).first()
+            if not conflict:
+                movie.title = canonical
+
+        _apply_tmdb_to_movie(movie, result)
         logger.debug("Enriched Movie id=%s '%s' with TMDB id=%s", movie.id, movie.title, movie.tmdb_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("TMDB enrichment failed for '%s': %s", movie.title, exc)
+
+
+def _merge_duplicate_movie(stub: Movie, canonical: Movie) -> None:
+    """
+    Re-point all references from stub to canonical, then delete the stub.
+
+    Called when enrichment discovers a newly-created stub is actually the same
+    film as an existing canonical record (matched via tmdb_id).
+    """
+    try:
+        # Re-point Showtime rows (skip any that would violate the unique constraint)
+        for st in list(stub.showtimes):
+            conflict = Showtime.query.filter_by(
+                theater_id=st.theater_id,
+                movie_id=canonical.id,
+                show_datetime=st.show_datetime,
+            ).first()
+            if conflict:
+                db.session.delete(st)
+            else:
+                st.movie_id = canonical.id
+
+        # Re-point AlertMovie rows
+        for am in list(stub.alert_movies):
+            conflict = AlertMovie.query.filter_by(
+                alert_id=am.alert_id,
+                movie_id=canonical.id,
+            ).first()
+            if conflict:
+                db.session.delete(am)
+            else:
+                am.movie_id = canonical.id
+
+        # Re-point legacy AlertPreference.movie_id
+        AlertPreference.query.filter_by(movie_id=stub.id).update(
+            {"movie_id": canonical.id}, synchronize_session="fetch"
+        )
+
+        db.session.flush()
+        db.session.delete(stub)
+        db.session.flush()
+
+        # Update canonical title to TMDB canonical if needed (done by caller normally)
+        logger.info(
+            "Merged stub Movie id=%s ('%s') into canonical Movie id=%s ('%s')",
+            stub.id, stub.title, canonical.id, canonical.title,
+        )
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        logger.warning("Failed to merge Movie stub id=%s into id=%s: %s", stub.id, canonical.id, exc)
 
 
 def _parse_time_text(text: str) -> Optional[datetime]:

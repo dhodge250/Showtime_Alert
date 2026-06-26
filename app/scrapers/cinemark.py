@@ -20,7 +20,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from app import db
-from app.scrapers.base import BaseScraper, _local_to_utc
+from app.scrapers.base import BaseScraper, _local_to_utc, _scrape_ctx
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,9 @@ def _parse_imax_showtimes(
     soup: BeautifulSoup,
     date_iso: str,
 ) -> list[Showtime]:
-    """Extract IMAX showtimes from a Cinemark HTML page or API fragment."""
+    """Extract showtimes from a Cinemark HTML page or API fragment."""
     new_showtimes: list[Showtime] = []
+    on_demand = getattr(_scrape_ctx, "on_demand", False)
 
     for block in soup.select("div.showtimeMovieBlock"):
         title_el = block.find("h3") or block.find("h2")
@@ -103,7 +104,7 @@ def _parse_imax_showtimes(
 
         for show_div in block.select("div.showtime"):
             ptype = show_div.get("data-print-type-name", "")
-            if "IMAX" not in ptype.upper():
+            if not on_demand and "IMAX" not in ptype.upper():
                 continue
 
             # Past showtimes render as <p class="off past"> with no link
@@ -119,13 +120,15 @@ def _parse_imax_showtimes(
             href = link.get("href", "")
             tickets_url = f"https://www.cinemark.com{href}" if href else ""
 
+            format_type = ptype if ptype else "Standard"
+
             showtime, is_new = scraper.upsert_showtime(
                 theater,
                 movie,
                 show_dt,
                 tickets_available=True,
                 tickets_url=tickets_url,
-                format_type="IMAX",
+                format_type=format_type,
             )
             if is_new:
                 new_showtimes.append(showtime)
@@ -137,6 +140,7 @@ class CinemarkScraper(BaseScraper):
     """Scraper for Cinemark IMAX showtimes."""
 
     chain_name = "Cinemark"
+    health_website = "www.cinemark.com/"
 
     def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
         if not theater.website:

@@ -1,0 +1,510 @@
+{% extends "base.html" %}
+{% block title %}Screen Size Comparison – IMAX Alert{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+  <h1>Screen Size Comparison</h1>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span class="compare-count-pill" id="selection-count">0 theaters selected</span>
+    <div class="unit-toggle-strip" id="unit-toggle-strip">
+      <button class="unit-strip-btn{% if unit == 'metric' %} active{% endif %}" data-unit="metric">m</button>
+      <button class="unit-strip-btn{% if unit == 'imperial' %} active{% endif %}" data-unit="imperial">ft</button>
+    </div>
+  </div>
+</div>
+
+<div class="compare-layout">
+
+  {# ── Left: Selector ─────────────────────────────────── #}
+  <aside class="compare-selector-panel">
+    <div class="compare-selector-header">
+      <span class="compare-selector-title">Select Theaters</span>
+      <span class="compare-selector-sub" id="selector-sub">{{ theaters|length }} with screen data</span>
+    </div>
+
+    {# Filter dropdowns #}
+    <div class="compare-filter-row">
+      <select id="cmp-chain-filter" class="compare-filter-select">
+        <option value="">All Chains</option>
+      </select>
+      <select id="cmp-country-filter" class="compare-filter-select">
+        <option value="">All Countries</option>
+      </select>
+      <select id="cmp-state-filter" class="compare-filter-select">
+        <option value="">All States / Regions</option>
+      </select>
+    </div>
+
+    <div class="compare-search-wrap">
+      <input type="search" id="theater-search" class="compare-search"
+             placeholder="Search by name, city, or chain…" autocomplete="off">
+    </div>
+    <div class="compare-selector-list" id="selector-list">
+      {% for t in theaters %}
+      {% set _chain   = t.chain_name or '' %}
+      {% set _city    = t.city_name or t.city or '' %}
+      {% set _state   = t.region_name or t.state or '' %}
+      {% set _country = t.country_name or t.country or '' %}
+      <label class="compare-selector-item"
+             data-id="{{ t.id }}"
+             data-name="{{ t.name|lower }}"
+             data-chain="{{ _chain|lower }}"
+             data-city="{{ _city|lower }}"
+             data-state="{{ _state|lower }}"
+             data-country="{{ _country|lower }}">
+        <input type="checkbox" class="compare-cb" value="{{ t.id }}"
+               {% if t.id in selected_ids %}checked{% endif %}>
+        <div class="compare-selector-info">
+          <span class="compare-selector-name">{{ t.name }}</span>
+          <span class="compare-selector-meta">
+            {% if _chain %}<span class="chain-badge chain-{{ _chain|lower|replace(' ','-') }}">{{ _chain }}</span>{% endif %}
+            {{ _city }}{% if _state %}, {{ _state }}{% endif %}
+          </span>
+        </div>
+        <span class="compare-selector-dims">
+          {{ t.screen_width_m|round(1) }}×{{ t.screen_height_m|round(1) }}m
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="compare-selector-footer">
+      <button class="btn btn-ghost btn-sm" id="clear-all-btn" style="display:none">Clear all</button>
+      <span class="compare-limit-note" id="limit-note" style="display:none">Max 15 selected</span>
+    </div>
+  </aside>
+
+  {# ── Right: Diagram ──────────────────────────────────── #}
+  <div class="compare-main">
+    <div class="compare-stage-card">
+      <div class="compare-empty" id="compare-empty">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <rect x="4" y="10" width="22" height="28" rx="1" fill="var(--border)" stroke="var(--text-muted)" stroke-width="1.5"/>
+          <rect x="22" y="4" width="22" height="34" rx="1" fill="var(--border)" stroke="var(--text-muted)" stroke-width="1.5"/>
+        </svg>
+        <p>Select theaters on the left to compare their screen sizes.</p>
+        <p class="compare-empty-hint">Only theaters with recorded screen dimensions are shown.</p>
+      </div>
+      <div class="compare-stage-scroll" id="compare-stage-scroll" style="display:none">
+        <div id="compare-svg-container"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script id="compare-theaters-data" type="application/json">{{ theaters_json | tojson }}</script>
+<script id="compare-selected-data" type="application/json">{{ selected_ids | tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  /* ── Data ──────────────────────────────────────────────── */
+  var ALL = JSON.parse(document.getElementById('compare-theaters-data').textContent);
+  var BY_ID = {};
+  ALL.forEach(function (t) { BY_ID[t.id] = t; });
+
+  var initialSelected = JSON.parse(document.getElementById('compare-selected-data').textContent);
+  var selectedIds = new Set(initialSelected);
+
+  var activeBtn = document.querySelector('.unit-strip-btn.active');
+  var unit = activeBtn ? activeBtn.dataset.unit : 'metric';
+
+  var MAX_THEATERS = 15;
+
+  /* ── Populate filter dropdowns from data ─────────────── */
+  function uniqueSorted(arr) {
+    return arr.filter(Boolean).filter(function(v,i,a){ return a.indexOf(v)===i; }).sort();
+  }
+  function populateSelect(sel, values, placeholder) {
+    var current = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    values.forEach(function(v) {
+      var opt = document.createElement('option');
+      opt.value = v.toLowerCase();
+      opt.textContent = v;
+      sel.appendChild(opt);
+    });
+    if (current) sel.value = current;
+  }
+
+  var chainSel   = document.getElementById('cmp-chain-filter');
+  var countrySel = document.getElementById('cmp-country-filter');
+  var stateSel   = document.getElementById('cmp-state-filter');
+
+  populateSelect(chainSel,   uniqueSorted(ALL.map(function(t){ return t.chain; })),   'All Chains');
+  populateSelect(countrySel, uniqueSorted(ALL.map(function(t){ return t.country; })), 'All Countries');
+  populateSelect(stateSel,   uniqueSorted(ALL.map(function(t){ return t.state; })),   'All States / Regions');
+
+  /* When country changes, filter states to match */
+  countrySel.addEventListener('change', function() {
+    var co = this.value;
+    var states = uniqueSorted(
+      ALL.filter(function(t){ return !co || t.country.toLowerCase() === co; })
+         .map(function(t){ return t.state; })
+    );
+    var prevState = stateSel.value;
+    stateSel.innerHTML = '<option value="">All States / Regions</option>';
+    states.forEach(function(s) {
+      var opt = document.createElement('option');
+      opt.value = s.toLowerCase();
+      opt.textContent = s;
+      stateSel.appendChild(opt);
+    });
+    if (prevState && states.some(function(s){ return s.toLowerCase()===prevState; })) {
+      stateSel.value = prevState;
+    }
+    applyFilters();
+  });
+
+  chainSel.addEventListener('change', applyFilters);
+  stateSel.addEventListener('change', applyFilters);
+
+  /* ── Colour palette ──────────────────────────────────── */
+  var PALETTE = [
+    '#5BA4D4','#E8CE8A','#72B880','#D47B7B','#8BAFC0',
+    '#D49A52','#7ABCA4','#C49DD8','#C8A06A','#9BC472',
+    '#6CBCB8','#D68BAE','#7A9EC4','#C8AA7A','#88C4A4',
+  ];
+
+  /* ── SVG helpers ─────────────────────────────────────── */
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs) {
+    var el = document.createElementNS(SVG_NS, tag);
+    Object.keys(attrs).forEach(function (k) { el.setAttribute(k, attrs[k]); });
+    return el;
+  }
+
+  /* Approximate text width (px) at given font-size */
+  function approxW(str, fs) { return str.length * fs * 0.62; }
+
+  function fitText(str, maxPx, fs) {
+    if (approxW(str, fs) <= maxPx) return str;
+    var lo = 0, hi = str.length;
+    while (hi - lo > 1) {
+      var mid = Math.floor((lo + hi) / 2);
+      if (approxW(str.substring(0, mid) + '…', fs) <= maxPx) lo = mid; else hi = mid;
+    }
+    return str.substring(0, lo) + '…';
+  }
+
+  /* ── Label builders ─────────────────────────────────── */
+  function buildInsideLabel(t) {
+    var wDisp = unit === 'imperial'
+      ? t.wft.toFixed(1) + ' × ' + t.hft.toFixed(1) + ' ft'
+      : t.w.toFixed(1)  + ' × ' + t.h.toFixed(1)  + ' m';
+    return t.name + ', ' + wDisp;
+  }
+  /* Outside labels: name only (keeps horizontal space minimal) */
+  function buildOutsideLabel(t) { return t.name; }
+
+  /* ── Render ─────────────────────────────────────────── */
+  function render() {
+    var container = document.getElementById('compare-svg-container');
+    var scrollEl  = document.getElementById('compare-stage-scroll');
+    var emptyEl   = document.getElementById('compare-empty');
+
+    var selected = Array.from(selectedIds)
+      .map(function (id) { return BY_ID[id]; })
+      .filter(Boolean)
+      .sort(function (a, b) { return b.h - a.h; }); /* tallest first = back of stack */
+
+    if (!selected.length) {
+      emptyEl.style.display  = '';
+      scrollEl.style.display = 'none';
+      container.innerHTML    = '';
+      return;
+    }
+
+    emptyEl.style.display  = 'none';
+    scrollEl.style.display = '';
+
+    /* ── Layout constants (all in px — no viewBox scaling) ── */
+    var FONT_IN    = 10;
+    var FONT_OUT   = 10;
+    var MIN_BAND_H = FONT_IN + 6;
+    var MIN_SCR_W  = 120;
+    var LEFT_PAD   = 10;
+    var TOP_PAD    = 6;
+    var RIGHT_GAP  = 18;
+    var OUTSIDE_W  = 220;
+    var LABEL_GAP  = FONT_OUT + 4;
+
+    var maxH_m = selected[0].h;
+    var maxW_m = selected[0].w;
+
+    /* Responsive scale: use container width so diagram fills desktop space
+       and never overflows on mobile. */
+    var stageCard = document.querySelector('.compare-stage-card');
+    /* Subtract only left padding (20px); right padding was removed so SVG reaches card edge */
+    var availW    = (stageCard ? stageCard.clientWidth : 0) - 20;
+    if (availW < 200) availW = window.innerWidth - 20; /* fallback before layout is measured */
+
+    var IS_MOBILE   = availW < 500;    /* match CSS grid single-column breakpoint */
+    /* 800px cap: ensures width always binds for any IMAX screen aspect ratio > 1.0 */
+    var MAX_STAGE_H = IS_MOBILE ? 360 : 800;
+
+    /* Two-pass scale: pass 1 assumes no outside labels (full width);
+       if outside labels are needed we shrink to fit the label zone. */
+    function _scaleFor(zoneW) {
+      var ms = Math.max(availW - LEFT_PAD - zoneW, 80);
+      return Math.max(Math.min(MAX_STAGE_H / maxH_m, ms / maxW_m), 4);
+    }
+    function _buildScreens(scl) {
+      return selected.map(function (t, i) {
+        var sw     = Math.round(t.w * scl);
+        var sh     = Math.round(t.h * scl);
+        var nextSh = i + 1 < selected.length ? Math.round(selected[i + 1].h * scl) : 0;
+        var bandH  = sh - nextSh;
+        return { t: t, sw: sw, sh: sh, nextSh: nextSh, bandH: bandH,
+                 inside: bandH >= MIN_BAND_H && sw >= MIN_SCR_W,
+                 color: PALETTE[i % PALETTE.length] };
+      });
+    }
+
+    var scale1   = _scaleFor(8); /* pass 1: no outside zone */
+    var screens1 = _buildScreens(scale1);
+    var needsZone = !IS_MOBILE && screens1.some(function (d) { return !d.inside; });
+
+    var scale, screens;
+    if (needsZone) {
+      scale   = _scaleFor(RIGHT_GAP + OUTSIDE_W); /* pass 2: reserve label column */
+      screens = _buildScreens(scale);
+    } else {
+      scale   = scale1;
+      screens = screens1;
+    }
+
+    var STAGE_H = Math.round(maxH_m * scale);
+    var stageW  = Math.round(maxW_m * scale);
+
+    /* Human silhouette */
+    var HUMAN_M   = 1.75;
+    var humanH    = Math.max(22, Math.round(HUMAN_M * scale));
+    var humanW    = Math.round(humanH * 0.38);
+    var botPad    = humanH + 20;
+
+    /* Outside label y-positions — avoid overlap */
+    var outsideScreens = screens.filter(function (d) { return !d.inside; });
+    outsideScreens.forEach(function (d) {
+      d.connectY = TOP_PAD + STAGE_H - d.sh + Math.floor(d.bandH / 2);
+    });
+    outsideScreens.sort(function (a, b) { return a.connectY - b.connectY; });
+    var lastY = -999;
+    outsideScreens.forEach(function (d) {
+      d.labelY = Math.max(d.connectY, lastY + LABEL_GAP);
+      lastY = d.labelY;
+    });
+
+    /* Total SVG size (explicit px — no viewBox scaling of text) */
+    var hasOutside = !IS_MOBILE && outsideScreens.length > 0;
+    var rightZoneW = hasOutside ? RIGHT_GAP + OUTSIDE_W : 8;
+    var totalW = LEFT_PAD + stageW + rightZoneW;
+    var totalH = TOP_PAD + STAGE_H + botPad;
+
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + totalW + ' ' + totalH);
+    /* Explicit pixel dimensions: text renders at true px size, container scrolls */
+    svg.setAttribute('width',  totalW);
+    svg.setAttribute('height', totalH);
+    svg.style.display = 'block';
+    svg.setAttribute('aria-label', 'IMAX screen size comparison diagram');
+
+    /* ── Screen rects (largest → smallest = back → front) ── */
+    screens.forEach(function (d) {
+      svg.appendChild(svgEl('rect', {
+        x: LEFT_PAD, y: TOP_PAD + STAGE_H - d.sh,
+        width: d.sw, height: d.sh,
+        fill: d.color,
+      }));
+    });
+
+    /* ── Inside labels ──────────────────────────────────── */
+    screens.filter(function (d) { return d.inside; }).forEach(function (d) {
+      var bandTopY = TOP_PAD + STAGE_H - d.sh;
+      var labelY   = bandTopY + FONT_IN + 3;
+      var labelX   = LEFT_PAD + d.sw - 5;
+      var label    = fitText(buildInsideLabel(d.t), d.sw - 10, FONT_IN);
+
+      var txt = document.createElementNS(SVG_NS, 'text');
+      txt.setAttribute('x', labelX);
+      txt.setAttribute('y', labelY);
+      txt.setAttribute('text-anchor', 'end');
+      txt.setAttribute('font-size', FONT_IN);
+      txt.setAttribute('font-family', 'Inter, system-ui, sans-serif');
+      txt.setAttribute('font-weight', '600');
+      txt.setAttribute('class', 'cmp-inside-label');
+      txt.textContent = label;
+      svg.appendChild(txt);
+    });
+
+    /* ── Outside labels + connecting lines ─────────────── */
+    if (hasOutside) {
+      /* lineEndX is consistent right-column endpoint (largest screen edge + gap) */
+      var lineEndX = LEFT_PAD + stageW + RIGHT_GAP;
+
+      outsideScreens.forEach(function (d) {
+        var dotX = LEFT_PAD + d.sw; /* right edge of THIS specific screen */
+        /* Dot at right edge of THIS screen */
+        svg.appendChild(svgEl('circle', {
+          cx: dotX, cy: d.connectY, r: '2.5', fill: d.color,
+        }));
+        /* Angled line from this screen's right edge to the label column */
+        svg.appendChild(svgEl('line', {
+          x1: dotX, y1: d.connectY, x2: lineEndX, y2: d.labelY,
+          stroke: d.color, 'stroke-width': '1.5',
+        }));
+        /* Short horizontal tick */
+        svg.appendChild(svgEl('line', {
+          x1: lineEndX, y1: d.labelY, x2: lineEndX + 6, y2: d.labelY,
+          stroke: d.color, 'stroke-width': '1.5',
+        }));
+        /* Label text */
+        var label = fitText(buildOutsideLabel(d.t), OUTSIDE_W - 12, FONT_OUT);
+        var txt   = document.createElementNS(SVG_NS, 'text');
+        txt.setAttribute('x', lineEndX + 10);
+        txt.setAttribute('y', d.labelY + 4);
+        txt.setAttribute('text-anchor', 'start');
+        txt.setAttribute('font-size', FONT_OUT);
+        txt.setAttribute('font-family', 'Inter, system-ui, sans-serif');
+        txt.setAttribute('font-weight', '600');
+        txt.setAttribute('class', 'cmp-outside-label');
+        txt.textContent = label;
+        svg.appendChild(txt);
+      });
+    }
+
+    /* ── Human silhouette ──────────────────────────────── */
+    var humanX = LEFT_PAD;
+    var humanY = TOP_PAD + STAGE_H;
+
+    var hScale = humanH / 160;
+    var g = document.createElementNS(SVG_NS, 'g');
+    g.setAttribute('transform',
+      'translate(' + humanX + ',' + (humanY - humanH) + ') scale(' + hScale + ')');
+    g.setAttribute('class', 'compare-human-figure');
+
+    var hd = document.createElementNS(SVG_NS, 'circle');
+    hd.setAttribute('cx','30'); hd.setAttribute('cy','16'); hd.setAttribute('r','14');
+    g.appendChild(hd);
+    var bd = document.createElementNS(SVG_NS, 'path');
+    bd.setAttribute('d','M14 38 Q30 46 46 38 L52 90 Q30 100 8 90 Z');
+    g.appendChild(bd);
+    var lg = document.createElementNS(SVG_NS, 'path');
+    lg.setAttribute('d','M8 90 L14 145 L24 145 L30 108 L36 145 L46 145 L52 90 Q30 100 8 90 Z');
+    g.appendChild(lg);
+    svg.appendChild(g);
+
+    /* Human label */
+    var hl = document.createElementNS(SVG_NS, 'text');
+    hl.setAttribute('x', humanX + humanW + 5);
+    hl.setAttribute('y', humanY - Math.round(humanH / 2) + 4);
+    hl.setAttribute('font-size', '9');
+    hl.setAttribute('font-family', 'Inter, system-ui, sans-serif');
+    hl.setAttribute('class', 'cmp-outside-label');
+    hl.textContent = unit === 'imperial' ? '5\'9"' : '1.75m';
+    svg.appendChild(hl);
+
+    /* ── Baseline ──────────────────────────────────────── */
+    svg.appendChild(svgEl('line', {
+      x1: LEFT_PAD, y1: TOP_PAD + STAGE_H,
+      x2: LEFT_PAD + stageW, y2: TOP_PAD + STAGE_H,
+      stroke: 'var(--border)', 'stroke-width': '1',
+    }));
+
+    container.innerHTML = '';
+    container.appendChild(svg);
+  }
+
+  /* ── Filter / search ─────────────────────────────────── */
+  function applyFilters() {
+    var q  = document.getElementById('theater-search').value.trim().toLowerCase();
+    var ch = chainSel.value;
+    var co = countrySel.value;
+    var st = stateSel.value;
+
+    var items   = document.querySelectorAll('.compare-selector-item');
+    var visible = 0;
+    items.forEach(function (el) {
+      var ok = (!q  || el.dataset.name.toLowerCase().indexOf(q) !== -1
+                     || el.dataset.chain.toLowerCase().indexOf(q) !== -1
+                     || el.dataset.city.toLowerCase().indexOf(q) !== -1)
+            && (!ch || el.dataset.chain   === ch)
+            && (!co || el.dataset.country === co)
+            && (!st || el.dataset.state   === st);
+      el.style.display = ok ? '' : 'none';
+      if (ok) visible++;
+    });
+    document.getElementById('selector-sub').textContent =
+      (q || ch || co || st)
+        ? (visible + ' result' + (visible !== 1 ? 's' : ''))
+        : (ALL.length + ' with screen data');
+  }
+
+  document.getElementById('theater-search').addEventListener('input', applyFilters);
+
+  /* ── Checkbox changes ─────────────────────────────────── */
+  document.getElementById('selector-list').addEventListener('change', function (e) {
+    if (!e.target.classList.contains('compare-cb')) return;
+    var id = parseInt(e.target.value, 10);
+    if (e.target.checked) {
+      if (selectedIds.size >= MAX_THEATERS) { e.target.checked = false; return; }
+      selectedIds.add(id);
+    } else {
+      selectedIds.delete(id);
+    }
+    update();
+  });
+
+  /* ── Unit toggle ─────────────────────────────────────── */
+  document.getElementById('unit-toggle-strip').addEventListener('click', function (e) {
+    var btn = e.target.closest('.unit-strip-btn');
+    if (!btn) return;
+    unit = btn.dataset.unit;
+    document.querySelectorAll('.unit-strip-btn').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.unit === unit);
+    });
+    render();
+  });
+
+  /* ── Clear all ───────────────────────────────────────── */
+  document.getElementById('clear-all-btn').addEventListener('click', function () {
+    selectedIds.clear();
+    document.querySelectorAll('.compare-cb:checked').forEach(function (cb) {
+      cb.checked = false;
+    });
+    update();
+  });
+
+  /* ── State sync ──────────────────────────────────────── */
+  function updateUi() {
+    var n = selectedIds.size;
+    document.getElementById('selection-count').textContent =
+      n === 0 ? '0 theaters selected' :
+      n === 1 ? '1 theater selected' :
+      n + ' theaters selected';
+    document.getElementById('clear-all-btn').style.display = n ? '' : 'none';
+    var atLimit = n >= MAX_THEATERS;
+    document.getElementById('limit-note').style.display = atLimit ? '' : 'none';
+    document.querySelectorAll('.compare-cb').forEach(function (cb) {
+      cb.disabled = atLimit && !selectedIds.has(parseInt(cb.value, 10));
+    });
+    var url = new URL(window.location.href);
+    if (n) url.searchParams.set('t', Array.from(selectedIds).join(','));
+    else url.searchParams.delete('t');
+    history.replaceState(null, '', url.toString());
+  }
+
+  function update() { updateUi(); render(); }
+
+  update();
+
+  /* Re-render on resize so mobile/desktop scale stays correct */
+  var _resizeTimer;
+  window.addEventListener('resize', function () {
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(render, 150);
+  });
+})();
+</script>
+{% endblock %}
