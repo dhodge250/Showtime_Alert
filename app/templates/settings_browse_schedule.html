@@ -163,15 +163,17 @@ function runNow() {
       'X-CSRFToken': document.querySelector('[name=csrf_token]').value,
     },
   })
-  .then(function(r) { return r.json(); })
-  .then(function(data) {
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, status: r.status, data: d}; }); })
+  .then(function(res) {
     status.style.display = '';
-    status.textContent = data.message || 'Scrape started.';
+    status.className = 'flash-message ' + (res.status === 202 ? 'flash-info' : 'flash-warning');
+    status.textContent = res.data.message || (res.ok ? 'Scrape started.' : 'Could not start scrape.');
     btn.textContent = 'Run Now';
     btn.disabled = false;
   })
   .catch(function() {
     status.style.display = '';
+    status.className = 'flash-message flash-warning';
     status.textContent = 'Failed to start scrape. Try again.';
     btn.textContent = 'Run Now';
     btn.disabled = false;

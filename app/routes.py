@@ -462,9 +462,11 @@ def settings_browse_schedule():
                     raise ValueError("Radius must be positive")
             except (ValueError, TypeError):
                 error = "Please enter a valid radius greater than zero."
+                has_location = user.location_lat is not None and user.location_lon is not None
                 return render_template(
                     "settings_browse_schedule.html",
                     user=user, schedule=schedule, error=error,
+                    has_location=has_location,
                     frequency_labels=BrowseSchedule.FREQUENCY_LABELS,
                 )
 
@@ -524,7 +526,7 @@ def api_browse_schedule_run_now():
 
     if schedule is None:
         return jsonify({"error": "No browse schedule configured"}), 404
-    if not user.location_lat or not user.location_lon:
+    if user.location_lat is None or user.location_lon is None:
         return jsonify({"error": "No location saved in your profile"}), 400
 
     radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
@@ -542,8 +544,14 @@ def api_browse_schedule_run_now():
         return jsonify({"status": "ok", "message": "No theaters found within your radius"}), 200
 
     in_flight = [tid for tid in theater_ids if is_scraping_in_flight(tid)]
-    if len(in_flight) == len(theater_ids):
-        return jsonify({"status": "ok", "message": "All theaters in your radius are already being scraped"}), 200
+    if in_flight:
+        return jsonify({
+            "status": "busy",
+            "message": (
+                f"A scrape is already in progress for {len(in_flight)} theater(s) "
+                "in your radius — try again shortly"
+            ),
+        }), 409
 
     def _run():
         with current_app._get_current_object().app_context():

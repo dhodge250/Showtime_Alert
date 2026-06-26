@@ -286,6 +286,10 @@ def run_browse_schedules() -> list[Showtime]:
 
     all_theater_ids: set[int] = set()
     schedule_info = []
+    # Only schedules with a valid user location are considered "processed".
+    # Skipped schedules are left unchanged so they're retried on the next tick
+    # rather than being silently delayed by frequency_minutes.
+    processed_schedules = []
 
     for schedule in due:
         user = User.query.get(schedule.user_id)
@@ -313,9 +317,12 @@ def run_browse_schedules() -> list[Showtime]:
             "unit": schedule.radius_unit,
             "theaters_in_radius": len(theater_ids),
         })
+        processed_schedules.append(schedule)
 
-    # Update next_run for all due schedules regardless of whether theaters were found.
-    for schedule in due:
+    # Advance last_run/next_run only for schedules that were actually processed.
+    # Skipped schedules (missing location) retain their current next_run so
+    # they remain eligible on the next job tick.
+    for schedule in processed_schedules:
         schedule.last_run = now
         schedule.next_run = now + timedelta(minutes=schedule.frequency_minutes)
     db.session.commit()
@@ -325,8 +332,8 @@ def run_browse_schedules() -> list[Showtime]:
         return []
 
     logger.info(
-        "Browse schedules: %d theater(s) in combined radius across %d schedule(s)",
-        len(all_theater_ids), len(due),
+        "Browse schedules: %d theater(s) in combined radius across %d processed schedule(s)",
+        len(all_theater_ids), len(processed_schedules),
     )
 
     start = datetime.utcnow()
@@ -336,11 +343,14 @@ def run_browse_schedules() -> list[Showtime]:
     write_log(
         "scrape",
         f"Browse schedules: {len(new_showtimes)} new showtime(s) from "
-        f"{len(all_theater_ids)} theater(s) ({len(due)} schedule(s), {elapsed:.1f}s)",
+        f"{len(all_theater_ids)} theater(s) "
+        f"({len(processed_schedules)}/{len(due)} schedule(s) processed, {elapsed:.1f}s)",
         details={
             "schedules": schedule_info,
             "theaters_dispatched": len(all_theater_ids),
             "new_showtimes": len(new_showtimes),
+            "due_count": len(due),
+            "processed_count": len(processed_schedules),
         },
     )
     return new_showtimes
