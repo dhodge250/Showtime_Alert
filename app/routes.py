@@ -192,7 +192,7 @@ def theater_detail(theater_id):
     theater = Theater.query.get_or_404(theater_id)
     showtimes = (
         Showtime.query.filter_by(theater_id=theater_id)
-        .filter(Showtime.show_datetime >= datetime.now(timezone.utc))
+        .filter(Showtime.show_datetime >= datetime.now(timezone.utc).replace(tzinfo=None))
         .order_by(Showtime.show_datetime)
         .all()
     )
@@ -1656,7 +1656,7 @@ def api_theater_fetch_status(theater_id: int):
     on_demand_count = (
         Showtime.query
         .filter_by(theater_id=theater_id, on_demand=True)
-        .filter(Showtime.show_datetime >= datetime.now(timezone.utc))
+        .filter(Showtime.show_datetime >= datetime.now(timezone.utc).replace(tzinfo=None))
         .count()
     )
     return jsonify({
