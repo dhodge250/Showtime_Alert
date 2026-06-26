@@ -795,7 +795,16 @@ def movies():
     )
     on_demand_movie_ids = [r.movie_id for r in on_demand_id_rows]
 
-    all_movie_ids = list(set(alert_movie_ids) | set(on_demand_movie_ids))
+    # Browse-schedule movies: movies discovered via browse-schedule scrapes
+    browse_only_id_rows = (
+        db.session.query(Showtime.movie_id)
+        .filter(Showtime.browse_only == True, Showtime.show_datetime >= now)  # noqa: E712
+        .distinct()
+        .all()
+    )
+    browse_only_movie_ids = [r.movie_id for r in browse_only_id_rows]
+
+    all_movie_ids = list(set(alert_movie_ids) | set(on_demand_movie_ids) | set(browse_only_movie_ids))
     movies_per_page = _get_setting_int("movies_per_page", 50)
     if not all_movie_ids:
         return render_template("movies.html", movie_list=[], movies_per_page=movies_per_page)
@@ -876,7 +885,16 @@ def movie_detail(movie_id):
         )
         .first()
     )
-    if not has_alert and not has_on_demand:
+    has_browse = (
+        Showtime.query
+        .filter(
+            Showtime.movie_id == movie_id,
+            Showtime.browse_only == True,  # noqa: E712
+            Showtime.show_datetime >= now,
+        )
+        .first()
+    )
+    if not has_alert and not has_on_demand and not has_browse:
         abort(404)
 
     showtimes = (

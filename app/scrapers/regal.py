@@ -260,20 +260,21 @@ class RegalScraper(BaseScraper):
         from datetime import date as _date, timedelta
         browse_only = getattr(_scrape_ctx, "browse_only", False)
 
-        # In browse mode we want the full forward schedule; datesWithShows from
-        # the page is often limited to the next 1-2 days (Regal lazy-loads the
-        # rest client-side). Always probe the API for the next 60 days so nothing
-        # is missed. In alert mode keep the page's list as-is — it's usually
-        # complete and avoids unnecessary API calls.
-        if dates_with_shows and not browse_only:
-            future_dates = [d[:10] for d in dates_with_shows[1:]]
-        else:
+        # Always start with whatever dates the page reported as having shows.
+        # In browse mode also fill in the full 60-day window in case datesWithShows
+        # was truncated (Regal sometimes only puts 1-2 dates in the SSR payload and
+        # loads the full schedule client-side, which Playwright misses).
+        future_dates: list[str] = [d[:10] for d in dates_with_shows[1:]] if dates_with_shows else []
+        if browse_only:
+            page_date_set = set(future_dates)
             today = _date.today()
-            days_ahead = 60 if browse_only else 14
-            future_dates = [
-                (today + timedelta(days=i)).isoformat()
-                for i in range(1, days_ahead + 1)
-            ]
+            for i in range(1, 61):
+                d = (today + timedelta(days=i)).isoformat()
+                if d not in page_date_set:
+                    future_dates.append(d)
+        elif not future_dates:
+            today = _date.today()
+            future_dates = [(today + timedelta(days=i)).isoformat() for i in range(1, 15)]
 
         for date_iso in future_dates:
             shows = self._fetch_date(session, theatre_code, date_iso)
@@ -365,6 +366,10 @@ class RegalScraper(BaseScraper):
             r = session.get(url, timeout=_REQUEST_TIMEOUT)
             if r.ok:
                 return r.json().get("shows") or []
+            logger.warning(
+                "Regal: getShowtimes returned HTTP %s for theatre %s on %s",
+                r.status_code, theatre_code, date_iso,
+            )
         except Exception as exc:
             logger.warning(
                 "Regal: getShowtimes failed for %s on %s: %s",
