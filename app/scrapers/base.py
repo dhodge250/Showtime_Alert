@@ -94,6 +94,22 @@ def on_demand_scrape():
     finally:
         _scrape_ctx.on_demand = False
 
+
+@contextlib.contextmanager
+def browse_schedule_scrape():
+    """Mark all upsert_showtime calls on this thread as browse_only=True.
+
+    Browse-schedule showtimes are visible on theater/movie detail pages but
+    excluded from the Dashboard 'Available Showtimes' list.  If an alert-driven
+    scrape later finds the same showtime the flag is cleared (promoted) so the
+    row becomes Dashboard-visible.
+    """
+    _scrape_ctx.browse_only = True
+    try:
+        yield
+    finally:
+        _scrape_ctx.browse_only = False
+
 # ---------------------------------------------------------------------------
 # Theater timezone helpers
 # ---------------------------------------------------------------------------
@@ -386,6 +402,11 @@ class BaseScraper:
     ) -> tuple[Showtime, bool]:
         """Insert or update a showtime row. Returns (showtime, is_new)."""
         on_demand = getattr(_scrape_ctx, "on_demand", False)
+        browse_only = getattr(_scrape_ctx, "browse_only", False)
+
+        # Normalize format: any IMAX variant without 3D collapses to plain "IMAX".
+        if format_type and "IMAX" in format_type.upper() and "3D" not in format_type.upper():
+            format_type = "IMAX"
 
         showtime = Showtime.query.filter_by(
             theater_id=theater.id,
@@ -395,10 +416,14 @@ class BaseScraper:
 
         if showtime:
             showtime.tickets_available = tickets_available
+            showtime.format_type = format_type
             showtime.last_checked = datetime.now(timezone.utc)
-            # Alert showtimes (on_demand=False) are never downgraded by an on-demand fetch.
+            # Alert showtimes are never downgraded by an on-demand or browse fetch.
             if not on_demand:
                 showtime.on_demand = False
+            # Browse-only rows are promoted to Dashboard-visible when an alert scrape finds them.
+            if not browse_only:
+                showtime.browse_only = False
             return showtime, False
 
         showtime = Showtime(
@@ -409,6 +434,7 @@ class BaseScraper:
             tickets_url=tickets_url,
             format_type=format_type,
             on_demand=on_demand,
+            browse_only=browse_only,
         )
         db.session.add(showtime)
         return showtime, True

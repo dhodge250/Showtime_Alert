@@ -121,7 +121,8 @@ def index():
     now = datetime.now(timezone.utc)
     base_q = (
         Showtime.query
-        .filter(Showtime.on_demand == False)  # noqa: E712 — exclude manually-fetched rows
+        .filter(Showtime.on_demand == False)    # noqa: E712 — exclude manually-fetched rows
+        .filter(Showtime.browse_only == False)  # noqa: E712 — exclude browse-schedule-only rows
         .filter(Showtime.tickets_available.is_(True))
         .filter(Showtime.show_datetime >= now)
         .order_by(Showtime.show_datetime.asc())
@@ -439,6 +440,7 @@ def settings_browse_schedule():
     """Browse Schedule — configure and manage the user's proximity scrape schedule."""
     from app.models import BrowseSchedule
     from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     user = current_user._get_current_object()
     schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
@@ -463,14 +465,21 @@ def settings_browse_schedule():
             except (ValueError, TypeError):
                 error = "Please enter a valid radius greater than zero."
                 has_location = user.location_lat is not None and user.location_lon is not None
+                try:
+                    tz_abbr = datetime.now(ZoneInfo(user.timezone or "UTC")).strftime("%Z")
+                except (ZoneInfoNotFoundError, KeyError):
+                    tz_abbr = "UTC"
                 return render_template(
                     "settings_browse_schedule.html",
                     user=user, schedule=schedule, error=error,
                     has_location=has_location,
                     frequency_labels=BrowseSchedule.FREQUENCY_LABELS,
+                    day_labels=BrowseSchedule.DAY_LABELS,
+                    tz_abbr=tz_abbr,
+                    start_in_edit=True,
                 )
 
-            radius_unit = request.form.get("radius_unit", user.measurement_unit == "imperial" and "miles" or "km")
+            radius_unit = request.form.get("radius_unit", "miles" if user.measurement_unit == "imperial" else "km")
             if radius_unit not in ("km", "miles"):
                 radius_unit = "km"
 
@@ -480,6 +489,18 @@ def settings_browse_schedule():
                 freq = 60
             if freq not in VALID_FREQUENCIES:
                 freq = 60
+
+            try:
+                preferred_hour = int(request.form.get("preferred_hour", 8))
+                preferred_hour = max(0, min(23, preferred_hour))
+            except (ValueError, TypeError):
+                preferred_hour = 8
+
+            try:
+                preferred_dow = int(request.form.get("preferred_day_of_week", 0))
+                preferred_dow = max(0, min(6, preferred_dow))
+            except (ValueError, TypeError):
+                preferred_dow = 0
 
             if action == "toggle":
                 enabled = not (schedule.enabled if schedule else True)
@@ -493,13 +514,19 @@ def settings_browse_schedule():
             schedule.radius = radius
             schedule.radius_unit = radius_unit
             schedule.frequency_minutes = freq
+            schedule.preferred_hour = preferred_hour
+            schedule.preferred_day_of_week = preferred_dow if freq == 10080 else None
             schedule.enabled = enabled
-            if schedule.next_run is None:
-                schedule.next_run = now
+            schedule.next_run = schedule.compute_next_run(now, user.timezone)
             db.session.commit()
             saved = True
 
     has_location = user.location_lat is not None and user.location_lon is not None
+    try:
+        tz_abbr = datetime.now(ZoneInfo(user.timezone or "UTC")).strftime("%Z")
+    except (ZoneInfoNotFoundError, KeyError):
+        tz_abbr = "UTC"
+
     return render_template(
         "settings_browse_schedule.html",
         user=user,
@@ -508,6 +535,9 @@ def settings_browse_schedule():
         error=error,
         has_location=has_location,
         frequency_labels=BrowseSchedule.FREQUENCY_LABELS,
+        day_labels=BrowseSchedule.DAY_LABELS,
+        tz_abbr=tz_abbr,
+        start_in_edit=False,
     )
 
 
@@ -553,16 +583,68 @@ def api_browse_schedule_run_now():
             ),
         }), 409
 
+    # Capture values needed by the background thread before it starts
+    _app = current_app._get_current_object()
+    user_id = user.id
+    user_tz = user.timezone or "UTC"
+    n_theaters = len(theater_ids)
+
     def _run():
-        with current_app._get_current_object().app_context():
-            queue_theaters_for_scrape(theater_ids, targets=None, force=True)
+        with _app.app_context():
+            from app.scrapers.base import browse_schedule_scrape
+            with browse_schedule_scrape():
+                queue_theaters_for_scrape(theater_ids, targets=None, force=True)
+            # Update last_run/next_run so the status endpoint and page reload reflect completion
+            from app.models import BrowseSchedule
+            from datetime import datetime
+            sched = BrowseSchedule.query.filter_by(user_id=user_id).first()
+            if sched:
+                now = datetime.utcnow()
+                sched.last_run = now
+                sched.next_run = sched.compute_next_run(now, user_tz)
+                db.session.commit()
 
     threading.Thread(target=_run, daemon=True, name=f"browse-run-now-{user.id}").start()
     return jsonify({
         "status": "started",
-        "theaters": len(theater_ids),
-        "message": f"Scraping {len(theater_ids)} theater(s) in your radius",
+        "theaters": n_theaters,
+        "message": f"Scraping {n_theaters} theater(s) in your radius",
     }), 202
+
+
+@api_bp.route("/browse-schedule/status", methods=["GET"])
+@login_required
+def api_browse_schedule_status():
+    """Return how many radius theaters are currently in-flight and the schedule's last/next run."""
+    from app.models import BrowseSchedule, Theater
+    from app.scrapers import is_scraping_in_flight
+    from app.scrapers.base import _haversine_km
+
+    user = current_user._get_current_object()
+    schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
+
+    if schedule is None:
+        return jsonify({"error": "No browse schedule configured"}), 404
+
+    if user.location_lat is None or user.location_lon is None:
+        return jsonify({"in_flight": 0, "total": 0, "last_run": None, "next_run": None})
+
+    radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
+    total = 0
+    in_flight = 0
+    for t in (Theater.query.filter_by(is_active=True)
+              .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))):
+        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km:
+            total += 1
+            if is_scraping_in_flight(t.id):
+                in_flight += 1
+
+    return jsonify({
+        "in_flight": in_flight,
+        "total": total,
+        "last_run": schedule.last_run.strftime("%Y-%m-%dT%H:%M:%S") + "Z" if schedule.last_run else None,
+        "next_run": schedule.next_run.strftime("%Y-%m-%dT%H:%M:%S") + "Z" if schedule.next_run else None,
+    })
 
 
 @main_bp.route("/profile/mfa-setup", methods=["GET", "POST"])

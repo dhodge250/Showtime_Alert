@@ -289,7 +289,8 @@ def run_browse_schedules() -> list[Showtime]:
     # Only schedules with a valid user location are considered "processed".
     # Skipped schedules are left unchanged so they're retried on the next tick
     # rather than being silently delayed by frequency_minutes.
-    processed_schedules = []
+    # Each entry is (schedule, user_tz_name) so next_run can be computed correctly.
+    processed_schedules: list[tuple] = []
 
     for schedule in due:
         user = User.query.get(schedule.user_id)
@@ -317,14 +318,16 @@ def run_browse_schedules() -> list[Showtime]:
             "unit": schedule.radius_unit,
             "theaters_in_radius": len(theater_ids),
         })
-        processed_schedules.append(schedule)
+        processed_schedules.append((schedule, user.timezone or "UTC"))
 
     # Advance last_run/next_run only for schedules that were actually processed.
+    # Use compute_next_run so Daily/Weekly schedules respect the user's preferred
+    # hour and timezone — including correct DST handling on each tick.
     # Skipped schedules (missing location) retain their current next_run so
     # they remain eligible on the next job tick.
-    for schedule in processed_schedules:
+    for schedule, tz_name in processed_schedules:
         schedule.last_run = now
-        schedule.next_run = now + timedelta(minutes=schedule.frequency_minutes)
+        schedule.next_run = schedule.compute_next_run(now, tz_name)
     db.session.commit()
 
     if not all_theater_ids:
@@ -336,8 +339,10 @@ def run_browse_schedules() -> list[Showtime]:
         len(all_theater_ids), len(processed_schedules),
     )
 
+    from app.scrapers.base import browse_schedule_scrape
     start = datetime.utcnow()
-    new_showtimes = queue_theaters_for_scrape(all_theater_ids, targets=None, force=False)
+    with browse_schedule_scrape():
+        new_showtimes = queue_theaters_for_scrape(all_theater_ids, targets=None, force=False)
     elapsed = (datetime.utcnow() - start).total_seconds()
 
     write_log(
