@@ -50,8 +50,9 @@ This project follows the Gitflow branching model: https://nvie.com/posts/a-succe
 1. Never merge PRs — create them and let the user approve and merge
 2. Never delete branches after merging
 3. Never commit or push directly to `main` or `develop` — all changes go through PRs
-4. After creating the PR, rebuild and restart the local container so the user can test immediately: `docker compose down && docker compose build --no-cache && docker compose up -d`
-5. Run only tests for changed code; full suite only when explicitly asked
+4. **Feature and fix branches MUST target `develop`, never `main`.** Only `release/*` and `hotfix/*` branches may target `main`. If a PR is ever created with the wrong base, correct it before the user merges.
+5. After creating the PR, rebuild and restart the local container so the user can test immediately: `docker compose down && docker compose build --no-cache && docker compose up -d`
+6. Run only tests for changed code; full suite only when explicitly asked
 
 ### Release Cycle
 
