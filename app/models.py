@@ -318,6 +318,7 @@ class Theater(db.Model):
     crawl_source = db.Column(db.String(100))
     last_crawled_at = db.Column(db.DateTime)
     on_demand_fetched_at = db.Column(db.DateTime, nullable=True)
+    last_scraped_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime,
@@ -991,3 +992,64 @@ class ScraperStatus(db.Model):
 
     def __repr__(self):
         return f"<ScraperStatus chain={self.chain_name} status={self.status}>"
+
+
+class BrowseSchedule(db.Model):
+    """
+    User-configured recurring task that scrapes all showtimes from every
+    theater within a radius of the user's saved location.
+
+    No alerts are sent — the data is stored for passive browsing.
+    One schedule per user (enforced by unique constraint on user_id).
+    Scrape coordination (deduplication, cooldown, concurrency) is handled
+    entirely by the unified scraper coordinator.
+    """
+
+    __tablename__ = "browse_schedules"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, unique=True)
+    radius = db.Column(db.Float, nullable=False)
+    radius_unit = db.Column(db.String(5), nullable=False, default="km")  # 'km' or 'miles'
+    # Valid values: 30, 60, 360, 720, 1440, 10080 (minutes)
+    frequency_minutes = db.Column(db.Integer, nullable=False, default=60)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    last_run = db.Column(db.DateTime, nullable=True)
+    next_run = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(
+        db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    user = db.relationship("User", backref=db.backref("browse_schedule", uselist=False))
+
+    FREQUENCY_LABELS = {
+        30: "Every 30 minutes",
+        60: "Hourly",
+        360: "Every 6 hours",
+        720: "Every 12 hours",
+        1440: "Daily",
+        10080: "Weekly",
+    }
+
+    def frequency_label(self) -> str:
+        return self.FREQUENCY_LABELS.get(self.frequency_minutes, f"Every {self.frequency_minutes} min")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "radius": self.radius,
+            "radius_unit": self.radius_unit,
+            "frequency_minutes": self.frequency_minutes,
+            "frequency_label": self.frequency_label(),
+            "enabled": self.enabled,
+            "last_run": self.last_run.isoformat() if self.last_run else None,
+            "next_run": self.next_run.isoformat() if self.next_run else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return (
+            f"<BrowseSchedule user={self.user_id} radius={self.radius}{self.radius_unit} "
+            f"freq={self.frequency_minutes}min enabled={self.enabled}>"
+        )

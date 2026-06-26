@@ -592,6 +592,11 @@ def _run_migrations():
             "ALTER TABLE theaters ADD COLUMN on_demand_fetched_at DATETIME",
             None,
         ),
+        (
+            "last_scraped_at", "theaters",
+            "ALTER TABLE theaters ADD COLUMN last_scraped_at DATETIME",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:
@@ -791,6 +796,14 @@ def _seed_default_settings():
         ("session_timeout_minutes", "60"),
         # On-demand showtime fetch cooldown (hours)
         ("on_demand_fetch_cooldown_hours", "24"),
+        # Scraper coordinator: minimum minutes between scrapes of the same theater
+        ("scrape_cooldown_minutes", "30"),
+        # Scraper coordinator: max simultaneous Playwright-based scrapers
+        ("playwright_concurrency", "2"),
+        # Scraper coordinator: max simultaneous plain-HTTP scrapers
+        ("http_concurrency", "5"),
+        # Browse schedule: how often the runner job checks for due schedules (minutes)
+        ("browse_schedule_check_minutes", "30"),
     ]
     for key, default_value in defaults:
         if not Settings.query.filter_by(key=key).first():

@@ -171,7 +171,8 @@ docker logs imax-alert -f
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v2.0 | Full North American Scraper Coverage | 🔄 next | #84–#92 #134–#150 |
+| v1.22 | Scheduled Proximity Browsing | 🔄 next | #243 (coordinator, first) #242 (browse schedule) |
+| v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
 | v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 |
 

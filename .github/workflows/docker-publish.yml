@@ -2,8 +2,7 @@ name: Docker
 
 on:
   push:
-    branches: [main, develop]
-    tags: ['v*.*.*']
+    tags: ['v*.*.*']    # branch-push trigger removed — PRs already validate before merge
   pull_request:
     branches: [main, develop]
 
@@ -16,6 +15,7 @@ jobs:
       - uses: actions/setup-python@v5.6.0
         with:
           python-version: "3.11"
+          cache: 'pip'   # skip re-downloading packages when requirements.txt is unchanged
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -26,8 +26,16 @@ jobs:
   scan:
     needs: test
     runs-on: ubuntu-latest
+    # Run on PRs to main (pre-release gate) and on tag pushes (pre-publish gate).
+    # Skip on PRs to develop — the scan runs again on the release PR to main.
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.base_ref == 'main')
     steps:
       - uses: actions/checkout@v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build image for scanning
         uses: docker/build-push-action@v6
@@ -36,6 +44,8 @@ jobs:
           push: false
           load: true
           tags: imax-alert:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Trivy — scan image for OS and library CVEs
         uses: aquasecurity/trivy-action@v0.36.0
