@@ -164,13 +164,13 @@ docker logs imax-alert -f
 | v1.19.0 | Theater Data Infrastructure: CSV export (download/email/save), bulk import with validation, Actions menu split into Showtimes/Venue Data/CSV & Data with inline descriptions, 10 remaining website URLs populated (#46 #83) |
 | v1.20.0 | Settings & Navigation Redesign: unified Settings nav, left-rail sidebar (desktop) + page-picker overlay (mobile), Profile Info/Settings split with accordions, App Settings accordion groups, segmented unit buttons, last_login_at tracking, XSS + datetime fixes (#211) |
 | v1.20.1 | Hotfix: restore base.html/CSS/template changes lost in release merge conflict; remove dead profile.html |
+| v1.21.0 | Theater detail page, scraper status/on-demand scraping, movie TMDB matching improvements, movies filter/sort/pagination, configurable page sizes (#225 #226 #227) |
 
 ### In Progress & Upcoming
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.21 | Theater Details & Scraper Monitoring | 🔄 next | #225 #226 #227 |
-| v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
+| v2.0 | Full North American Scraper Coverage | 🔄 next | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
 | v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 |
 
