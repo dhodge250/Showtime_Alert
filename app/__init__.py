@@ -597,6 +597,18 @@ def _run_migrations():
             "ALTER TABLE theaters ADD COLUMN last_scraped_at DATETIME",
             None,
         ),
+        # Browse schedule preferred run time (stored in user's configured timezone)
+        (
+            "preferred_hour", "browse_schedules",
+            "ALTER TABLE browse_schedules ADD COLUMN preferred_hour INTEGER DEFAULT 8",
+            None,
+        ),
+        # Browse schedule preferred day of week for Weekly frequency (0=Mon … 6=Sun)
+        (
+            "preferred_day_of_week", "browse_schedules",
+            "ALTER TABLE browse_schedules ADD COLUMN preferred_day_of_week INTEGER",
+            None,
+        ),
     ]
 
     for col_name, table_name, alter_sql, backfill_sql in migrations:
