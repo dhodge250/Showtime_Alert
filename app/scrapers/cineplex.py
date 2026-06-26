@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 import requests
 
-from app.scrapers.base import BaseScraper, _local_to_utc, _parse_time_text, _scrape_ctx
+from app.scrapers.base import BaseScraper, _local_to_utc, _parse_time_text
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,6 @@ class CineplexScraper(BaseScraper):
     """
 
     chain_name = "Cineplex"
-    health_website = "cineplex.com"
 
     _API_BASE = "https://apis.cineplex.com/prod/cpx/theatrical/api/v1"
     _API_HEADERS = {
@@ -106,9 +105,8 @@ class CineplexScraper(BaseScraper):
         date_iso: str,
         movie_ids: set,
     ) -> list[Showtime]:
-        """Fetch showtimes for one theater on one date."""
+        """Fetch IMAX showtimes for one theater on one date."""
         new_showtimes: list = []
-        on_demand = getattr(_scrape_ctx, "on_demand", False)
         try:
             d = date.fromisoformat(date_iso)
             date_param = quote(f"{d.month}/{d.day}/{d.year}", safe="")
@@ -131,9 +129,8 @@ class CineplexScraper(BaseScraper):
                         continue
                     for exp in movie.get("experiences", []):
                         types = exp.get("experienceTypes", [])
-                        if not on_demand and not any("IMAX" in t.upper() for t in types):
+                        if not any("IMAX" in t.upper() for t in types):
                             continue
-                        format_type = types[0] if types else "Standard"
                         for session in exp.get("sessions", []):
                             if session.get("isInThePast"):
                                 continue
@@ -153,7 +150,7 @@ class CineplexScraper(BaseScraper):
                             showtime, is_new = self.upsert_showtime(
                                 theater, movie_obj, show_dt,
                                 tickets_url=tickets_url,
-                                format_type=format_type,
+                                format_type="IMAX",
                             )
                             if is_new:
                                 new_showtimes.append(showtime)

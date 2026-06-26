@@ -2,12 +2,9 @@
 {% block title %}Theaters – IMAX Alert{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
-  <div>
-    <h1>IMAX Theaters</h1>
-    <p class="subtitle">Browse IMAX locations, specs, and showtimes worldwide</p>
-  </div>
-  <a href="{{ url_for('main.theater_compare') }}" class="btn btn-outline btn-sm" style="margin-top:4px">Compare Screen Sizes</a>
+<div class="page-header">
+  <h1>IMAX Theaters</h1>
+  <p class="subtitle">Browse IMAX locations, specs, and showtimes worldwide</p>
 </div>
 
 <!-- Filter bar (spans both columns) -->
@@ -90,10 +87,8 @@
            data-continent="{{ theater.continent_name or '' }}"
            data-commercial="{{ theater.commercial_films or '' }}"
            data-lat="{{ theater.latitude or '' }}"
-           data-lng="{{ theater.longitude or '' }}">
-        <a href="{{ url_for('main.theater_detail', theater_id=theater.id) }}"
-           class="theater-card-link"
-           aria-label="View details for {{ theater.name }}"></a>
+           data-lng="{{ theater.longitude or '' }}"
+           onclick="selectTheater({{ theater.id }}, {{ theater.latitude or 'null' }}, {{ theater.longitude or 'null' }})">
         <div class="theater-card-header">
           {% if theater.chain_name %}
           <span class="chain-badge chain-{{ theater.chain_name|lower|replace(' ','-') }}">{{ theater.chain_name }}</span>
@@ -150,11 +145,14 @@
           {% endif %}
         </div>
         <div class="theater-card-footer">
+          <a href="{{ url_for('main.theater_detail', theater_id=theater.id) }}" class="btn-sm btn-outline">
+            Showtimes
+          </a>
           {% if theater.website %}
-          <a href="{{ theater.website }}" target="_blank" rel="noopener" class="btn-sm btn-outline theater-card-action">Website</a>
+          <a href="{{ theater.website }}" target="_blank" class="btn-sm btn-outline">Website</a>
           {% endif %}
           {% if current_user.is_authenticated and current_user.role_name in ['admin', 'editor'] %}
-          <a href="{{ url_for('main.admin_theater_edit', theater_id=theater.id) }}" class="btn-sm btn-danger theater-card-action">
+          <a href="{{ url_for('main.admin_theater_edit', theater_id=theater.id) }}" class="btn-sm btn-danger">
             Edit
           </a>
           {% endif %}

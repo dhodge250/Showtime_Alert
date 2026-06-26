@@ -11,68 +11,20 @@ pip install -r requirements.txt
 
 ## Branching & PR Workflow (Gitflow)
 
-This project follows the Gitflow branching model: https://nvie.com/posts/a-successful-git-branching-model/
-
 **Repo:** `dhodge250/IMAX_Alert` — container: `imax-alert`
 
-### Permanent Branches
+1. Cut branch from `develop`: `git checkout -b fix/issue-NNN-description origin/develop`
+2. Commit, push, PR → `develop`; no reviewer needed
+3. After creating the PR, rebuild and restart the local container so the user can test immediately: `docker compose down && docker compose build --no-cache && docker compose up -d`
+4. Never merge PRs — create them and let the user approve and merge
+5. Never delete branches after merging
+6. Run only tests for changed code; full suite only when explicitly asked
 
-| Branch | Role |
-|--------|------|
-| `main` | Production-ready code only. Every commit represents a deployed release. Tag pushes trigger Docker Hub CI/CD. |
-| `develop` | Integration branch. All feature and fix work targets here first. Represents the latest state of the next release. |
-
-### Supporting Branch Types
-
-#### Feature / Fix Branches
-- **Naming:** `feature/short-description` or `fix/issue-NNN-short-description`
-- **Branch from:** `develop`
-- **PR target:** `develop`
-- **Purpose:** New features and bug fixes. Never branch from or PR directly to `main`.
-- **Examples:** `feature/v1.21-theater-detail`, `fix/issue-227-profile-map-width`
-
-#### Release Branches
-- **Naming:** `release/X.Y.Z`
-- **Branch from:** `develop`
-- **PR target:** `main` (then tag; `develop` picks up the tag via the merge history)
-- **Purpose:** Stabilise a release — only minor last-minute fixes, no new features.
-- **Examples:** `release/1.21.0`, `release/1.20.0`
-
-#### Hotfix Branches
-- **Naming:** `hotfix/X.Y.Z`
-- **Branch from:** `main`
-- **PR target:** `main` **and** a separate PR to `develop` (to keep branches in sync)
-- **Purpose:** Urgent production fixes that cannot wait for the next release cycle.
-- **Examples:** `hotfix/1.20.1`, `hotfix/1.19.1`
-
-### General Rules
-
-1. Never merge PRs — create them and let the user approve and merge
-2. Never delete branches after merging
-3. Never commit or push directly to `main` or `develop` — all changes go through PRs
-4. After creating the PR, rebuild and restart the local container so the user can test immediately: `docker compose down && docker compose build --no-cache && docker compose up -d`
-5. Run only tests for changed code; full suite only when explicitly asked
-
-### Release Cycle
-
-```
-git checkout -b release/X.Y.Z origin/develop
-git push -u origin release/X.Y.Z
-# PR release/X.Y.Z → main; user merges
-git checkout main && git pull origin main
-git tag vX.Y.Z && git push origin vX.Y.Z   # triggers Docker Hub CI/CD
-```
-
-### Hotfix Cycle
-
-```
-git checkout -b hotfix/X.Y.Z origin/main
-git push -u origin hotfix/X.Y.Z
-# PR hotfix/X.Y.Z → main; user merges
-# PR hotfix/X.Y.Z → develop; user merges
-git checkout main && git pull origin main
-git tag vX.Y.Z && git push origin vX.Y.Z   # triggers Docker Hub CI/CD
-```
+**Release cycle:**
+1. `git checkout -b release/X.Y.Z origin/develop && git push -u origin release/X.Y.Z`
+2. PR `release/X.Y.Z` → `main`
+3. After merge: `git checkout main && git pull origin main && git tag vX.Y.Z && git push origin vX.Y.Z`
+4. Tag push triggers Docker Hub CI/CD
 
 ## Local Testing
 
@@ -168,7 +120,6 @@ docker logs imax-alert -f
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.21 | Theater Details & Scraper Monitoring | 🔄 next | #225 #226 #227 |
 | v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
 | v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 |

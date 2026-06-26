@@ -4,7 +4,7 @@ import re
 from bs4 import BeautifulSoup
 
 from app import db
-from app.scrapers.base import BaseScraper, _get_active_targets, _local_to_utc, _parse_time_text, _scrape_ctx
+from app.scrapers.base import BaseScraper, _get_active_targets, _local_to_utc, _parse_time_text
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -18,13 +18,6 @@ _WAIT_MS = 7000
 _IMAX_ARIA = re.compile(r"IMAX", re.I)
 _SECTION_PREFIX = "Showtimes for "
 _SECTION_ARIA = re.compile(r"^Showtimes for ", re.I)
-# AMC aria-labels look like "IMAX at AMC Showtimes" or "Dolby Cinema at AMC Showtimes"
-_AMC_FORMAT_STRIP_RE = re.compile(r"\s+at\s+amc\b.*$", re.I)
-
-
-def _amc_format_label(aria_label: str) -> str:
-    """Extract the format name from an AMC li aria-label."""
-    return _AMC_FORMAT_STRIP_RE.sub("", aria_label).strip() or aria_label
 
 
 def _showtimes_url(website: str) -> str:
@@ -36,11 +29,14 @@ def _showtimes_url(website: str) -> str:
 
 def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: "AMCScraper") -> list[Showtime]:
     new_showtimes: list[Showtime] = []
-    on_demand = getattr(_scrape_ctx, "on_demand", False)
 
     for section in soup.find_all("section", attrs={"aria-label": _SECTION_ARIA}):
         title = section["aria-label"][len(_SECTION_PREFIX):]
         if not title:
+            continue
+
+        imax_li = section.find("li", attrs={"aria-label": _IMAX_ARIA})
+        if not imax_li:
             continue
 
         img = section.find("img", src=re.compile(r"cloudinary\.com|amc-cdn", re.I))
@@ -50,41 +46,24 @@ def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: 
         if not scraper._movie_wanted(movie, movie_ids):
             continue
 
-        # In on-demand mode scrape all format sections; otherwise only IMAX
-        format_lis = (
-            section.find_all("li", attrs={"aria-label": True})
-            if on_demand
-            else [section.find("li", attrs={"aria-label": _IMAX_ARIA})]
-        )
+        showtime_ul = imax_li.find("ul", attrs={"aria-label": "Showtime Group Results"})
+        if not showtime_ul:
+            continue
 
-        for format_li in format_lis:
-            if not format_li:
+        for link in showtime_ul.find_all("a"):
+            time_text = link.get_text(strip=True)
+            naive_local = _parse_time_text(time_text)
+            if not naive_local:
                 continue
-            # In alert mode we're always in the IMAX li → hardcode "IMAX".
-            # In on-demand mode normalize the aria-label to a clean format name.
-            format_type = (
-                _amc_format_label(format_li.get("aria-label", "IMAX"))
-                if on_demand else "IMAX"
+            show_dt = _local_to_utc(naive_local, theater)
+            href = link.get("href", "")
+            if href and not href.startswith("http"):
+                href = "https://www.amctheatres.com" + href
+            showtime, is_new = scraper.upsert_showtime(
+                theater, movie, show_dt, tickets_url=href, format_type="IMAX"
             )
-
-            showtime_ul = format_li.find("ul", attrs={"aria-label": "Showtime Group Results"})
-            if not showtime_ul:
-                continue
-
-            for link in showtime_ul.find_all("a"):
-                time_text = link.get_text(strip=True)
-                naive_local = _parse_time_text(time_text)
-                if not naive_local:
-                    continue
-                show_dt = _local_to_utc(naive_local, theater)
-                href = link.get("href", "")
-                if href and not href.startswith("http"):
-                    href = "https://www.amctheatres.com" + href
-                showtime, is_new = scraper.upsert_showtime(
-                    theater, movie, show_dt, tickets_url=href, format_type=format_type
-                )
-                if is_new:
-                    new_showtimes.append(showtime)
+            if is_new:
+                new_showtimes.append(showtime)
 
     return new_showtimes
 
@@ -93,7 +72,6 @@ class AMCScraper(BaseScraper):
     """Scraper for AMC Theatres IMAX showtimes."""
 
     chain_name = "AMC"
-    health_website = "amctheatres.com"
 
     def scrape_all(self) -> list[Showtime]:
         """Share one Playwright browser across all AMC theater scrapes."""
