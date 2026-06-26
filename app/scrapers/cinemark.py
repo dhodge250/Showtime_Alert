@@ -203,7 +203,7 @@ class CinemarkScraper(BaseScraper):
     ) -> BeautifulSoup | None:
         url = f"{_SHOWTIMES_API}?theaterId={theater_id}&showDate={date_iso}"
         headers = {**_API_HEADERS, "Referer": referer}
-            for attempt in range(3):
+        for attempt in range(3):
             try:
                 r = session.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
                 if r.status_code == 429:
