@@ -44,6 +44,7 @@ _SHOWTIMES_API = (
 )
 _THEATER_ID_RE = re.compile(r"var\s+currentTheaterId\s*=\s*(\d+)")
 _REQUEST_TIMEOUT = 15
+_MAX_RETRY_WAIT = 60  # skip a date rather than sleeping longer than this on a 429
 
 
 def _extract_theater_id(soup: BeautifulSoup) -> str:
@@ -202,11 +203,18 @@ class CinemarkScraper(BaseScraper):
     ) -> BeautifulSoup | None:
         url = f"{_SHOWTIMES_API}?theaterId={theater_id}&showDate={date_iso}"
         headers = {**_API_HEADERS, "Referer": referer}
-        for attempt in range(3):
+            for attempt in range(3):
             try:
                 r = session.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
                 if r.status_code == 429:
                     wait = int(r.headers.get("Retry-After", 10))
+                    if wait > _MAX_RETRY_WAIT:
+                        logger.warning(
+                            "Cinemark: rate-limited for theater %s on %s — "
+                            "Retry-After=%ds exceeds limit, skipping date",
+                            theater_id, date_iso, wait,
+                        )
+                        return None
                     logger.warning(
                         "Cinemark: rate-limited for theater %s on %s — waiting %ds (attempt %d/3)",
                         theater_id, date_iso, wait, attempt + 1,

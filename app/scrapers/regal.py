@@ -290,14 +290,22 @@ class RegalScraper(BaseScraper):
                 return ""
 
             props = (nd.get("props") or {}).get("pageProps") or {}
-            # Regal's theaters listing page exposes a theaters array in pageProps
-            theaters_list = (
-                props.get("theaters")
+            # Regal's /theaters page stores the full list under several possible keys
+            raw = (
+                props.get("fullTheatreData")
+                or props.get("theaters")
                 or props.get("allTheaters")
                 or props.get("theatres")
                 or props.get("allTheatres")
-                or []
             )
+            # Unwrap if the API wraps the list in a dict (e.g. {"theatres": [...]})
+            if isinstance(raw, dict):
+                raw = (
+                    raw.get("theatres") or raw.get("theaters")
+                    or raw.get("theatreList") or raw.get("theaterList")
+                    or []
+                )
+            theaters_list = raw if isinstance(raw, list) else []
             if not theaters_list:
                 logger.warning(
                     "Regal: theaters listing page has no theater list; "
