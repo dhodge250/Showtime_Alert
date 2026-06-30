@@ -262,6 +262,7 @@ class RegalScraper(BaseScraper):
 
         from datetime import date as _date, timedelta
         browse_only = getattr(_scrape_ctx, "browse_only", False)
+        today = _date.today()
 
         # Always start with whatever dates the page reported as having shows.
         # In browse mode also fill in the full 60-day window in case datesWithShows
@@ -270,14 +271,18 @@ class RegalScraper(BaseScraper):
         future_dates: list[str] = [d[:10] for d in dates_with_shows[1:]] if dates_with_shows else []
         if browse_only:
             page_date_set = set(future_dates)
-            today = _date.today()
             for i in range(1, 61):
                 d = (today + timedelta(days=i)).isoformat()
                 if d not in page_date_set:
                     future_dates.append(d)
         elif not future_dates:
-            today = _date.today()
             future_dates = [(today + timedelta(days=i)).isoformat() for i in range(1, 15)]
+
+        # When the SSR payload provided no today-showtimes (all_shows is empty —
+        # happens on the fallback path where we clear it), include today in the API
+        # probe so same-day shows aren't missed.
+        if not all_shows and today.isoformat() not in set(future_dates):
+            future_dates.insert(0, today.isoformat())
 
         for date_iso in future_dates:
             shows = self._fetch_date(session, theatre_code, date_iso)
@@ -372,7 +377,10 @@ class RegalScraper(BaseScraper):
                 if r.ok:
                     return r.json().get("shows") or []
                 if r.status_code == 429:
-                    wait = int(r.headers.get("Retry-After", 5))
+                    try:
+                        wait = max(1, int(float(r.headers.get("Retry-After") or "5")))
+                    except (ValueError, TypeError):
+                        wait = 5
                     if wait > _MAX_RETRY_WAIT:
                         logger.warning(
                             "Regal: rate-limited for theatre %s on %s — "

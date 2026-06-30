@@ -207,7 +207,10 @@ class CinemarkScraper(BaseScraper):
             try:
                 r = session.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
                 if r.status_code == 429:
-                    wait = int(r.headers.get("Retry-After", 10))
+                    try:
+                        wait = max(1, int(float(r.headers.get("Retry-After") or "10")))
+                    except (ValueError, TypeError):
+                        wait = 10
                     if wait > _MAX_RETRY_WAIT:
                         logger.warning(
                             "Cinemark: rate-limited for theater %s on %s — "

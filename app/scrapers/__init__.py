@@ -290,7 +290,6 @@ def run_browse_schedules() -> list[Showtime]:
         return []
 
     logger.info("Browse schedules: %d schedule(s) due", len(due))
-    write_log("scrape", f"Browse schedules: {len(due)} schedule(s) due — starting scrape")
 
     active_theaters = (
         Theater.query.filter_by(is_active=True)

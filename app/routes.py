@@ -668,7 +668,13 @@ def api_browse_schedule_status():
         return jsonify({"error": "No browse schedule configured"}), 404
 
     if user.location_lat is None or user.location_lon is None:
-        return jsonify({"in_flight": 0, "total": 0, "last_run": None, "next_run": None})
+        return jsonify({
+            "in_flight": 0,
+            "total": 0,
+            "run_in_progress": is_browse_run_in_progress(user.id),
+            "last_run": None,
+            "next_run": None,
+        })
 
     radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
     total = 0
