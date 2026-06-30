@@ -166,13 +166,13 @@ docker logs imax-alert -f
 | v1.20.1 | Hotfix: restore base.html/CSS/template changes lost in release merge conflict; remove dead profile.html |
 | v1.21.0 | Theater detail page, scraper status/on-demand scraping, movie TMDB matching improvements, movies filter/sort/pagination, configurable page sizes (#225 #226 #227) |
 | v1.21.1 | Hotfix: apply v1.21 code missing from main due to release branch merge base collision |
+| v1.22.0 | Scheduled Proximity Browsing: unified scraper coordinator (cooldown, in-flight, concurrency caps), browse schedule model + settings UI + Run Now, format type normalization across all scrapers, Regal rate-limit + date-range fixes, multi-user scrape isolation (#243 #242 #245) |
 
 ### In Progress & Upcoming
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.22 | Scheduled Proximity Browsing | 🔄 next | #243 (coordinator, first) #242 (browse schedule) |
-| v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
+| v2.0 | Full North American Scraper Coverage | 🔄 next | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
-| v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 |
+| v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 #251 |
 
