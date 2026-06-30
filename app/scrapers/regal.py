@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -19,6 +20,8 @@ _WAIT_MS = 7000
 _THEATRE_CODE_RE = re.compile(r"-(\d{4})$")
 _BASE_URL = "https://www.regmovies.com"
 _REQUEST_TIMEOUT = 15
+_INTER_REQUEST_DELAY = 0.5  # seconds between API calls to stay under Regal's rate limit
+_MAX_RETRY_WAIT = 30        # skip date rather than sleeping longer than this on a 429
 
 
 def _theatre_code_from_url(website: str) -> str:
@@ -362,19 +365,43 @@ class RegalScraper(BaseScraper):
             f"?theatres={theatre_code}&date={api_date}"
             f"&hoCode=&ignoreCache=false&moviesOnly=false"
         )
-        try:
-            r = session.get(url, timeout=_REQUEST_TIMEOUT)
-            if r.ok:
-                return r.json().get("shows") or []
-            logger.warning(
-                "Regal: getShowtimes returned HTTP %s for theatre %s on %s",
-                r.status_code, theatre_code, date_iso,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Regal: getShowtimes failed for %s on %s: %s",
-                theatre_code, date_iso, exc,
-            )
+        time.sleep(_INTER_REQUEST_DELAY)
+        for attempt in range(3):
+            try:
+                r = session.get(url, timeout=_REQUEST_TIMEOUT)
+                if r.ok:
+                    return r.json().get("shows") or []
+                if r.status_code == 429:
+                    wait = int(r.headers.get("Retry-After", 5))
+                    if wait > _MAX_RETRY_WAIT:
+                        logger.warning(
+                            "Regal: rate-limited for theatre %s on %s — "
+                            "Retry-After=%ds exceeds cap, skipping date",
+                            theatre_code, date_iso, wait,
+                        )
+                        return []
+                    logger.warning(
+                        "Regal: rate-limited for theatre %s on %s — "
+                        "waiting %ds (attempt %d/3)",
+                        theatre_code, date_iso, wait, attempt + 1,
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.warning(
+                    "Regal: getShowtimes returned HTTP %s for theatre %s on %s",
+                    r.status_code, theatre_code, date_iso,
+                )
+                return []
+            except Exception as exc:
+                logger.warning(
+                    "Regal: getShowtimes failed for %s on %s: %s",
+                    theatre_code, date_iso, exc,
+                )
+                return []
+        logger.warning(
+            "Regal: gave up on theatre %s on %s after 3 rate-limited attempts",
+            theatre_code, date_iso,
+        )
         return []
 
     def scrape_theater(self, theater: Theater, movie_ids: set) -> list[Showtime]:
