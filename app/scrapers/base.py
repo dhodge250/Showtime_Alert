@@ -72,6 +72,10 @@ def _normalize_format_type(raw: str) -> str:
     lower = cleaned.lower()
     if lower in _FORMAT_EXACT_MAP:
         return _FORMAT_EXACT_MAP[lower]
+    # IMAX variants with accessibility/language modifiers (e.g. "IMAX Open Caption")
+    # must stay IMAX, not be collapsed to Standard by the non-screen regex.
+    if "imax" in lower:
+        return cleaned
     if _FORMAT_NON_SCREEN_RE.search(cleaned):
         return "Standard"
     return cleaned or "Standard"
@@ -515,11 +519,11 @@ class BaseScraper:
             showtime.tickets_available = tickets_available
             showtime.format_type = format_type
             showtime.last_checked = datetime.now(timezone.utc)
-            # Alert showtimes are never downgraded by an on-demand or browse fetch.
-            if not on_demand:
+            # Only a scheduled alert scrape should clear provenance flags.
+            # on-demand clears browse_only and browse clears on_demand, which
+            # both incorrectly change dashboard visibility or provenance tracking.
+            if not on_demand and not browse_only:
                 showtime.on_demand = False
-            # Browse-only rows are promoted to Dashboard-visible when an alert scrape finds them.
-            if not browse_only:
                 showtime.browse_only = False
             return showtime, False
 

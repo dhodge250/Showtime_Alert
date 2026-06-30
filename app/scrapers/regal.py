@@ -223,7 +223,6 @@ class RegalScraper(BaseScraper):
             page.goto(theater.website, wait_until="domcontentloaded", timeout=30_000)
             page.wait_for_timeout(_WAIT_MS)
             nd = page.evaluate("window.__NEXT_DATA__")
-            pw_cookies = context.cookies()
         finally:
             page.close()
 
@@ -257,8 +256,9 @@ class RegalScraper(BaseScraper):
             all_shows = []
             dates_with_shows = []
 
-        # Hand Playwright CF cookies to requests for all subsequent API calls.
-        session = _make_session(pw_cookies)
+        # Re-snapshot cookies here (after any fallback navigation) so the
+        # requests.Session always carries the latest CF-clearance token.
+        session = _make_session(context.cookies())
 
         from datetime import date as _date, timedelta
         browse_only = getattr(_scrape_ctx, "browse_only", False)
@@ -345,7 +345,7 @@ class RegalScraper(BaseScraper):
                     code = str(
                         t.get("theatreCode") or t.get("code") or t.get("id") or ""
                     )
-                    if code.isdigit():
+                    if code.isdigit() and len(code) <= 6:
                         logger.info(
                             "Regal: matched '%s' → '%s' (code %s)",
                             theater.name, t_name, code,

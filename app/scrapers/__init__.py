@@ -333,17 +333,13 @@ def run_browse_schedules() -> list[Showtime]:
         })
         processed_schedules.append((schedule, user.timezone or "UTC"))
 
-    # Advance last_run/next_run only for schedules that were actually processed.
-    # Use compute_next_run so Daily/Weekly schedules respect the user's preferred
-    # hour and timezone — including correct DST handling on each tick.
-    # Skipped schedules (missing location) retain their current next_run so
-    # they remain eligible on the next job tick.
-    for schedule, tz_name in processed_schedules:
-        schedule.last_run = now
-        schedule.next_run = schedule.compute_next_run(now, tz_name)
-    db.session.commit()
-
     if not all_theater_ids:
+        # No theaters in radius: still advance schedules — the run completed,
+        # just found nothing to scrape.
+        for schedule, tz_name in processed_schedules:
+            schedule.last_run = now
+            schedule.next_run = schedule.compute_next_run(now, tz_name)
+        db.session.commit()
         logger.info("Browse schedules: no theaters found in any user radius — done")
         return []
 
@@ -359,6 +355,15 @@ def run_browse_schedules() -> list[Showtime]:
     with browse_schedule_scrape() as log_buf:
         new_showtimes = queue_theaters_for_scrape(all_theater_ids, targets=None, force=False)
     elapsed = (datetime.utcnow() - start).total_seconds()
+
+    # Advance last_run/next_run after the scrape completes so a crash between
+    # dispatch and commit causes a retry rather than a silent data-loss with a
+    # false "ran" timestamp.  Use compute_next_run so Daily/Weekly schedules
+    # respect the user's preferred hour and timezone.
+    for schedule, tz_name in processed_schedules:
+        schedule.last_run = now
+        schedule.next_run = schedule.compute_next_run(now, tz_name)
+    db.session.commit()
 
     # Flush scraper WARNING/ERROR records captured during the scrape.
     for level, msg in log_buf:

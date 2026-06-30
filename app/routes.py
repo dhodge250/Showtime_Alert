@@ -547,7 +547,10 @@ def api_browse_schedule_run_now():
     """Trigger an immediate browse-schedule scrape for the current user."""
     import threading
     from app.models import BrowseSchedule
-    from app.scrapers import queue_theaters_for_scrape, is_scraping_in_flight
+    from app.scrapers import (
+        queue_theaters_for_scrape, is_scraping_in_flight,
+        is_browse_run_in_progress, _browse_run_users, _browse_run_lock,
+    )
     from app.scrapers.base import _haversine_km
     from app.models import Theater
 
@@ -573,6 +576,14 @@ def api_browse_schedule_run_now():
     if not theater_ids:
         return jsonify({"status": "ok", "message": "No theaters found within your radius"}), 200
 
+    user_id = user.id
+
+    if is_browse_run_in_progress(user_id):
+        return jsonify({
+            "status": "busy",
+            "message": "A browse run is already in progress for your account — try again shortly",
+        }), 409
+
     in_flight = [tid for tid in theater_ids if is_scraping_in_flight(tid)]
     if in_flight:
         return jsonify({
@@ -583,21 +594,23 @@ def api_browse_schedule_run_now():
             ),
         }), 409
 
+    # Register the user as in-progress before starting the thread to close the
+    # TOCTOU window where the status endpoint would see run_in_progress=False
+    # between the 202 response and the thread's first executed line.
+    with _browse_run_lock:
+        _browse_run_users.add(user_id)
+
     # Capture values needed by the background thread before it starts
     _app = current_app._get_current_object()
-    user_id = user.id
     user_tz = user.timezone or "UTC"
     n_theaters = len(theater_ids)
 
     def _run():
-        from app.scrapers import _browse_run_users, _browse_run_lock
         from app.scrapers.base import browse_schedule_scrape
         from app.log_utils import write_log
         from app.models import BrowseSchedule, LogEntry
         from datetime import datetime
 
-        with _browse_run_lock:
-            _browse_run_users.add(user_id)
         try:
             with _app.app_context():
                 write_log(
@@ -645,7 +658,12 @@ def api_browse_schedule_run_now():
             with _browse_run_lock:
                 _browse_run_users.discard(user_id)
 
-    threading.Thread(target=_run, daemon=True, name=f"browse-run-now-{user.id}").start()
+    try:
+        threading.Thread(target=_run, daemon=True, name=f"browse-run-now-{user_id}").start()
+    except Exception:
+        with _browse_run_lock:
+            _browse_run_users.discard(user_id)
+        raise
     return jsonify({
         "status": "started",
         "theaters": n_theaters,
