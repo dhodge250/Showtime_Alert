@@ -18,12 +18,14 @@ _WAIT_MS = 7000
 _IMAX_ARIA = re.compile(r"IMAX", re.I)
 _SECTION_PREFIX = "Showtimes for "
 _SECTION_ARIA = re.compile(r"^Showtimes for ", re.I)
-# AMC aria-labels look like "IMAX at AMC Showtimes" or "Dolby Cinema at AMC Showtimes"
-_AMC_FORMAT_STRIP_RE = re.compile(r"\s+at\s+amc\b.*$", re.I)
+# AMC aria-labels: "IMAX at AMC Showtimes", "Dolby Cinema at AMC Showtimes",
+# "RealD 3D Showtimes", "Fan Faves Showtimes", etc.
+# Strip "at AMC ..." (covers the main format groups) OR trailing " Showtimes".
+_AMC_FORMAT_STRIP_RE = re.compile(r"\s+at\s+amc\b.*$|\s+showtimes?\s*$", re.I)
 
 
 def _amc_format_label(aria_label: str) -> str:
-    """Extract the format name from an AMC li aria-label."""
+    """Extract the screen-format name from an AMC li aria-label."""
     return _AMC_FORMAT_STRIP_RE.sub("", aria_label).strip() or aria_label
 
 
