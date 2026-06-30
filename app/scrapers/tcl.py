@@ -108,6 +108,7 @@ class TCLScraper(BaseScraper):
 
         hdrs = _api_headers(gas_token)
         on_demand = getattr(_scrape_ctx, "on_demand", False)
+        all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
 
         try:
             r = requests.get(
@@ -118,8 +119,8 @@ class TCLScraper(BaseScraper):
             )
             r.raise_for_status()
             all_dates_data = r.json().get("filmScreeningDates", [])
-            # In on-demand mode use all dates; otherwise only dates with IMAX showtimes
-            if on_demand:
+            # In all-formats mode use all dates; otherwise only dates with IMAX showtimes
+            if all_formats:
                 dates = [e["businessDate"] for e in all_dates_data]
             else:
                 dates = _imax_dates(all_dates_data)
@@ -156,10 +157,11 @@ class TCLScraper(BaseScraper):
         }
 
         on_demand = getattr(_scrape_ctx, "on_demand", False)
+        all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
         new_showtimes: list[Showtime] = []
         for show in data.get("showtimes", []):
             attr_ids = show.get("attributeIds", [])
-            if not on_demand and _IMAX_ATTR_ID not in attr_ids:
+            if not all_formats and _IMAX_ATTR_ID not in attr_ids:
                 continue
 
             raw_title = films.get(show.get("filmId", ""), "")

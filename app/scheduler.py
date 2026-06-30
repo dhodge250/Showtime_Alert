@@ -29,9 +29,6 @@ _health_check_state: dict = {
     "total": 0,
 }
 
-# Theater IDs currently being fetched on-demand (shared across threads).
-_on_demand_fetch_in_progress: set[int] = set()
-
 
 def get_health_check_state() -> dict:
     """Return a snapshot of the current health-check job state."""
@@ -58,8 +55,9 @@ def trigger_health_check(app) -> bool:
 
 
 def is_on_demand_fetch_running(theater_id: int) -> bool:
-    """Return True if an on-demand showtime fetch is in progress for this theater."""
-    return theater_id in _on_demand_fetch_in_progress
+    """Return True if any scrape is currently in progress for this theater."""
+    from app.scrapers import is_scraping_in_flight
+    return is_scraping_in_flight(theater_id)
 
 
 def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
@@ -67,18 +65,34 @@ def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
     Start a per-theater on-demand showtime fetch in a background daemon thread.
 
     Returns True if the fetch was started, False if one is already in progress.
+    The fetch acquires the coordinator semaphore and updates last_scraped_at.
     """
     import threading
-    if theater_id in _on_demand_fetch_in_progress:
-        return False
-    _on_demand_fetch_in_progress.add(theater_id)
+    from app.scrapers import _scraping_in_flight, _inflight_lock, _get_semaphore
+
+    with _inflight_lock:
+        if theater_id in _scraping_in_flight:
+            return False
+        # Claim in-flight atomically so no concurrent caller can also claim it.
+        _scraping_in_flight.add(theater_id)
 
     def _run():
         try:
-            with app.app_context():
-                _theater_fetch_job(theater_id, scraper)
+            sem = _get_semaphore(scraper.chain_name)
+            acquired = sem.acquire(blocking=True, timeout=300)
+            if not acquired:
+                logger.warning(
+                    "On-demand fetch: semaphore timeout for theater %d", theater_id
+                )
+                return
+            try:
+                with app.app_context():
+                    _theater_fetch_job(theater_id, scraper)
+            finally:
+                sem.release()
         finally:
-            _on_demand_fetch_in_progress.discard(theater_id)
+            with _inflight_lock:
+                _scraping_in_flight.discard(theater_id)
 
     threading.Thread(
         target=_run,
@@ -106,7 +120,9 @@ def _theater_fetch_job(theater_id: int, scraper) -> None:
     try:
         with on_demand_scrape():
             scraper.scrape_theater(theater, {None})
-        theater.on_demand_fetched_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        theater.on_demand_fetched_at = now
+        theater.last_scraped_at = now
         db.session.commit()
         logger.info("On-demand fetch complete for theater %s (%s)", theater_id, theater.name)
     except Exception as exc:  # noqa: BLE001
@@ -117,14 +133,27 @@ def trigger_single_health_check(scraper, app) -> None:
     """
     Run a single-chain health check in a background daemon thread.
 
+    Acquires the coordinator semaphore for the chain so the probe does not
+    run concurrently with a scheduled or on-demand scrape of the same chain.
     Returns immediately — the result is written to the DB by the thread.
     """
     import threading
+    from app.scrapers import _get_semaphore
     from app.scrapers.health import run_health_check
 
     def _run():
-        with app.app_context():
-            run_health_check(scraper)
+        # _get_semaphore is safe to call here — it does not require an app
+        # context after initialize_coordinator() ran at startup.
+        sem = _get_semaphore(scraper.chain_name)
+        acquired = sem.acquire(blocking=True, timeout=120)
+        if not acquired:
+            logger.warning("Health check: semaphore timeout for %s", scraper.chain_name)
+            return
+        try:
+            with app.app_context():
+                run_health_check(scraper)
+        finally:
+            sem.release()
 
     threading.Thread(
         target=_run,
@@ -244,6 +273,24 @@ def _cleanup_job(app):
         )
 
 
+def _browse_schedules_job(app):
+    """Scheduled job: run all due browse schedules and store scraped showtimes."""
+    from app.scrapers import run_browse_schedules
+
+    with app.app_context():
+        from app.log_utils import write_log
+        logger.info("Browse schedules job starting...")
+        try:
+            new_showtimes = run_browse_schedules()
+            if new_showtimes:
+                logger.info("Browse schedules job complete. %d new showtime(s).", len(new_showtimes))
+            else:
+                logger.debug("Browse schedules job complete. No new showtimes.")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Browse schedules job failed: %s", exc)
+            write_log("scrape", f"Browse schedules job failed: {exc}", level="ERROR")
+
+
 def _health_check_job(app):
     """Scheduled job: run a lightweight health check against every registered scraper chain."""
     _health_check_state["running"] = True
@@ -259,11 +306,30 @@ def _health_check_job(app):
 
             logger.info("Scraper health check starting...")
             write_log("scrape", "Scraper health check starting")
+            from app.scrapers import _get_semaphore
+
             _health_check_state["total"] = len(ALL_SCRAPERS)
             results = []
             for scraper in ALL_SCRAPERS:
                 _health_check_state["chain_name"] = scraper.chain_name
-                result = run_health_check(scraper)
+                sem = _get_semaphore(scraper.chain_name)
+                acquired = sem.acquire(blocking=True, timeout=120)
+                if not acquired:
+                    logger.warning(
+                        "Health check: semaphore timeout for %s — skipping",
+                        scraper.chain_name,
+                    )
+                    _health_check_state["completed"] += 1
+                    results.append({
+                        "status": "error",
+                        "chain_name": scraper.chain_name,
+                        "error_summary": "Skipped — semaphore timeout",
+                    })
+                    continue
+                try:
+                    result = run_health_check(scraper)
+                finally:
+                    sem.release()
                 _health_check_state["completed"] += 1
                 results.append(result)
                 logger.info(
@@ -366,11 +432,23 @@ def start_scheduler(app) -> None:
     cleanup_hours = _setting_int(
         "cleanup_interval_hours", "CLEANUP_INTERVAL_HOURS", 24
     )
+    browse_check_minutes = _setting_int(
+        "browse_schedule_check_minutes", "BROWSE_SCHEDULE_CHECK_MINUTES", 30
+    )
     hc_freq = _setting_str("health_check_frequency", "daily")
     hc_time = _setting_str("health_check_time", "00:00")
     hc_dow  = _setting_str("health_check_day_of_week", "0")
     hc_dom  = _setting_str("health_check_day_of_month", "1")
     hc_tz   = _setting_str("health_check_timezone", "UTC")
+
+    # Pre-warm coordinator semaphores from Settings while we still have an app
+    # context.  After this, _get_semaphore() is safe for any background thread.
+    with app.app_context():
+        from app.scrapers import initialize_coordinator
+        initialize_coordinator()
+
+    from app.scrapers.base import install_browse_log_handler
+    install_browse_log_handler()
 
     _scheduler = BackgroundScheduler()
 
@@ -407,6 +485,15 @@ def start_scheduler(app) -> None:
         trigger=IntervalTrigger(hours=cleanup_hours),
         id="imax_cleanup",
         name="Showtime cleanup",
+        replace_existing=True,
+    )
+
+    # Browse schedule runner — checks due schedules every N minutes (default 30)
+    _scheduler.add_job(
+        func=lambda: _browse_schedules_job(app),
+        trigger=IntervalTrigger(minutes=browse_check_minutes),
+        id="imax_browse_schedules",
+        name="Browse schedule runner",
         replace_existing=True,
     )
 

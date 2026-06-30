@@ -318,6 +318,7 @@ class Theater(db.Model):
     crawl_source = db.Column(db.String(100))
     last_crawled_at = db.Column(db.DateTime)
     on_demand_fetched_at = db.Column(db.DateTime, nullable=True)
+    last_scraped_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime,
@@ -543,6 +544,7 @@ class Showtime(db.Model):
     first_seen = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_checked = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     on_demand = db.Column(db.Boolean, default=False, nullable=False, server_default="0")
+    browse_only = db.Column(db.Boolean, default=False, nullable=False, server_default="0")
 
     theater = db.relationship("Theater", back_populates="showtimes")
     movie = db.relationship("Movie", back_populates="showtimes")
@@ -991,3 +993,119 @@ class ScraperStatus(db.Model):
 
     def __repr__(self):
         return f"<ScraperStatus chain={self.chain_name} status={self.status}>"
+
+
+class BrowseSchedule(db.Model):
+    """
+    User-configured recurring task that scrapes all showtimes from every
+    theater within a radius of the user's saved location.
+
+    No alerts are sent — the data is stored for passive browsing.
+    One schedule per user (enforced by unique constraint on user_id).
+    Scrape coordination (deduplication, cooldown, concurrency) is handled
+    entirely by the unified scraper coordinator.
+    """
+
+    __tablename__ = "browse_schedules"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, unique=True)
+    radius = db.Column(db.Float, nullable=False)
+    radius_unit = db.Column(db.String(5), nullable=False, default="km")  # 'km' or 'miles'
+    # Valid values: 30, 60, 360, 720, 1440, 10080 (minutes)
+    frequency_minutes = db.Column(db.Integer, nullable=False, default=60)
+    # Clock hour (0–23) in the user's configured timezone — only used for Daily/Weekly.
+    preferred_hour = db.Column(db.Integer, nullable=False, default=8)
+    # Day of week for Weekly schedules: 0=Monday … 6=Sunday. NULL for other frequencies.
+    preferred_day_of_week = db.Column(db.Integer, nullable=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    last_run = db.Column(db.DateTime, nullable=True)
+    next_run = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(
+        db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    user = db.relationship("User", backref=db.backref("browse_schedule", uselist=False))
+
+    FREQUENCY_LABELS = {
+        30: "Every 30 minutes",
+        60: "Hourly",
+        360: "Every 6 hours",
+        720: "Every 12 hours",
+        1440: "Daily",
+        10080: "Weekly",
+    }
+
+    DAY_LABELS = {
+        0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday",
+        4: "Friday", 5: "Saturday", 6: "Sunday",
+    }
+
+    def frequency_label(self) -> str:
+        return self.FREQUENCY_LABELS.get(self.frequency_minutes, f"Every {self.frequency_minutes} min")
+
+    def compute_next_run(self, from_dt: datetime, tz_name: str) -> datetime:
+        """
+        Return the next naive-UTC datetime this schedule should fire.
+
+        `from_dt` is naive UTC (consistent with the rest of the app).
+        For sub-daily frequencies the preferred_hour is ignored and the
+        interval is simply added to from_dt.  For Daily/Weekly the
+        preferred_hour (in the user's configured timezone) is respected,
+        with correct DST handling because the conversion is redone on
+        every call rather than being stored as a fixed UTC offset.
+        """
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            user_tz = ZoneInfo(tz_name or "UTC")
+        except (ZoneInfoNotFoundError, KeyError):
+            user_tz = ZoneInfo("UTC")
+
+        utc_zone = ZoneInfo("UTC")
+
+        if self.frequency_minutes < 1440:
+            return from_dt + timedelta(minutes=self.frequency_minutes)
+
+        # Make from_dt timezone-aware for calendar arithmetic
+        local_now = from_dt.replace(tzinfo=utc_zone).astimezone(user_tz)
+        hour = self.preferred_hour if self.preferred_hour is not None else 8
+
+        if self.frequency_minutes == 1440:  # Daily
+            candidate = local_now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if candidate <= local_now:
+                candidate += timedelta(days=1)
+            return candidate.astimezone(utc_zone).replace(tzinfo=None)
+
+        if self.frequency_minutes == 10080:  # Weekly
+            dow = self.preferred_day_of_week if self.preferred_day_of_week is not None else 0
+            candidate = local_now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            days_ahead = (dow - local_now.weekday()) % 7
+            candidate += timedelta(days=days_ahead)
+            if candidate <= local_now:
+                candidate += timedelta(days=7)
+            return candidate.astimezone(utc_zone).replace(tzinfo=None)
+
+        return from_dt + timedelta(minutes=self.frequency_minutes)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "radius": self.radius,
+            "radius_unit": self.radius_unit,
+            "frequency_minutes": self.frequency_minutes,
+            "frequency_label": self.frequency_label(),
+            "preferred_hour": self.preferred_hour,
+            "preferred_day_of_week": self.preferred_day_of_week,
+            "enabled": self.enabled,
+            "last_run": self.last_run.isoformat() if self.last_run else None,
+            "next_run": self.next_run.isoformat() if self.next_run else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return (
+            f"<BrowseSchedule user={self.user_id} radius={self.radius}{self.radius_unit} "
+            f"freq={self.frequency_minutes}min enabled={self.enabled}>"
+        )

@@ -18,12 +18,14 @@ _WAIT_MS = 7000
 _IMAX_ARIA = re.compile(r"IMAX", re.I)
 _SECTION_PREFIX = "Showtimes for "
 _SECTION_ARIA = re.compile(r"^Showtimes for ", re.I)
-# AMC aria-labels look like "IMAX at AMC Showtimes" or "Dolby Cinema at AMC Showtimes"
-_AMC_FORMAT_STRIP_RE = re.compile(r"\s+at\s+amc\b.*$", re.I)
+# AMC aria-labels: "IMAX at AMC Showtimes", "Dolby Cinema at AMC Showtimes",
+# "RealD 3D Showtimes", "Fan Faves Showtimes", etc.
+# Strip "at AMC ..." (covers the main format groups) OR trailing " Showtimes".
+_AMC_FORMAT_STRIP_RE = re.compile(r"\s+at\s+amc\b.*$|\s+showtimes?\s*$", re.I)
 
 
 def _amc_format_label(aria_label: str) -> str:
-    """Extract the format name from an AMC li aria-label."""
+    """Extract the screen-format name from an AMC li aria-label."""
     return _AMC_FORMAT_STRIP_RE.sub("", aria_label).strip() or aria_label
 
 
@@ -37,6 +39,8 @@ def _showtimes_url(website: str) -> str:
 def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: "AMCScraper") -> list[Showtime]:
     new_showtimes: list[Showtime] = []
     on_demand = getattr(_scrape_ctx, "on_demand", False)
+    # Browse-schedule scrapes collect all formats for discovery, same as on-demand
+    all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
 
     for section in soup.find_all("section", attrs={"aria-label": _SECTION_ARIA}):
         title = section["aria-label"][len(_SECTION_PREFIX):]
@@ -50,21 +54,26 @@ def _parse_page(theater: Theater, movie_ids: set, soup: BeautifulSoup, scraper: 
         if not scraper._movie_wanted(movie, movie_ids):
             continue
 
-        # In on-demand mode scrape all format sections; otherwise only IMAX
+        # In all-formats mode scrape every format section; otherwise only IMAX
         format_lis = (
             section.find_all("li", attrs={"aria-label": True})
-            if on_demand
+            if all_formats
             else [section.find("li", attrs={"aria-label": _IMAX_ARIA})]
         )
 
         for format_li in format_lis:
             if not format_li:
                 continue
+            aria = format_li.get("aria-label", "")
+            # AMC sometimes injects placeholder li elements with "undefined" in
+            # the label before the page fully hydrates — skip them.
+            if "undefined" in aria.lower():
+                continue
             # In alert mode we're always in the IMAX li → hardcode "IMAX".
-            # In on-demand mode normalize the aria-label to a clean format name.
+            # In all-formats mode normalize the aria-label to a clean format name.
             format_type = (
-                _amc_format_label(format_li.get("aria-label", "IMAX"))
-                if on_demand else "IMAX"
+                _amc_format_label(aria or "IMAX")
+                if all_formats else "IMAX"
             )
 
             showtime_ul = format_li.find("ul", attrs={"aria-label": "Showtime Group Results"})
@@ -95,20 +104,10 @@ class AMCScraper(BaseScraper):
     chain_name = "AMC"
     health_website = "amctheatres.com"
 
-    def scrape_all(self) -> list[Showtime]:
-        """Share one Playwright browser across all AMC theater scrapes."""
-        targets = _get_active_targets()
-        if not targets:
-            logger.debug("AMC: no active alerts — skipping scrape")
-            return []
-
-        query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
-        if None not in targets:
-            query = query.filter(Theater.id.in_(targets.keys()))
-        theaters = query.all()
+    def scrape_theaters_batch(self, theaters: list, targets: dict) -> list[Showtime]:
+        """Share one Playwright browser across all provided AMC theaters."""
         if not theaters:
             return []
-
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -137,6 +136,17 @@ class AMCScraper(BaseScraper):
 
         db.session.commit()
         return new_showtimes
+
+    def scrape_all(self) -> list[Showtime]:
+        """Alert-demand scrape: share one Playwright browser across all AMC theaters."""
+        targets = _get_active_targets()
+        if not targets:
+            logger.debug("AMC: no active alerts — skipping scrape")
+            return []
+        theaters = self._get_chain_theaters(targets)
+        if not theaters:
+            return []
+        return self.scrape_theaters_batch(theaters, targets)
 
     def _scrape_with_context(self, theater: Theater, movie_ids: set, context) -> list[Showtime]:
         if not theater.website:

@@ -109,6 +109,7 @@ class CineplexScraper(BaseScraper):
         """Fetch showtimes for one theater on one date."""
         new_showtimes: list = []
         on_demand = getattr(_scrape_ctx, "on_demand", False)
+        all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
         try:
             d = date.fromisoformat(date_iso)
             date_param = quote(f"{d.month}/{d.day}/{d.year}", safe="")
@@ -131,7 +132,7 @@ class CineplexScraper(BaseScraper):
                         continue
                     for exp in movie.get("experiences", []):
                         types = exp.get("experienceTypes", [])
-                        if not on_demand and not any("IMAX" in t.upper() for t in types):
+                        if not all_formats and not any("IMAX" in t.upper() for t in types):
                             continue
                         format_type = types[0] if types else "Standard"
                         for session in exp.get("sessions", []):

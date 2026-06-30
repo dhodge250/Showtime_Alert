@@ -24,6 +24,63 @@ logger = logging.getLogger(__name__)
 _scrape_ctx = threading.local()
 
 # ---------------------------------------------------------------------------
+# Format-type normalisation (shared across all scrapers)
+# ---------------------------------------------------------------------------
+
+# Trailing noise words that scrapers sometimes append to format labels.
+_FORMAT_SUFFIX_RE = re.compile(r"\s+(showtimes?|format)\s*$", re.I)
+
+# Label fragments that indicate a programming category, language version, or
+# accessibility mode — not a screen technology.  These all map to "Standard".
+_FORMAT_NON_SCREEN_RE = re.compile(
+    r"fan faves?"           # AMC: Fan Faves
+    r"|artisan films?"      # AMC: Artisan Films
+    r"|thrills?\s*&?\s*chills?"  # AMC: Thrills & Chills
+    r"|early access"        # Cineplex: Early Access
+    r"|strollers"           # Cineplex: Stars & Strollers
+    r"|party space"         # Cineplex: Party Space
+    r"|vip\s*\d"            # Cineplex: VIP 19+
+    r"|subtitles?"          # Any language subtitle variant
+    r"|dubbed"              # Any dubbed-language variant
+    r"|\bspoken\b"          # Language: "English Spoken Standard", "X Spoken with Y"
+    r"|open caption"        # Accessibility: Open Caption
+    r"|audio descri"        # Accessibility: Audio Description
+    r"|closed caption",     # Accessibility: Closed Caption
+    re.I,
+)
+
+_FORMAT_EXACT_MAP = {
+    "2d": "Standard",       # Cinemark uses "2D"
+    "regular": "Standard",  # Cinemark uses "Regular"
+    "standard": "Standard",
+    "cc": "Standard",       # Cinemark closed-caption shorthand
+}
+
+
+def _normalize_format_type(raw: str) -> str:
+    """Normalize a raw scraper format label to a canonical screen-technology name.
+
+    Applied inside upsert_showtime so every scraper benefits automatically.
+    Strips trailing noise words ("Showtimes", "Format"), then maps programming
+    categories, language variants, and accessibility modes to "Standard".
+    Known screen-technology labels (IMAX, Dolby Cinema, 4DX, RealD 3D, …)
+    pass through unchanged after suffix stripping.
+    """
+    if not raw:
+        return "Standard"
+    cleaned = _FORMAT_SUFFIX_RE.sub("", raw.strip()).strip()
+    lower = cleaned.lower()
+    if lower in _FORMAT_EXACT_MAP:
+        return _FORMAT_EXACT_MAP[lower]
+    # IMAX variants with accessibility/language modifiers (e.g. "IMAX Open Caption")
+    # must stay IMAX, not be collapsed to Standard by the non-screen regex.
+    if "imax" in lower:
+        return cleaned
+    if _FORMAT_NON_SCREEN_RE.search(cleaned):
+        return "Standard"
+    return cleaned or "Standard"
+
+# ---------------------------------------------------------------------------
 # Movie title normalisation for TMDB matching
 # ---------------------------------------------------------------------------
 
@@ -93,6 +150,63 @@ def on_demand_scrape():
         yield
     finally:
         _scrape_ctx.on_demand = False
+
+
+class _BrowseLogCapture(logging.Handler):
+    """Captures WARNING+ records from app.scrapers during a browse-schedule scrape.
+
+    Appends (level_str, message) tuples to the calling thread's log_buffer so
+    the caller can bulk-write them to LogEntry after the scrape completes —
+    safely outside the scraper's DB session.  Installed once at startup by
+    install_browse_log_handler(); does nothing when log_buffer is absent.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < logging.WARNING:
+            return
+        buf = getattr(_scrape_ctx, "log_buffer", None)
+        if buf is None:
+            return
+        try:
+            buf.append((record.levelname, self.format(record)))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_browse_log_handler = _BrowseLogCapture()
+_browse_log_handler.setFormatter(logging.Formatter("%(name)s — %(message)s"))
+_browse_handler_installed = False
+
+
+def install_browse_log_handler() -> None:
+    """Install the browse-schedule log-capture handler once at app startup."""
+    global _browse_handler_installed  # noqa: PLW0603
+    if not _browse_handler_installed:
+        logging.getLogger("app.scrapers").addHandler(_browse_log_handler)
+        _browse_handler_installed = True
+
+
+@contextlib.contextmanager
+def browse_schedule_scrape():
+    """Mark all upsert_showtime calls on this thread as browse_only=True.
+
+    Yields a list that accumulates (level, message) tuples for WARNING+ log
+    records emitted by app.scrapers during the scrape.  The caller should
+    write this buffer to the DB *after* the scrape context exits so there are
+    no session conflicts with the scraper's own commits.
+
+    Browse-schedule showtimes are visible on theater/movie detail pages but
+    excluded from the Dashboard 'Available Showtimes' list.  If an alert-driven
+    scrape later finds the same showtime the flag is cleared (promoted) so the
+    row becomes Dashboard-visible.
+    """
+    _scrape_ctx.browse_only = True
+    _scrape_ctx.log_buffer = []
+    try:
+        yield _scrape_ctx.log_buffer
+    finally:
+        _scrape_ctx.browse_only = False
+        _scrape_ctx.log_buffer = None
 
 # ---------------------------------------------------------------------------
 # Theater timezone helpers
@@ -386,6 +500,14 @@ class BaseScraper:
     ) -> tuple[Showtime, bool]:
         """Insert or update a showtime row. Returns (showtime, is_new)."""
         on_demand = getattr(_scrape_ctx, "on_demand", False)
+        browse_only = getattr(_scrape_ctx, "browse_only", False)
+
+        # Normalize format label: strip noise suffixes, map programming categories
+        # / language variants / accessibility modes → "Standard", then collapse any
+        # IMAX variant (except IMAX 3D) to plain "IMAX".
+        format_type = _normalize_format_type(format_type)
+        if "IMAX" in format_type.upper() and "3D" not in format_type.upper():
+            format_type = "IMAX"
 
         showtime = Showtime.query.filter_by(
             theater_id=theater.id,
@@ -395,10 +517,14 @@ class BaseScraper:
 
         if showtime:
             showtime.tickets_available = tickets_available
+            showtime.format_type = format_type
             showtime.last_checked = datetime.now(timezone.utc)
-            # Alert showtimes (on_demand=False) are never downgraded by an on-demand fetch.
-            if not on_demand:
+            # Only a scheduled alert scrape should clear provenance flags.
+            # on-demand clears browse_only and browse clears on_demand, which
+            # both incorrectly change dashboard visibility or provenance tracking.
+            if not on_demand and not browse_only:
                 showtime.on_demand = False
+                showtime.browse_only = False
             return showtime, False
 
         showtime = Showtime(
@@ -409,6 +535,7 @@ class BaseScraper:
             tickets_url=tickets_url,
             format_type=format_type,
             on_demand=on_demand,
+            browse_only=browse_only,
         )
         db.session.add(showtime)
         return showtime, True
@@ -428,39 +555,23 @@ class BaseScraper:
         """Scrape a single theater. Override in subclasses."""
         raise NotImplementedError
 
-    def scrape_all(self) -> list[Showtime]:
+    def scrape_theaters_batch(self, theaters: list, targets: dict) -> list[Showtime]:
         """
-        Scrape theaters for this chain that have at least one active, unsent alert.
+        Scrape an explicit list of theaters with movie-scoped targets.
 
-        Movies are scoped per theater so that an "any movie" alert at theater A
-        does not cause unrelated movies to be recorded at theater B.
+        targets: {theater_id: set[movie_id]}; targets[None] = any-theater movie set.
+        Override in Playwright scrapers to share a single browser across theaters.
+        Default implementation calls scrape_theater() per theater.
         """
-        targets = _get_active_targets()
-
-        if not targets:
-            logger.debug("%s: no active alerts — skipping scrape", self.chain_name)
-            return []
-
-        query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
-        if None not in targets:
-            query = query.filter(Theater.id.in_(targets.keys()))
-
-        theaters = query.all()
-        if not theaters:
-            return []
-
         new_showtimes: list[Showtime] = []
         for theater in theaters:
-            # Merge movie sets: any-theater alerts + this-theater-specific alerts
             movie_ids: set = set()
             if None in targets:
                 movie_ids |= targets[None]
             if theater.id in targets:
                 movie_ids |= targets[theater.id]
-
             if not movie_ids:
                 continue
-
             try:
                 results = self.scrape_theater(theater, movie_ids)
                 new_showtimes.extend(results)
@@ -468,6 +579,29 @@ class BaseScraper:
                 logger.error("Error scraping %s: %s", theater.name, exc)
         db.session.commit()
         return new_showtimes
+
+    def _get_chain_theaters(self, targets: dict) -> list:
+        """Return active theaters for this chain scoped to the given alert targets."""
+        query = Theater.query.filter_by(chain=self.chain_name, is_active=True)
+        if None not in targets:
+            query = query.filter(Theater.id.in_(targets.keys()))
+        return query.all()
+
+    def scrape_all(self) -> list[Showtime]:
+        """
+        Scrape theaters for this chain that have at least one active, unsent alert.
+
+        Delegates to scrape_theaters_batch() so Playwright scrapers can share
+        a browser across theaters via their override of that method.
+        """
+        targets = _get_active_targets()
+        if not targets:
+            logger.debug("%s: no active alerts — skipping scrape", self.chain_name)
+            return []
+        theaters = self._get_chain_theaters(targets)
+        if not theaters:
+            return []
+        return self.scrape_theaters_batch(theaters, targets)
 
 
 # ---------------------------------------------------------------------------

@@ -121,7 +121,8 @@ def index():
     now = datetime.now(timezone.utc)
     base_q = (
         Showtime.query
-        .filter(Showtime.on_demand == False)  # noqa: E712 — exclude manually-fetched rows
+        .filter(Showtime.on_demand == False)    # noqa: E712 — exclude manually-fetched rows
+        .filter(Showtime.browse_only == False)  # noqa: E712 — exclude browse-schedule-only rows
         .filter(Showtime.tickets_available.is_(True))
         .filter(Showtime.show_datetime >= now)
         .order_by(Showtime.show_datetime.asc())
@@ -433,6 +434,285 @@ def settings_account():
     return render_template("settings_account.html", user=user, saved=saved, unit=user.measurement_unit or "metric")
 
 
+@main_bp.route("/settings/browse-schedule", methods=["GET", "POST"])
+@login_required
+def settings_browse_schedule():
+    """Browse Schedule — configure and manage the user's proximity scrape schedule."""
+    from app.models import BrowseSchedule
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    user = current_user._get_current_object()
+    schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
+    saved = False
+    error = None
+
+    VALID_FREQUENCIES = {30, 60, 360, 720, 1440, 10080}
+
+    if request.method == "POST":
+        action = request.form.get("action", "save")
+
+        if action == "delete" and schedule:
+            db.session.delete(schedule)
+            db.session.commit()
+            return redirect(url_for("main.settings_browse_schedule"))
+
+        if action in ("save", "toggle"):
+            try:
+                radius = float(request.form.get("radius", 0))
+                if radius <= 0:
+                    raise ValueError("Radius must be positive")
+            except (ValueError, TypeError):
+                error = "Please enter a valid radius greater than zero."
+                has_location = user.location_lat is not None and user.location_lon is not None
+                try:
+                    tz_abbr = datetime.now(ZoneInfo(user.timezone or "UTC")).strftime("%Z")
+                except (ZoneInfoNotFoundError, KeyError):
+                    tz_abbr = "UTC"
+                return render_template(
+                    "settings_browse_schedule.html",
+                    user=user, schedule=schedule, error=error,
+                    has_location=has_location,
+                    frequency_labels=BrowseSchedule.FREQUENCY_LABELS,
+                    day_labels=BrowseSchedule.DAY_LABELS,
+                    tz_abbr=tz_abbr,
+                    start_in_edit=True,
+                )
+
+            radius_unit = request.form.get("radius_unit", "miles" if user.measurement_unit == "imperial" else "km")
+            if radius_unit not in ("km", "miles"):
+                radius_unit = "km"
+
+            try:
+                freq = int(request.form.get("frequency_minutes", 60))
+            except (ValueError, TypeError):
+                freq = 60
+            if freq not in VALID_FREQUENCIES:
+                freq = 60
+
+            try:
+                preferred_hour = int(request.form.get("preferred_hour", 8))
+                preferred_hour = max(0, min(23, preferred_hour))
+            except (ValueError, TypeError):
+                preferred_hour = 8
+
+            try:
+                preferred_dow = int(request.form.get("preferred_day_of_week", 0))
+                preferred_dow = max(0, min(6, preferred_dow))
+            except (ValueError, TypeError):
+                preferred_dow = 0
+
+            if action == "toggle":
+                enabled = not (schedule.enabled if schedule else True)
+            else:
+                enabled = request.form.get("enabled") == "on"
+
+            now = datetime.utcnow()
+            if schedule is None:
+                schedule = BrowseSchedule(user_id=user.id)
+                db.session.add(schedule)
+            schedule.radius = radius
+            schedule.radius_unit = radius_unit
+            schedule.frequency_minutes = freq
+            schedule.preferred_hour = preferred_hour
+            schedule.preferred_day_of_week = preferred_dow if freq == 10080 else None
+            schedule.enabled = enabled
+            schedule.next_run = schedule.compute_next_run(now, user.timezone)
+            db.session.commit()
+            saved = True
+
+    has_location = user.location_lat is not None and user.location_lon is not None
+    try:
+        tz_abbr = datetime.now(ZoneInfo(user.timezone or "UTC")).strftime("%Z")
+    except (ZoneInfoNotFoundError, KeyError):
+        tz_abbr = "UTC"
+
+    return render_template(
+        "settings_browse_schedule.html",
+        user=user,
+        schedule=schedule,
+        saved=saved,
+        error=error,
+        has_location=has_location,
+        frequency_labels=BrowseSchedule.FREQUENCY_LABELS,
+        day_labels=BrowseSchedule.DAY_LABELS,
+        tz_abbr=tz_abbr,
+        start_in_edit=False,
+    )
+
+
+@api_bp.route("/browse-schedule/run-now", methods=["POST"])
+@login_required
+def api_browse_schedule_run_now():
+    """Trigger an immediate browse-schedule scrape for the current user."""
+    import threading
+    from app.models import BrowseSchedule
+    from app.scrapers import (
+        queue_theaters_for_scrape, is_scraping_in_flight,
+        is_browse_run_in_progress, _browse_run_users, _browse_run_lock,
+    )
+    from app.scrapers.base import _haversine_km
+    from app.models import Theater
+
+    user = current_user._get_current_object()
+    schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
+
+    if schedule is None:
+        return jsonify({"error": "No browse schedule configured"}), 404
+    if user.location_lat is None or user.location_lon is None:
+        return jsonify({"error": "No location saved in your profile"}), 400
+
+    radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
+    active_theaters = (
+        Theater.query.filter_by(is_active=True)
+        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+        .all()
+    )
+    theater_ids = {
+        t.id for t in active_theaters
+        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km
+    }
+
+    if not theater_ids:
+        return jsonify({"status": "ok", "message": "No theaters found within your radius"}), 200
+
+    user_id = user.id
+
+    if is_browse_run_in_progress(user_id):
+        return jsonify({
+            "status": "busy",
+            "message": "A browse run is already in progress for your account — try again shortly",
+        }), 409
+
+    in_flight = [tid for tid in theater_ids if is_scraping_in_flight(tid)]
+    if in_flight:
+        return jsonify({
+            "status": "busy",
+            "message": (
+                f"A scrape is already in progress for {len(in_flight)} theater(s) "
+                "in your radius — try again shortly"
+            ),
+        }), 409
+
+    # Register the user as in-progress before starting the thread to close the
+    # TOCTOU window where the status endpoint would see run_in_progress=False
+    # between the 202 response and the thread's first executed line.
+    with _browse_run_lock:
+        _browse_run_users.add(user_id)
+
+    # Capture values needed by the background thread before it starts
+    _app = current_app._get_current_object()
+    user_tz = user.timezone or "UTC"
+    n_theaters = len(theater_ids)
+
+    def _run():
+        from app.scrapers.base import browse_schedule_scrape
+        from app.log_utils import write_log
+        from app.models import BrowseSchedule, LogEntry
+        from datetime import datetime
+
+        try:
+            with _app.app_context():
+                write_log(
+                    "scrape",
+                    f"Browse schedule Run Now: started — scraping {n_theaters} theater(s)",
+                    user_id=user_id,
+                )
+                start = datetime.utcnow()
+                try:
+                    with browse_schedule_scrape() as log_buf:
+                        new_showtimes = queue_theaters_for_scrape(theater_ids, targets=None, force=True)
+                    elapsed = (datetime.utcnow() - start).total_seconds()
+
+                    # Flush scraper WARNING/ERROR records captured during the scrape.
+                    for level, msg in log_buf:
+                        db.session.add(LogEntry(level=level, category="scrape", message=msg, user_id=user_id))
+                    db.session.flush()
+
+                    # Update last_run/next_run BEFORE removing from _browse_run_users
+                    # so the status endpoint never returns run_in_progress=False while
+                    # last_run is still unset.
+                    sched = BrowseSchedule.query.filter_by(user_id=user_id).first()
+                    if sched:
+                        now = datetime.utcnow()
+                        sched.last_run = now
+                        sched.next_run = sched.compute_next_run(now, user_tz)
+                    db.session.commit()
+
+                    write_log(
+                        "scrape",
+                        f"Browse schedule Run Now: complete — "
+                        f"{len(new_showtimes)} new showtime(s) from {n_theaters} theater(s) "
+                        f"in {elapsed:.1f}s",
+                        user_id=user_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    db.session.rollback()
+                    write_log(
+                        "scrape",
+                        f"Browse schedule Run Now: error — {exc}",
+                        level="ERROR",
+                        user_id=user_id,
+                    )
+        finally:
+            with _browse_run_lock:
+                _browse_run_users.discard(user_id)
+
+    try:
+        threading.Thread(target=_run, daemon=True, name=f"browse-run-now-{user_id}").start()
+    except Exception:
+        with _browse_run_lock:
+            _browse_run_users.discard(user_id)
+        raise
+    return jsonify({
+        "status": "started",
+        "theaters": n_theaters,
+        "message": f"Scraping {n_theaters} theater(s) in your radius",
+    }), 202
+
+
+@api_bp.route("/browse-schedule/status", methods=["GET"])
+@login_required
+def api_browse_schedule_status():
+    """Return how many radius theaters are currently in-flight and the schedule's last/next run."""
+    from app.models import BrowseSchedule, Theater
+    from app.scrapers import is_scraping_in_flight, is_browse_run_in_progress
+    from app.scrapers.base import _haversine_km
+
+    user = current_user._get_current_object()
+    schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
+
+    if schedule is None:
+        return jsonify({"error": "No browse schedule configured"}), 404
+
+    if user.location_lat is None or user.location_lon is None:
+        return jsonify({
+            "in_flight": 0,
+            "total": 0,
+            "run_in_progress": is_browse_run_in_progress(user.id),
+            "last_run": None,
+            "next_run": None,
+        })
+
+    radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
+    total = 0
+    in_flight = 0
+    for t in (Theater.query.filter_by(is_active=True)
+              .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))):
+        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km:
+            total += 1
+            if is_scraping_in_flight(t.id):
+                in_flight += 1
+
+    return jsonify({
+        "in_flight": in_flight,
+        "total": total,
+        "run_in_progress": is_browse_run_in_progress(user.id),
+        "last_run": schedule.last_run.strftime("%Y-%m-%dT%H:%M:%S") + "Z" if schedule.last_run else None,
+        "next_run": schedule.next_run.strftime("%Y-%m-%dT%H:%M:%S") + "Z" if schedule.next_run else None,
+    })
+
+
 @main_bp.route("/profile/mfa-setup", methods=["GET", "POST"])
 @login_required
 def profile_mfa_setup():
@@ -539,7 +819,16 @@ def movies():
     )
     on_demand_movie_ids = [r.movie_id for r in on_demand_id_rows]
 
-    all_movie_ids = list(set(alert_movie_ids) | set(on_demand_movie_ids))
+    # Browse-schedule movies: movies discovered via browse-schedule scrapes
+    browse_only_id_rows = (
+        db.session.query(Showtime.movie_id)
+        .filter(Showtime.browse_only == True, Showtime.show_datetime >= now)  # noqa: E712
+        .distinct()
+        .all()
+    )
+    browse_only_movie_ids = [r.movie_id for r in browse_only_id_rows]
+
+    all_movie_ids = list(set(alert_movie_ids) | set(on_demand_movie_ids) | set(browse_only_movie_ids))
     movies_per_page = _get_setting_int("movies_per_page", 50)
     if not all_movie_ids:
         return render_template("movies.html", movie_list=[], movies_per_page=movies_per_page)
@@ -620,7 +909,16 @@ def movie_detail(movie_id):
         )
         .first()
     )
-    if not has_alert and not has_on_demand:
+    has_browse = (
+        Showtime.query
+        .filter(
+            Showtime.movie_id == movie_id,
+            Showtime.browse_only == True,  # noqa: E712
+            Showtime.show_datetime >= now,
+        )
+        .first()
+    )
+    if not has_alert and not has_on_demand and not has_browse:
         abort(404)
 
     showtimes = (
