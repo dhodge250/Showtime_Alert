@@ -329,18 +329,44 @@ function _startPoll() {
     fetch('{{ url_for("api.api_browse_schedule_status") }}')
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        if (data.in_flight === 0) {
+        if (data.in_flight === 0 && !data.run_in_progress) {
           clearInterval(_pollTimer);
           _pollTimer = null;
           _onScrapeComplete(data);
-        } else {
+        } else if (data.in_flight > 0) {
           document.getElementById('fetch-status-text').textContent =
             'Scraping — ' + data.in_flight + ' of ' + data.total + ' theater(s) in progress…';
+        } else {
+          document.getElementById('fetch-status-text').textContent =
+            'Finishing up…';
         }
       })
       .catch(function() { /* network hiccup — keep polling */ });
   }, 3000);
 }
+
+// On page load, check if a scrape is already running (user navigated away and back).
+(function() {
+  fetch('{{ url_for("api.api_browse_schedule_status") }}')
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data) return;
+      if (data.in_flight > 0 || data.run_in_progress) {
+        var btn = document.getElementById('run-now-btn');
+        if (btn) btn.disabled = true;
+        var statusEl = document.getElementById('fetch-status');
+        var statusTxt = document.getElementById('fetch-status-text');
+        if (statusEl && statusTxt) {
+          statusTxt.textContent = data.in_flight > 0
+            ? 'Scraping — ' + data.in_flight + ' of ' + data.total + ' theater(s) in progress…'
+            : 'Finishing up…';
+          statusEl.classList.add('is-visible');
+        }
+        _startPoll();
+      }
+    })
+    .catch(function() {});
+}());
 
 function _onScrapeComplete(data) {
   var statusEl  = document.getElementById('fetch-status');

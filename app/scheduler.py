@@ -447,6 +447,9 @@ def start_scheduler(app) -> None:
         from app.scrapers import initialize_coordinator
         initialize_coordinator()
 
+    from app.scrapers.base import install_browse_log_handler
+    install_browse_log_handler()
+
     _scheduler = BackgroundScheduler()
 
     # Showtime scraper — runs every N minutes

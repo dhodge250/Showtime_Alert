@@ -24,6 +24,63 @@ logger = logging.getLogger(__name__)
 _scrape_ctx = threading.local()
 
 # ---------------------------------------------------------------------------
+# Format-type normalisation (shared across all scrapers)
+# ---------------------------------------------------------------------------
+
+# Trailing noise words that scrapers sometimes append to format labels.
+_FORMAT_SUFFIX_RE = re.compile(r"\s+(showtimes?|format)\s*$", re.I)
+
+# Label fragments that indicate a programming category, language version, or
+# accessibility mode — not a screen technology.  These all map to "Standard".
+_FORMAT_NON_SCREEN_RE = re.compile(
+    r"fan faves?"           # AMC: Fan Faves
+    r"|artisan films?"      # AMC: Artisan Films
+    r"|thrills?\s*&?\s*chills?"  # AMC: Thrills & Chills
+    r"|early access"        # Cineplex: Early Access
+    r"|strollers"           # Cineplex: Stars & Strollers
+    r"|party space"         # Cineplex: Party Space
+    r"|vip\s*\d"            # Cineplex: VIP 19+
+    r"|subtitles?"          # Any language subtitle variant
+    r"|dubbed"              # Any dubbed-language variant
+    r"|\bspoken\b"          # Language: "English Spoken Standard", "X Spoken with Y"
+    r"|open caption"        # Accessibility: Open Caption
+    r"|audio descri"        # Accessibility: Audio Description
+    r"|closed caption",     # Accessibility: Closed Caption
+    re.I,
+)
+
+_FORMAT_EXACT_MAP = {
+    "2d": "Standard",       # Cinemark uses "2D"
+    "regular": "Standard",  # Cinemark uses "Regular"
+    "standard": "Standard",
+    "cc": "Standard",       # Cinemark closed-caption shorthand
+}
+
+
+def _normalize_format_type(raw: str) -> str:
+    """Normalize a raw scraper format label to a canonical screen-technology name.
+
+    Applied inside upsert_showtime so every scraper benefits automatically.
+    Strips trailing noise words ("Showtimes", "Format"), then maps programming
+    categories, language variants, and accessibility modes to "Standard".
+    Known screen-technology labels (IMAX, Dolby Cinema, 4DX, RealD 3D, …)
+    pass through unchanged after suffix stripping.
+    """
+    if not raw:
+        return "Standard"
+    cleaned = _FORMAT_SUFFIX_RE.sub("", raw.strip()).strip()
+    lower = cleaned.lower()
+    if lower in _FORMAT_EXACT_MAP:
+        return _FORMAT_EXACT_MAP[lower]
+    # IMAX variants with accessibility/language modifiers (e.g. "IMAX Open Caption")
+    # must stay IMAX, not be collapsed to Standard by the non-screen regex.
+    if "imax" in lower:
+        return cleaned
+    if _FORMAT_NON_SCREEN_RE.search(cleaned):
+        return "Standard"
+    return cleaned or "Standard"
+
+# ---------------------------------------------------------------------------
 # Movie title normalisation for TMDB matching
 # ---------------------------------------------------------------------------
 
@@ -95,9 +152,48 @@ def on_demand_scrape():
         _scrape_ctx.on_demand = False
 
 
+class _BrowseLogCapture(logging.Handler):
+    """Captures WARNING+ records from app.scrapers during a browse-schedule scrape.
+
+    Appends (level_str, message) tuples to the calling thread's log_buffer so
+    the caller can bulk-write them to LogEntry after the scrape completes —
+    safely outside the scraper's DB session.  Installed once at startup by
+    install_browse_log_handler(); does nothing when log_buffer is absent.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < logging.WARNING:
+            return
+        buf = getattr(_scrape_ctx, "log_buffer", None)
+        if buf is None:
+            return
+        try:
+            buf.append((record.levelname, self.format(record)))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_browse_log_handler = _BrowseLogCapture()
+_browse_log_handler.setFormatter(logging.Formatter("%(name)s — %(message)s"))
+_browse_handler_installed = False
+
+
+def install_browse_log_handler() -> None:
+    """Install the browse-schedule log-capture handler once at app startup."""
+    global _browse_handler_installed  # noqa: PLW0603
+    if not _browse_handler_installed:
+        logging.getLogger("app.scrapers").addHandler(_browse_log_handler)
+        _browse_handler_installed = True
+
+
 @contextlib.contextmanager
 def browse_schedule_scrape():
     """Mark all upsert_showtime calls on this thread as browse_only=True.
+
+    Yields a list that accumulates (level, message) tuples for WARNING+ log
+    records emitted by app.scrapers during the scrape.  The caller should
+    write this buffer to the DB *after* the scrape context exits so there are
+    no session conflicts with the scraper's own commits.
 
     Browse-schedule showtimes are visible on theater/movie detail pages but
     excluded from the Dashboard 'Available Showtimes' list.  If an alert-driven
@@ -105,10 +201,12 @@ def browse_schedule_scrape():
     row becomes Dashboard-visible.
     """
     _scrape_ctx.browse_only = True
+    _scrape_ctx.log_buffer = []
     try:
-        yield
+        yield _scrape_ctx.log_buffer
     finally:
         _scrape_ctx.browse_only = False
+        _scrape_ctx.log_buffer = None
 
 # ---------------------------------------------------------------------------
 # Theater timezone helpers
@@ -404,8 +502,11 @@ class BaseScraper:
         on_demand = getattr(_scrape_ctx, "on_demand", False)
         browse_only = getattr(_scrape_ctx, "browse_only", False)
 
-        # Normalize format: any IMAX variant without 3D collapses to plain "IMAX".
-        if format_type and "IMAX" in format_type.upper() and "3D" not in format_type.upper():
+        # Normalize format label: strip noise suffixes, map programming categories
+        # / language variants / accessibility modes → "Standard", then collapse any
+        # IMAX variant (except IMAX 3D) to plain "IMAX".
+        format_type = _normalize_format_type(format_type)
+        if "IMAX" in format_type.upper() and "3D" not in format_type.upper():
             format_type = "IMAX"
 
         showtime = Showtime.query.filter_by(
@@ -418,11 +519,11 @@ class BaseScraper:
             showtime.tickets_available = tickets_available
             showtime.format_type = format_type
             showtime.last_checked = datetime.now(timezone.utc)
-            # Alert showtimes are never downgraded by an on-demand or browse fetch.
-            if not on_demand:
+            # Only a scheduled alert scrape should clear provenance flags.
+            # on-demand clears browse_only and browse clears on_demand, which
+            # both incorrectly change dashboard visibility or provenance tracking.
+            if not on_demand and not browse_only:
                 showtime.on_demand = False
-            # Browse-only rows are promoted to Dashboard-visible when an alert scrape finds them.
-            if not browse_only:
                 showtime.browse_only = False
             return showtime, False
 

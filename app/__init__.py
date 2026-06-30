@@ -638,6 +638,56 @@ def _run_migrations():
             "UPDATE showtimes SET format_type = 'IMAX' "
             "WHERE format_type LIKE 'IMAX %' AND format_type NOT LIKE '%3D%'"
         ),
+        # Strip trailing " Showtimes" from AMC and similar scrapers.
+        # e.g. "RealD 3D Showtimes" → "RealD 3D", "Fan Faves Showtimes" → "Fan Faves"
+        (
+            "UPDATE showtimes "
+            "SET format_type = TRIM(SUBSTR(format_type, 1, LENGTH(format_type) - LENGTH(' Showtimes'))) "
+            "WHERE format_type LIKE '% Showtimes'"
+        ),
+        # Strip trailing " Format" (Cineplex) e.g. "Standard Format" → "Standard"
+        (
+            "UPDATE showtimes "
+            "SET format_type = TRIM(SUBSTR(format_type, 1, LENGTH(format_type) - LENGTH(' Format'))) "
+            "WHERE format_type LIKE '% Format'"
+        ),
+        # Programming categories that are not screen technologies → Standard
+        (
+            "UPDATE showtimes SET format_type = 'Standard' "
+            "WHERE format_type IN ("
+            "  'Fan Faves', 'AMC Artisan Films', 'Thrills & Chills',"
+            "  'Early Access', 'Stars & Strollers', 'Party Space', 'CC'"
+            ")"
+        ),
+        # Language variants (subtitles / dubbed / spoken markers) → Standard
+        (
+            "UPDATE showtimes SET format_type = 'Standard' "
+            "WHERE format_type LIKE '%Subtitles%' "
+            "   OR format_type LIKE '%Dubbed%' "
+            "   OR format_type LIKE '%Spoken%'"
+        ),
+        # Accessibility options → Standard
+        (
+            "UPDATE showtimes SET format_type = 'Standard' "
+            "WHERE format_type LIKE '%Open Caption%' "
+            "   OR format_type LIKE '%Audio Descri%' "
+            "   OR format_type LIKE '%Closed Caption%'"
+        ),
+        # VIP age-restricted (not a screen technology) → Standard
+        (
+            "UPDATE showtimes SET format_type = 'Standard' "
+            "WHERE format_type LIKE 'VIP %' OR format_type LIKE 'VIP%+'"
+        ),
+        # Party rentals / baby screenings → Standard
+        (
+            "UPDATE showtimes SET format_type = 'Standard' "
+            "WHERE format_type LIKE 'Party Space%'"
+        ),
+        # "2D" / "Regular" (Cinemark) → Standard
+        (
+            "UPDATE showtimes SET format_type = 'Standard' "
+            "WHERE format_type IN ('2D', 'Regular', 'Standard')"
+        ),
     ]
     for cleanup_sql in _data_cleanups:
         try:
