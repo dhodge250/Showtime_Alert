@@ -9,6 +9,7 @@ Uses APScheduler to run four jobs on independent schedules:
   - Showtime cleanup:  every N hours   (default 24)
 """
 import logging
+import threading
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -20,7 +21,9 @@ logger = logging.getLogger(__name__)
 _scheduler: BackgroundScheduler | None = None
 
 # Tracks whether the scheduled health-check job is currently running.
-# Mutated in-place so the reference stays stable for callers.
+# Mutated in-place so the reference stays stable for callers.  All reads and
+# writes must hold _health_state_lock — the dict is shared between the cron
+# job thread, manual-trigger threads, and status-endpoint request threads.
 _health_check_state: dict = {
     "running": False,
     "chain_name": None,
@@ -28,11 +31,13 @@ _health_check_state: dict = {
     "completed": 0,
     "total": 0,
 }
+_health_state_lock = threading.Lock()
 
 
 def get_health_check_state() -> dict:
     """Return a snapshot of the current health-check job state."""
-    return dict(_health_check_state)
+    with _health_state_lock:
+        return dict(_health_check_state)
 
 
 def trigger_health_check(app) -> bool:
@@ -40,10 +45,12 @@ def trigger_health_check(app) -> bool:
     Spawn _health_check_job in a daemon thread.
 
     Returns True if the job was started, False if it was already running.
+    _health_check_job itself claims the running flag atomically, so even if
+    two triggers race past this check, only one run proceeds.
     """
-    import threading
-    if _health_check_state["running"]:
-        return False
+    with _health_state_lock:
+        if _health_check_state["running"]:
+            return False
     thread = threading.Thread(
         target=_health_check_job,
         args=(app,),
@@ -67,7 +74,6 @@ def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
     Returns True if the fetch was started, False if one is already in progress.
     The fetch acquires the coordinator semaphore and updates last_scraped_at.
     """
-    import threading
     from app.scrapers import _scraping_in_flight, _inflight_lock, _get_semaphore
 
     with _inflight_lock:
@@ -137,7 +143,6 @@ def trigger_single_health_check(scraper, app) -> None:
     run concurrently with a scheduled or on-demand scrape of the same chain.
     Returns immediately — the result is written to the DB by the thread.
     """
-    import threading
     from app.scrapers import _get_semaphore
     from app.scrapers.health import run_health_check
 
@@ -293,11 +298,17 @@ def _browse_schedules_job(app):
 
 def _health_check_job(app):
     """Scheduled job: run a lightweight health check against every registered scraper chain."""
-    _health_check_state["running"] = True
-    _health_check_state["chain_name"] = None
-    _health_check_state["started_at"] = datetime.now(timezone.utc).isoformat()
-    _health_check_state["completed"] = 0
-    _health_check_state["total"] = 0
+    # Atomic claim: the cron firing and a manual trigger can race — only one
+    # may proceed, the other exits without touching shared state.
+    with _health_state_lock:
+        if _health_check_state["running"]:
+            logger.info("Health check already running — skipping this invocation.")
+            return
+        _health_check_state["running"] = True
+        _health_check_state["chain_name"] = None
+        _health_check_state["started_at"] = datetime.now(timezone.utc).isoformat()
+        _health_check_state["completed"] = 0
+        _health_check_state["total"] = 0
     try:
         with app.app_context():
             from app.log_utils import write_log
@@ -308,10 +319,12 @@ def _health_check_job(app):
             write_log("scrape", "Scraper health check starting")
             from app.scrapers import _get_semaphore
 
-            _health_check_state["total"] = len(ALL_SCRAPERS)
+            with _health_state_lock:
+                _health_check_state["total"] = len(ALL_SCRAPERS)
             results = []
             for scraper in ALL_SCRAPERS:
-                _health_check_state["chain_name"] = scraper.chain_name
+                with _health_state_lock:
+                    _health_check_state["chain_name"] = scraper.chain_name
                 sem = _get_semaphore(scraper.chain_name)
                 acquired = sem.acquire(blocking=True, timeout=120)
                 if not acquired:
@@ -319,7 +332,8 @@ def _health_check_job(app):
                         "Health check: semaphore timeout for %s — skipping",
                         scraper.chain_name,
                     )
-                    _health_check_state["completed"] += 1
+                    with _health_state_lock:
+                        _health_check_state["completed"] += 1
                     results.append({
                         "status": "error",
                         "chain_name": scraper.chain_name,
@@ -330,7 +344,8 @@ def _health_check_job(app):
                     result = run_health_check(scraper)
                 finally:
                     sem.release()
-                _health_check_state["completed"] += 1
+                with _health_state_lock:
+                    _health_check_state["completed"] += 1
                 results.append(result)
                 logger.info(
                     "Health check %s: status=%s showtimes=%s",
@@ -347,11 +362,12 @@ def _health_check_job(app):
                 details={"results": results},
             )
     finally:
-        _health_check_state["running"] = False
-        _health_check_state["chain_name"] = None
-        _health_check_state["started_at"] = None
-        _health_check_state["completed"] = 0
-        _health_check_state["total"] = 0
+        with _health_state_lock:
+            _health_check_state["running"] = False
+            _health_check_state["chain_name"] = None
+            _health_check_state["started_at"] = None
+            _health_check_state["completed"] = 0
+            _health_check_state["total"] = 0
 
 
 def _build_health_trigger(

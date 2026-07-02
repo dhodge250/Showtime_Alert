@@ -10,6 +10,7 @@ user sees everything in one place with a link for each individual showtime.
 import json
 import logging
 import smtplib
+import threading
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -385,6 +386,15 @@ def _build_sms_body(user: User, showtime: Showtime) -> str:
 # Core notification logic
 # ---------------------------------------------------------------------------
 
+# Serialises the notification dispatch phase across threads.  The scheduled
+# scrape job (process_new_showtimes) and the independent alert processor
+# (process_pending_alerts) run in different APScheduler worker threads; both
+# read "unsent" state (alert_sent flags, notified_showtime_ids) that is only
+# committed at the end of _notify_for_alert, so without this lock they can
+# both pass the dedup checks for the same alert and double-notify the user.
+_notify_lock = threading.Lock()
+
+
 def _radius_theater_ids(pref: AlertPreference) -> Optional[set[int]]:
     """
     Return the set of theater IDs within pref.radius_km of the alert owner's
@@ -591,13 +601,14 @@ def _notify_for_showtime(app, showtime: Showtime) -> int:
     Backward-compatible wrapper: find all alerts matching a single showtime
     and call _notify_for_alert for each.
     """
-    prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
-    sent = 0
-    for pref in prefs:
-        matching = _get_matching_showtimes_for_pref(pref, [showtime])
-        if matching:
-            sent += _notify_for_alert(app, pref, matching)
-    return sent
+    with _notify_lock:
+        prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
+        sent = 0
+        for pref in prefs:
+            matching = _get_matching_showtimes_for_pref(pref, [showtime])
+            if matching:
+                sent += _notify_for_alert(app, pref, matching)
+        return sent
 
 
 # ---------------------------------------------------------------------------
@@ -620,13 +631,14 @@ def process_new_showtimes(app, new_showtimes: list[Showtime]) -> int:
     if not future_showtimes:
         return 0
 
-    prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
-    sent = 0
-    for pref in prefs:
-        matching = _get_matching_showtimes_for_pref(pref, future_showtimes)
-        if matching:
-            sent += _notify_for_alert(app, pref, matching)
-    return sent
+    with _notify_lock:
+        prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
+        sent = 0
+        for pref in prefs:
+            matching = _get_matching_showtimes_for_pref(pref, future_showtimes)
+            if matching:
+                sent += _notify_for_alert(app, pref, matching)
+        return sent
 
 
 def process_pending_alerts(app) -> int:
@@ -637,6 +649,12 @@ def process_pending_alerts(app) -> int:
     found nothing new.  Each alert receives one consolidated notification
     listing all matching showtimes.
     """
+    with _notify_lock:
+        return _process_pending_alerts_locked(app)
+
+
+def _process_pending_alerts_locked(app) -> int:
+    """Body of process_pending_alerts; caller must hold _notify_lock."""
     prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
     if not prefs:
         return 0
