@@ -208,6 +208,31 @@ def browse_schedule_scrape():
         _scrape_ctx.browse_only = False
         _scrape_ctx.log_buffer = None
 
+
+@contextlib.contextmanager
+def health_check_scrape():
+    """Mark all scraper DB writes on this thread as a dry-run health probe.
+
+    While active:
+      - upsert_showtime() counts parsed showtimes but never inserts new rows
+        or mutates existing ones, so probe data can never reach the DB — even
+        when a scraper commits internally (Regal does), which defeats the
+        savepoint-rollback approach because Session.commit() releases
+        savepoints and commits the outermost transaction.
+      - get_or_create_movie() never creates Movie rows and never calls TMDB.
+
+    Yields a counter dict: ``counter["parsed"]`` is the number of showtimes
+    the scraper parsed, whether or not they already exist in the DB — the
+    health check must measure "can the scraper still read the page", not
+    "how many rows were new".
+    """
+    counter = {"parsed": 0}
+    _scrape_ctx.health_check = counter
+    try:
+        yield counter
+    finally:
+        _scrape_ctx.health_check = None
+
 # ---------------------------------------------------------------------------
 # Theater timezone helpers
 # ---------------------------------------------------------------------------
@@ -425,6 +450,20 @@ class BaseScraper:
              canonical title; opportunistically fix messy stored titles.
           4. Create with canonical TMDB title (or cleaned, or raw as fallback).
         """
+        # Health-check probes are read-only: match existing rows but never
+        # create Movie rows, call TMDB, or mutate stored titles.
+        if getattr(_scrape_ctx, "health_check", None) is not None:
+            movie = Movie.query.filter(Movie.title.ilike(title)).first()
+            if movie:
+                return movie
+            cleaned = _clean_title_for_tmdb(title)
+            if cleaned != title:
+                movie = Movie.query.filter(Movie.title.ilike(cleaned)).first()
+                if movie:
+                    return movie
+            # Transient object — never added to the session (movie.id stays None).
+            return Movie(title=cleaned or title, **kwargs)
+
         # 1. Exact match on raw title
         movie = Movie.query.filter(Movie.title.ilike(title)).first()
         if movie:
@@ -515,9 +554,33 @@ class BaseScraper:
             show_datetime=show_datetime,
         ).first()
 
+        # Health-check probe: count the parsed showtime but write nothing —
+        # neither inserts nor mutations of existing rows may persist.
+        health_check = getattr(_scrape_ctx, "health_check", None)
+        if health_check is not None:
+            health_check["parsed"] += 1
+            if showtime:
+                return showtime, False
+            # Transient row built with FK ids only: assigning the relationship
+            # objects (theater=/movie=) would backref it onto the persistent
+            # parent and cascade it into the session on the next flush.
+            probe = Showtime(
+                theater_id=theater.id,
+                movie_id=movie.id,
+                show_datetime=show_datetime,
+                tickets_available=tickets_available,
+                tickets_url=tickets_url,
+                format_type=format_type,
+            )
+            return probe, True
+
         if showtime:
             showtime.tickets_available = tickets_available
             showtime.format_type = format_type
+            # Refresh the ticket link when the scraper provided one; keep the
+            # stored value when this scrape couldn't build a URL.
+            if tickets_url:
+                showtime.tickets_url = tickets_url
             showtime.last_checked = datetime.now(timezone.utc)
             # Only a scheduled alert scrape should clear provenance flags.
             # on-demand clears browse_only and browse clears on_demand, which

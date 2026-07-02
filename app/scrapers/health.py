@@ -59,6 +59,8 @@ def run_health_check(scraper) -> dict:
     """
     from app import db
     from app.models import ScraperStatus, Theater
+    from app.scrapers import _inflight_lock, _scraping_in_flight
+    from app.scrapers.base import health_check_scrape
 
     chain_name = scraper.chain_name
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -86,24 +88,46 @@ def run_health_check(scraper) -> dict:
         error_class = "NoTheater"
         error_summary = "No active theaters configured for this chain"
     else:
-        # Wrap the scrape in a savepoint so nothing persists to the DB.
-        # If scrape_theater() calls db.session.commit() internally (Regal does),
-        # that only releases the savepoint into the outer transaction; the
-        # db.session.rollback() in the finally block discards all of it.
-        db.session.begin_nested()
-        try:
-            found_showtimes = scraper.scrape_theater(theater, {None})
-            showtime_count = len(found_showtimes)
-            if showtime_count > 0:
-                status = "ok"
-            else:
-                status = "warning"
-                error_summary = "Scraper ran successfully but found no showtimes — page structure may have changed"
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Health check failed for %s: %s", chain_name, exc)
-            error_class, error_summary = _classify_error(exc)
-        finally:
-            db.session.rollback()  # discard all writes from the probe scrape
+        # Claim the probe theater in the shared in-flight registry so the
+        # probe never runs concurrently with a scheduled/on-demand scrape of
+        # the same theater (concurrent upserts race to an IntegrityError that
+        # surfaces on the other job's batch commit).
+        with _inflight_lock:
+            claimed = theater.id not in _scraping_in_flight
+            if claimed:
+                _scraping_in_flight.add(theater.id)
+
+        if not claimed:
+            status = "warning"
+            error_class = "Busy"
+            error_summary = (
+                "Skipped — theater is currently being scraped by another job; "
+                "will retry on the next scheduled check"
+            )
+        else:
+            # health_check_scrape() makes upsert_showtime/get_or_create_movie
+            # dry-run: showtimes are counted, never persisted or mutated.
+            # A savepoint is NOT sufficient here — RegalScraper.scrape_theater()
+            # commits internally, and Session.commit() releases savepoints and
+            # commits the outermost transaction.
+            try:
+                with health_check_scrape() as probe:
+                    scraper.scrape_theater(theater, {None})
+                showtime_count = probe["parsed"]
+                if showtime_count > 0:
+                    status = "ok"
+                else:
+                    status = "warning"
+                    error_summary = "Scraper ran successfully but found no showtimes — page structure may have changed"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Health check failed for %s: %s", chain_name, exc)
+                error_class, error_summary = _classify_error(exc)
+            finally:
+                # Belt-and-suspenders: discard any stray uncommitted state
+                # before writing the ScraperStatus row below.
+                db.session.rollback()
+                with _inflight_lock:
+                    _scraping_in_flight.discard(theater.id)
 
     row = ScraperStatus(
         chain_name=chain_name,

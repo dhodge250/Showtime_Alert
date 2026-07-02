@@ -1472,7 +1472,7 @@ class TestTCLScraper:
         mock_pw.__enter__ = MagicMock(return_value=mock_pw)
         mock_pw.__exit__ = MagicMock(return_value=False)
         mock_pw.chromium.launch.return_value = mock_browser
-        with patch("app.scrapers.tcl.sync_playwright", return_value=mock_pw):
+        with patch("playwright.sync_api.sync_playwright", return_value=mock_pw):
             token = _fetch_gas_token()
         assert token == "test-gas-token-abc123"
 
@@ -1490,7 +1490,7 @@ class TestTCLScraper:
         mock_pw.__enter__ = MagicMock(return_value=mock_pw)
         mock_pw.__exit__ = MagicMock(return_value=False)
         mock_pw.chromium.launch.return_value = mock_browser
-        with patch("app.scrapers.tcl.sync_playwright", return_value=mock_pw):
+        with patch("playwright.sync_api.sync_playwright", return_value=mock_pw):
             token = _fetch_gas_token()
         assert token == ""
 
@@ -1526,7 +1526,7 @@ class TestTCLScraper:
             theater = Theater.query.get(sample_theater)
             scraper = TCLScraper()
             with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
-                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
 
         assert len(results) == 2
         assert all(st.format_type == "IMAX" for st in results)
@@ -1546,7 +1546,7 @@ class TestTCLScraper:
             theater = Theater.query.get(sample_theater)
             scraper = TCLScraper()
             with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
-                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
             titles = {st.movie.title for st in results}
 
         assert "Non-IMAX Film" not in titles
@@ -1562,7 +1562,7 @@ class TestTCLScraper:
             theater = Theater.query.get(sample_theater)
             scraper = TCLScraper()
             with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
-                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
 
         available = {st.tickets_available for st in results}
         assert True in available   # 18:30 showtime is not sold out
@@ -1579,9 +1579,9 @@ class TestTCLScraper:
             theater = Theater.query.get(sample_theater)
             scraper = TCLScraper()
             with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
-                first = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                first = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
                 db.session.commit()
-                second = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                second = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
 
         assert len(first) == 2
         assert len(second) == 0
@@ -2690,6 +2690,138 @@ class TestPerMovieReset:
 
         resp = auth_client.patch(f"/api/alerts/{pref_id}/movies/9999/reset")
         assert resp.status_code == 404
+
+
+# -- Scraper health check ----------------------------------------------
+
+
+class TestHealthCheck:
+    """Regression tests for #270/#271/#272 — probe data must never persist,
+    counts must reflect parsed (not new) showtimes, and probes must respect
+    the in-flight registry."""
+
+    def _stub_scraper(self, showtimes_to_upsert):
+        """Build a BaseScraper stub whose scrape_theater upserts the given
+        (title, dt) pairs and then commits internally — like Regal does."""
+        from app.scrapers.base import BaseScraper
+
+        class StubScraper(BaseScraper):
+            chain_name = "AMC"  # matches sample_theater fixture chain
+
+            def scrape_theater(self, theater, movie_ids):
+                new = []
+                for title, dt in showtimes_to_upsert:
+                    movie = self.get_or_create_movie(title)
+                    st, is_new = self.upsert_showtime(theater, movie, dt)
+                    if is_new:
+                        new.append(st)
+                db.session.commit()  # internal commit — the Regal leak path
+                return new
+
+        return StubScraper()
+
+    def test_probe_persists_nothing_despite_internal_commit(self, app, sample_theater):
+        from datetime import datetime, timedelta
+        from app.scrapers.health import run_health_check
+
+        future = datetime.utcnow() + timedelta(days=3)
+        scraper = self._stub_scraper([("Probe Only Movie", future)])
+
+        result = run_health_check(scraper)
+
+        assert result["status"] == "ok"
+        assert result["showtime_count"] == 1
+        # The probe's movie and showtime must NOT be in the DB.
+        assert Movie.query.filter(Movie.title.ilike("Probe Only Movie")).first() is None
+        assert Showtime.query.count() == 0
+
+    def test_probe_counts_already_existing_showtimes(self, app, sample_theater, sample_movie):
+        """#271: a theater whose showtimes already exist must report ok, not
+        a false 'no showtimes found' warning."""
+        from datetime import datetime, timedelta
+        from app.scrapers.health import run_health_check
+
+        future = datetime.utcnow() + timedelta(days=3)
+        movie = Movie.query.get(sample_movie)
+        theater = Theater.query.get(sample_theater)
+        db.session.add(Showtime(theater_id=theater.id, movie_id=movie.id,
+                                show_datetime=future))
+        db.session.commit()
+
+        scraper = self._stub_scraper([(movie.title, future)])
+        result = run_health_check(scraper)
+
+        assert result["status"] == "ok"
+        assert result["showtime_count"] == 1
+        assert Showtime.query.count() == 1  # unchanged
+
+    def test_probe_does_not_mutate_existing_rows(self, app, sample_theater, sample_movie):
+        """#270: the probe must not clear browse_only/on_demand provenance flags."""
+        from datetime import datetime, timedelta
+        from app.scrapers.health import run_health_check
+
+        future = datetime.utcnow() + timedelta(days=3)
+        st = Showtime(theater_id=sample_theater, movie_id=sample_movie,
+                      show_datetime=future, browse_only=True)
+        db.session.add(st)
+        db.session.commit()
+        movie = Movie.query.get(sample_movie)
+
+        scraper = self._stub_scraper([(movie.title, future)])
+        run_health_check(scraper)
+
+        db.session.expire_all()
+        st = Showtime.query.first()
+        assert st.browse_only is True
+
+    def test_probe_skips_inflight_theater(self, app, sample_theater):
+        """#272: probe must not scrape a theater another job has claimed."""
+        from datetime import datetime, timedelta
+        import app.scrapers as coord_mod
+        from app.scrapers.health import run_health_check
+
+        future = datetime.utcnow() + timedelta(days=3)
+        scraper = self._stub_scraper([("Probe Only Movie", future)])
+
+        with coord_mod._inflight_lock:
+            coord_mod._scraping_in_flight.add(sample_theater)
+        try:
+            result = run_health_check(scraper)
+        finally:
+            with coord_mod._inflight_lock:
+                coord_mod._scraping_in_flight.discard(sample_theater)
+
+        assert result["status"] == "warning"
+        assert result["error_class"] == "Busy"
+        assert Showtime.query.count() == 0
+
+
+class TestUpsertTicketsUrl:
+    def test_update_refreshes_tickets_url(self, app, sample_theater, sample_movie):
+        """#254: a later scrape providing a URL must update the stored row."""
+        from datetime import datetime, timedelta
+        from app.scrapers.base import BaseScraper
+
+        future = datetime.utcnow() + timedelta(days=3)
+        theater = Theater.query.get(sample_theater)
+        movie = Movie.query.get(sample_movie)
+        scraper = BaseScraper()
+
+        st, is_new = scraper.upsert_showtime(theater, movie, future, tickets_url="")
+        db.session.commit()
+        assert is_new and st.tickets_url == ""
+
+        st2, is_new2 = scraper.upsert_showtime(
+            theater, movie, future, tickets_url="https://example.com/buy"
+        )
+        db.session.commit()
+        assert not is_new2
+        assert st2.tickets_url == "https://example.com/buy"
+
+        # An empty URL on a later scrape must NOT wipe the stored one.
+        st3, _ = scraper.upsert_showtime(theater, movie, future, tickets_url="")
+        db.session.commit()
+        assert st3.tickets_url == "https://example.com/buy"
 
 
 # -- Expired showtime cleanup ------------------------------------------

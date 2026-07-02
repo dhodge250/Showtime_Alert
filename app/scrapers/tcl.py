@@ -21,7 +21,6 @@ import re
 from datetime import datetime, timezone
 
 import requests
-from playwright.sync_api import sync_playwright
 
 from app.scrapers.base import BaseScraper, _local_to_utc, _scrape_ctx
 from app.models import Showtime, Theater
@@ -55,6 +54,13 @@ def _fetch_gas_token(page_url: str = _SITE_PAGE) -> str:
     page load; no cookies are needed for subsequent OCAPI calls — only the
     token itself matters.
     """
+    # Lazy import with graceful degradation, same as AMC/Regal — a missing
+    # playwright install must disable this scraper, not crash app startup.
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning("TCL scraper requires playwright — skipping")
+        return ""
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -131,12 +137,15 @@ class TCLScraper(BaseScraper):
         logger.debug("TCL: %d dates to scrape (on_demand=%s)", len(dates), on_demand)
         new_showtimes: list[Showtime] = []
         for date_iso in dates:
-            new_showtimes.extend(self._scrape_date(theater, movie_ids, hdrs, date_iso))
+            new_showtimes.extend(
+                self._scrape_date(theater, movie_ids, hdrs, date_iso, all_formats)
+            )
 
         return new_showtimes
 
     def _scrape_date(
-        self, theater: Theater, movie_ids: set, hdrs: dict, date_iso: str
+        self, theater: Theater, movie_ids: set, hdrs: dict, date_iso: str,
+        all_formats: bool,
     ) -> list[Showtime]:
         try:
             r = requests.get(
@@ -156,8 +165,6 @@ class TCLScraper(BaseScraper):
             for f in data.get("relatedData", {}).get("films", [])
         }
 
-        on_demand = getattr(_scrape_ctx, "on_demand", False)
-        all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
         new_showtimes: list[Showtime] = []
         for show in data.get("showtimes", []):
             attr_ids = show.get("attributeIds", [])

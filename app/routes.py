@@ -3335,7 +3335,7 @@ def api_venue_crawl_status():
     return jsonify({
         "scheduler_running": scheduler_status.get("running", False),
         "crawl_running": _crawl_running,
-        "next_crawl": venue_job["next_run"] if venue_job else None,
+        "next_crawl": venue_job["next_run_iso"] if venue_job else None,
         "total_theaters": total,
         "crawl_source_imax_fandom": crawled,
         "crawl_source_manual": manual,

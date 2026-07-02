@@ -152,6 +152,7 @@ def queue_theaters_for_scrape(
              Pass None to scrape all movies ({None} sentinel per theater).
     force: bypass the cooldown check (used by on-demand Run Now).
     """
+    from app import db
     from app.models import Theater, Settings
 
     if not theater_ids:
@@ -237,6 +238,9 @@ def queue_theaters_for_scrape(
             _update_last_scraped(chain_theaters)
         except Exception as exc:  # noqa: BLE001
             logger.error("Coordinator: chain '%s' batch failed: %s", chain_name, exc)
+            # Clear the failed transaction so the remaining chains in this run
+            # don't hit PendingRollbackError on their first query.
+            db.session.rollback()
         finally:
             sem.release()
             with _inflight_lock:
@@ -255,6 +259,7 @@ def _update_last_scraped(theaters: list) -> None:
     try:
         db.session.commit()
     except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
         logger.warning("Coordinator: could not update last_scraped_at: %s", exc)
 
 
