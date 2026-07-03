@@ -1,7 +1,7 @@
 """Flask routes for IMAX Alert application."""
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 
 from flask import (
     Blueprint,
@@ -21,6 +21,7 @@ from sqlalchemy.orm import joinedload
 
 from app import db
 from app.auth import require_role
+from app.time_utils import utcnow
 from app.models import (
     AlertMovie,
     AlertPreference,
@@ -122,7 +123,7 @@ def index():
 
     # Upcoming showtimes scoped to the current user's alerted theaters.
     # Admins see everything; regular users see only theaters they're watching.
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     base_q = (
         Showtime.query
         .filter(Showtime.on_demand == False)    # noqa: E712 — exclude manually-fetched rows
@@ -197,7 +198,7 @@ def theater_detail(theater_id):
     theater = Theater.query.get_or_404(theater_id)
     showtimes = (
         Showtime.query.filter_by(theater_id=theater_id)
-        .filter(Showtime.show_datetime >= datetime.now(timezone.utc).replace(tzinfo=None))
+        .filter(Showtime.show_datetime >= utcnow())
         .order_by(Showtime.show_datetime)
         .all()
     )
@@ -235,7 +236,7 @@ def theater_detail(theater_id):
     cooldown_remaining_sec = 0
     if theater.on_demand_fetched_at and not fetch_running:
         from datetime import timedelta
-        elapsed = datetime.now(timezone.utc).replace(tzinfo=None) - theater.on_demand_fetched_at
+        elapsed = utcnow() - theater.on_demand_fetched_at
         remaining = timedelta(hours=cooldown_hours) - elapsed
         if remaining.total_seconds() > 0:
             cooldown_active = True
@@ -441,7 +442,6 @@ def settings_account():
 def settings_browse_schedule():
     """Browse Schedule — configure and manage the user's proximity scrape schedule."""
     from app.models import BrowseSchedule
-    from datetime import datetime
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     user = current_user._get_current_object()
@@ -509,7 +509,7 @@ def settings_browse_schedule():
             else:
                 enabled = request.form.get("enabled") == "on"
 
-            now = datetime.utcnow()
+            now = utcnow()
             if schedule is None:
                 schedule = BrowseSchedule(user_id=user.id)
                 db.session.add(schedule)
@@ -602,7 +602,6 @@ def api_browse_schedule_run_now():
         from app.scrapers.base import browse_schedule_scrape
         from app.log_utils import write_log
         from app.models import BrowseSchedule, LogEntry
-        from datetime import datetime
 
         try:
             with _app.app_context():
@@ -611,11 +610,11 @@ def api_browse_schedule_run_now():
                     f"Browse schedule Run Now: started — scraping {n_theaters} theater(s)",
                     user_id=user_id,
                 )
-                start = datetime.utcnow()
+                start = utcnow()
                 try:
                     with browse_schedule_scrape() as log_buf:
                         new_showtimes = queue_theaters_for_scrape(theater_ids, targets=None, force=True)
-                    elapsed = (datetime.utcnow() - start).total_seconds()
+                    elapsed = (utcnow() - start).total_seconds()
 
                     # Flush scraper WARNING/ERROR records captured during the scrape.
                     for level, msg in log_buf:
@@ -627,7 +626,7 @@ def api_browse_schedule_run_now():
                     # last_run is still unset.
                     sched = BrowseSchedule.query.filter_by(user_id=user_id).first()
                     if sched:
-                        now = datetime.utcnow()
+                        now = utcnow()
                         sched.last_run = now
                         sched.next_run = sched.compute_next_run(now, user_tz)
                     db.session.commit()
@@ -785,7 +784,7 @@ def profile_mfa_disable():
 @login_required
 def movies():
     """Movies tab — all movies the user has ever had an alert for, plus on-demand scraped movies."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
 
     # Alert-linked movies (include fired/deleted so tiles persist beyond the alert lifecycle)
     alert_rows = (
@@ -876,7 +875,7 @@ def movie_detail(movie_id):
     from app import tmdb as tmdb_mod
 
     movie = Movie.query.get_or_404(movie_id)
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
 
     # Allow access if user has an alert for this movie, or if it has on-demand showtimes
     has_alert = (
@@ -994,7 +993,7 @@ def admin_theater_new():
             phone=request.form.get("phone", "").strip(),
             is_active=request.form.get("is_active") == "on",
             crawl_source="manual",
-            last_crawled_at=datetime.now(timezone.utc),
+            last_crawled_at=utcnow(),
         )
         _apply_lookup_fields(theater, request.form)
         db.session.add(theater)
@@ -1068,7 +1067,7 @@ def admin_users():
     """Admin: list all users and pending invites."""
     users_list = User.query.order_by(User.name).all()
     roles = Role.query.order_by(Role.name).all()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
     pending_invites = UserInvite.query.options(
         joinedload(UserInvite.created_by)
     ).filter(
@@ -1222,7 +1221,7 @@ def admin_user_invite():
     existing = UserInvite.query.filter(
         db.func.lower(UserInvite.email) == email,
         UserInvite.accepted_at.is_(None),
-        UserInvite.expires_at > datetime.now(timezone.utc).replace(tzinfo=None),
+        UserInvite.expires_at > utcnow(),
     ).first()
     if existing:
         flash(f"A pending invite for '{email}' already exists.", "warning")
@@ -1880,7 +1879,7 @@ def api_theater_fetch_showtimes(theater_id: int):
 
     cooldown_hours = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
     if theater.on_demand_fetched_at:
-        elapsed = datetime.now(timezone.utc).replace(tzinfo=None) - theater.on_demand_fetched_at
+        elapsed = utcnow() - theater.on_demand_fetched_at
         if elapsed < timedelta(hours=cooldown_hours):
             remaining = timedelta(hours=cooldown_hours) - elapsed
             return jsonify({
@@ -1908,7 +1907,7 @@ def api_theater_fetch_status(theater_id: int):
     on_demand_count = (
         Showtime.query
         .filter_by(theater_id=theater_id, on_demand=True)
-        .filter(Showtime.show_datetime >= datetime.now(timezone.utc).replace(tzinfo=None))
+        .filter(Showtime.show_datetime >= utcnow())
         .count()
     )
     return jsonify({
@@ -2039,7 +2038,7 @@ def api_showtimes():
     """Return upcoming showtimes, optionally filtered by theater and/or movie."""
     theater_id = request.args.get("theater_id", type=int)
     movie_id = request.args.get("movie_id", type=int)
-    query = Showtime.query.filter(Showtime.show_datetime >= datetime.now(timezone.utc))
+    query = Showtime.query.filter(Showtime.show_datetime >= utcnow())
     if theater_id:
         query = query.filter_by(theater_id=theater_id)
     if movie_id:
@@ -2536,7 +2535,7 @@ def api_reset_alert(pref_id):
     pref.is_active = True
     pref.notifications_fired = 0
     if pref.radius_km is not None:
-        pref.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        pref.created_at = utcnow()
     db.session.commit()
     from app.log_utils import write_log
     write_log("alert", f"Alert reset (id={pref_id})", user_id=current_user.id,
@@ -2559,7 +2558,7 @@ def api_reset_alert_movie(pref_id, movie_id):
     pref.alert_sent_at = None
     pref.is_active = True
     if pref.radius_km is not None:
-        pref.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        pref.created_at = utcnow()
     db.session.commit()
     return jsonify(am.to_dict())
 
@@ -3330,7 +3329,7 @@ def api_export_theaters_email():
         return jsonify({"status": "error", "message": "Your account has no email address configured"}), 400
 
     csv_data = export_theaters_csv()
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = utcnow().strftime("%Y%m%d_%H%M%S")
     filename = f"imax_theaters_{ts}.csv"
 
     ok, err = send_email_with_attachment(
@@ -3367,7 +3366,7 @@ def api_export_theaters_save():
     except OSError as exc:
         return jsonify({"status": "error", "message": f"Cannot create exports directory: {exc}"}), 500
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = utcnow().strftime("%Y%m%d_%H%M%S")
     filename = f"imax_theaters_{ts}.csv"
     filepath = os.path.join(exports_dir, filename)
 

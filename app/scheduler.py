@@ -17,6 +17,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from app.time_utils import utcnow
+
 logger = logging.getLogger(__name__)
 
 _scheduler: BackgroundScheduler | None = None
@@ -111,7 +113,6 @@ def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
 
 def _theater_fetch_job(theater_id: int, scraper) -> None:
     """Background job: scrape all showtimes for one theater as on-demand rows."""
-    from datetime import datetime, timezone
     from app import db
     from app.models import Showtime, Theater
     from app.scrapers.base import on_demand_scrape
@@ -127,7 +128,7 @@ def _theater_fetch_job(theater_id: int, scraper) -> None:
     try:
         with on_demand_scrape():
             scraper.scrape_theater(theater, {None})
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = utcnow()
         theater.on_demand_fetched_at = now
         theater.last_scraped_at = now
         db.session.commit()
@@ -214,7 +215,7 @@ def _alert_job(app):
 
 def _cleanup_job(app):
     """Scheduled job: delete expired showtimes, orphaned movies, and old log entries."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta
 
     from app.scrapers import cleanup_expired_showtimes, cleanup_orphaned_movies
 
@@ -228,7 +229,7 @@ def _cleanup_job(app):
             from app.models import LogEntry, Settings
             s = Settings.query.filter_by(key="log_retention_days").first()
             retention_days = int(s.value) if s and s.value else 30
-            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            cutoff = utcnow() - timedelta(days=retention_days)
             deleted_logs = LogEntry.query.filter(LogEntry.created_at < cutoff).delete()
             db.session.commit()
         except Exception as exc:  # noqa: BLE001

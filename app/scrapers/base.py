@@ -7,7 +7,7 @@ import logging
 import math
 import re
 import threading
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 
 from app import db
 from app.models import AlertMovie, AlertPreference, Movie, Showtime, Theater, User
+from app.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +333,7 @@ def _local_to_utc(naive_local: datetime, theater: Theater) -> datetime:
     Convert a naive local-theater datetime to a naive UTC datetime.
 
     All showtime rows are stored as naive UTC so comparisons against
-    datetime.utcnow() are consistent regardless of the scraper source.
+    utcnow() are consistent regardless of the scraper source.
     """
     tz = _theater_tz(theater)
     return naive_local.replace(tzinfo=tz).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
@@ -616,7 +617,7 @@ class BaseScraper:
             # stored value when this scrape couldn't build a URL.
             if tickets_url:
                 showtime.tickets_url = tickets_url
-            showtime.last_checked = datetime.now(timezone.utc)
+            showtime.last_checked = utcnow()
             # Only a scheduled alert scrape should clear provenance flags.
             # on-demand clears browse_only and browse clears on_demand, which
             # both incorrectly change dashboard visibility or provenance tracking.
@@ -900,7 +901,7 @@ def _parse_time_text(text: str) -> Optional[datetime]:
         "%H:%M",
         "%I %p",
     ]
-    today = datetime.now(timezone.utc).date()
+    today = utcnow().date()
 
     for fmt in date_formats:
         try:
@@ -929,7 +930,7 @@ def cleanup_expired_showtimes() -> int:
     Called by the nightly maintenance scheduler job.
     Returns the count of rows deleted.
     """
-    cutoff = datetime.now(timezone.utc)
+    cutoff = utcnow()
     expired = Showtime.query.filter(Showtime.show_datetime < cutoff).all()
     count = len(expired)
     for st in expired:
