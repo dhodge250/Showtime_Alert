@@ -11,13 +11,12 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
-app = create_app(os.environ.get("FLASK_ENV", "production"))
-
-# Refuse to start in production with the insecure default key.
-# Set SECRET_KEY as an environment variable before running.
-if (app.config.get("SECRET_KEY") == "dev-secret-key-change-in-production"
-        and os.environ.get("FLASK_ENV", "production") == "production"):
-    print("ERROR: SECRET_KEY is not set. Generate one with:")
+try:
+    app = create_app(os.environ.get("FLASK_ENV", "production"))
+except RuntimeError as exc:
+    # create_app() refuses to boot in production with the default SECRET_KEY.
+    print(f"ERROR: {exc}")
+    print("Generate one with:")
     print('  python -c "import secrets; print(secrets.token_hex(32))"')
     print("Then set it as an environment variable (TrueNAS UI, docker-compose, etc.).")
     sys.exit(1)

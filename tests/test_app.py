@@ -114,6 +114,25 @@ def sample_user(app):
         return user.id
 
 
+# ── SECRET_KEY production enforcement ───────────────────────────────────
+
+
+class TestSecretKeyEnforcement:
+    @pytest.mark.parametrize("secret", ["dev-secret-key-change-in-production", ""])
+    def test_production_rejects_insecure_secret_key(self, monkeypatch, secret):
+        # config.py reads SECRET_KEY from the environment at import time, so the
+        # config value (not os.environ) is what create_app() checks — patch the
+        # already-loaded Config class directly to simulate an insecure SECRET_KEY.
+        import config as config_module
+
+        monkeypatch.setattr(config_module.Config, "SECRET_KEY", secret)
+        with pytest.raises(RuntimeError, match="SECRET_KEY"):
+            create_app("production")
+    def test_testing_config_still_works(self):
+        app = create_app("testing")
+        assert app is not None
+
+
 # ── Auth ──────────────────────────────────────────────────────────────
 
 

@@ -35,6 +35,15 @@ def create_app(config_name="default"):
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config.from_object(config[config_name])
 
+    secret_key = (app.config.get("SECRET_KEY") or "").strip()
+    if config_name == "production" and (
+        not secret_key or secret_key == "dev-secret-key-change-in-production"
+    ):
+        raise RuntimeError(
+            "SECRET_KEY environment variable must be set to a non-empty, non-default value in production — "
+            "refusing to start with an insecure key."
+        )
+
     # Trust one layer of proxy headers (Cloudflare / NPM) so rate-limiting and
     # IP logging use the real client IP, not the proxy address.
     from werkzeug.middleware.proxy_fix import ProxyFix
