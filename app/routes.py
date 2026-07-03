@@ -77,6 +77,14 @@ def _get_setting_str(key: str, default: str) -> str:
     return s.value if s and s.value else default
 
 
+def _form_int(key: str, old: int, lo: int, hi: int) -> int:
+    """Parse an integer form field, clamped to [lo, hi], falling back to old on error."""
+    try:
+        return max(lo, min(hi, int(request.form.get(key, old))))
+    except (ValueError, TypeError):
+        return old
+
+
 # ---------------------------------------------------------------------------
 # Helper: current user's measurement unit (falls back to metric)
 # ---------------------------------------------------------------------------
@@ -1324,41 +1332,19 @@ def admin_settings():
         old_cleanup       = _get_setting_int("cleanup_interval_hours", 24)
         old_rows_per_page = _get_setting_int("rows_per_page", 15)
 
-        try:
-            new_scraper = max(1, min(1440, int(request.form.get("scraper_interval_minutes", old_scraper))))
-        except (ValueError, TypeError):
-            new_scraper = old_scraper
-        try:
-            new_alert = max(1, min(1440, int(request.form.get("alert_interval_minutes", old_alert))))
-        except (ValueError, TypeError):
-            new_alert = old_alert
-        try:
-            new_crawl = max(1, min(365, int(request.form.get("venue_crawl_interval_days", old_crawl))))
-        except (ValueError, TypeError):
-            new_crawl = old_crawl
-        try:
-            new_cleanup = max(1, min(168, int(request.form.get("cleanup_interval_hours", old_cleanup))))
-        except (ValueError, TypeError):
-            new_cleanup = old_cleanup
-        try:
-            new_rows_per_page = max(5, min(100, int(request.form.get("rows_per_page", old_rows_per_page))))
-        except (ValueError, TypeError):
-            new_rows_per_page = old_rows_per_page
+        new_scraper = _form_int("scraper_interval_minutes", old_scraper, 1, 1440)
+        new_alert = _form_int("alert_interval_minutes", old_alert, 1, 1440)
+        new_crawl = _form_int("venue_crawl_interval_days", old_crawl, 1, 365)
+        new_cleanup = _form_int("cleanup_interval_hours", old_cleanup, 1, 168)
+        new_rows_per_page = _form_int("rows_per_page", old_rows_per_page, 5, 100)
         old_movies_per_page = _get_setting_int("movies_per_page", 50)
-        try:
-            new_movies_per_page = max(10, min(200, int(request.form.get("movies_per_page", old_movies_per_page))))
-        except (ValueError, TypeError):
-            new_movies_per_page = old_movies_per_page
+        new_movies_per_page = _form_int("movies_per_page", old_movies_per_page, 10, 200)
         old_log_retention = _get_setting_int("log_retention_days", 30)
-        try:
-            new_log_retention = max(1, min(365, int(request.form.get("log_retention_days", old_log_retention))))
-        except (ValueError, TypeError):
-            new_log_retention = old_log_retention
+        new_log_retention = _form_int("log_retention_days", old_log_retention, 1, 365)
         old_on_demand_cooldown = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
-        try:
-            new_on_demand_cooldown = max(1, min(168, int(request.form.get("on_demand_fetch_cooldown_hours", old_on_demand_cooldown))))
-        except (ValueError, TypeError):
-            new_on_demand_cooldown = old_on_demand_cooldown
+        new_on_demand_cooldown = _form_int(
+            "on_demand_fetch_cooldown_hours", old_on_demand_cooldown, 1, 168
+        )
         old_session_timeout = _get_setting_int("session_timeout_minutes", 60)
         try:
             raw_timeout = int(request.form.get("session_timeout_minutes", old_session_timeout))
@@ -1421,15 +1407,8 @@ def admin_settings():
         except (ValueError, TypeError):
             new_hc_time = "00:00"
 
-        try:
-            new_hc_dow = str(max(0, min(6, int(request.form.get("health_check_day_of_week", "0")))))
-        except (ValueError, TypeError):
-            new_hc_dow = "0"
-
-        try:
-            new_hc_dom = str(max(1, min(31, int(request.form.get("health_check_day_of_month", "1")))))
-        except (ValueError, TypeError):
-            new_hc_dom = "1"
+        new_hc_dow = str(_form_int("health_check_day_of_week", 0, 0, 6))
+        new_hc_dom = str(_form_int("health_check_day_of_month", 1, 1, 31))
 
         raw_hc_tz = request.form.get("health_check_timezone", "UTC").strip()
         try:
