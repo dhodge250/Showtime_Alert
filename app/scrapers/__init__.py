@@ -281,8 +281,8 @@ def run_browse_schedules() -> list[Showtime]:
       5. Update last_run + next_run for every processed schedule.
     """
     from app import db
-    from app.models import BrowseSchedule, Theater, User
-    from app.scrapers.base import _haversine_km
+    from app.models import BrowseSchedule, User
+    from app.scrapers.base import theater_ids_within_radius, to_km
     from app.log_utils import write_log
 
     now = datetime.utcnow()
@@ -295,12 +295,6 @@ def run_browse_schedules() -> list[Showtime]:
         return []
 
     logger.info("Browse schedules: %d schedule(s) due", len(due))
-
-    active_theaters = (
-        Theater.query.filter_by(is_active=True)
-        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
-        .all()
-    )
 
     all_theater_ids: set[int] = set()
     schedule_info = []
@@ -318,17 +312,10 @@ def run_browse_schedules() -> list[Showtime]:
             )
             continue
 
-        radius_km = (
-            schedule.radius if schedule.radius_unit == "km"
-            else schedule.radius * 1.60934
+        radius_km = to_km(schedule.radius, schedule.radius_unit)
+        theater_ids = theater_ids_within_radius(
+            user.location_lat, user.location_lon, radius_km
         )
-        in_radius = [
-            t for t in active_theaters
-            if _haversine_km(
-                user.location_lat, user.location_lon, t.latitude, t.longitude
-            ) <= radius_km
-        ]
-        theater_ids = {t.id for t in in_radius}
         all_theater_ids |= theater_ids
         schedule_info.append({
             "user": user.name,

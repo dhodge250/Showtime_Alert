@@ -18,7 +18,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import db
-from app.models import AlertMovie, AlertPreference, Notification, Showtime, Theater, User
+from app.models import AlertMovie, AlertPreference, Notification, Showtime, User
 
 logger = logging.getLogger(__name__)
 
@@ -364,12 +364,8 @@ def _radius_theater_ids(pref: AlertPreference) -> Optional[set[int]]:
     user = User.query.get(pref.user_id)
     if user is None or user.location_lat is None or user.location_lon is None:
         return None
-    from app.scrapers.base import _haversine_km
-    return {
-        t.id for t in Theater.query.filter_by(is_active=True).all()
-        if t.latitude is not None and t.longitude is not None
-        and _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= pref.radius_km
-    }
+    from app.scrapers.base import theater_ids_within_radius
+    return theater_ids_within_radius(user.location_lat, user.location_lon, pref.radius_km)
 
 
 def _get_matching_showtimes_for_pref(
