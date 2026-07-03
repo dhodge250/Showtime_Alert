@@ -2,8 +2,8 @@
 Shared get-or-create helpers for lookup tables.
 
 Used by both the startup seeder (_seed_lookup_tables in __init__.py)
-and the venue crawler (venue_crawler.py) so both write FK columns
-consistently without duplicating logic.
+and the CSV import/re-seed helpers (venue_crawler.py) so both write FK
+columns consistently without duplicating logic.
 """
 import re
 

@@ -47,10 +47,6 @@ logger = logging.getLogger(__name__)
 main_bp = Blueprint("main", __name__)
 api_bp = Blueprint("api", __name__)
 
-# Track whether a crawl is currently running (in-process flag)
-_crawl_running = False
-_crawl_last_summary: dict = {}
-
 
 def _get_geocode_status() -> dict:
     """Thin wrapper so the view can call this without importing venue_crawler at module level."""
@@ -979,8 +975,6 @@ def admin_theaters():
         regions=regions,
         cities=cities,
         continents=continents,
-        crawl_running=_crawl_running,
-        last_summary=_crawl_last_summary,
         geocode_status=_get_geocode_status(),
     )
 
@@ -1312,13 +1306,11 @@ def admin_settings():
         # --- Schedule keys (integers, validated with sensible bounds) ---
         old_scraper       = _get_setting_int("scraper_interval_minutes", 30)
         old_alert         = _get_setting_int("alert_interval_minutes", 15)
-        old_crawl         = _get_setting_int("venue_crawl_interval_days", 7)
         old_cleanup       = _get_setting_int("cleanup_interval_hours", 24)
         old_rows_per_page = _get_setting_int("rows_per_page", 15)
 
         new_scraper = _form_int("scraper_interval_minutes", old_scraper, 1, 1440)
         new_alert = _form_int("alert_interval_minutes", old_alert, 1, 1440)
-        new_crawl = _form_int("venue_crawl_interval_days", old_crawl, 1, 365)
         new_cleanup = _form_int("cleanup_interval_hours", old_cleanup, 1, 168)
         new_rows_per_page = _form_int("rows_per_page", old_rows_per_page, 5, 100)
         old_movies_per_page = _get_setting_int("movies_per_page", 50)
@@ -1357,7 +1349,6 @@ def admin_settings():
         for key, val in (
             ("scraper_interval_minutes",       str(new_scraper)),
             ("alert_interval_minutes",         str(new_alert)),
-            ("venue_crawl_interval_days",      str(new_crawl)),
             ("cleanup_interval_hours",         str(new_cleanup)),
             ("rows_per_page",                  str(new_rows_per_page)),
             ("movies_per_page",                str(new_movies_per_page)),
@@ -1428,10 +1419,10 @@ def admin_settings():
         current_app.config["SESSION_TIMEOUT_MINUTES"] = new_session_timeout
 
         # Reschedule live if the values changed
-        if new_scraper != old_scraper or new_alert != old_alert or new_crawl != old_crawl or new_cleanup != old_cleanup:
+        if new_scraper != old_scraper or new_alert != old_alert or new_cleanup != old_cleanup:
             try:
                 from app.scheduler import reschedule_jobs
-                reschedule_jobs(new_scraper, new_crawl, new_cleanup, new_alert)
+                reschedule_jobs(new_scraper, new_cleanup, new_alert)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not reschedule jobs: %s", exc)
 
@@ -3270,43 +3261,6 @@ def api_trigger_scrape():
         return jsonify({"status": "error", "message": str(exc)}), 500
 
 
-# ---------------------------------------------------------------------------
-# API: Venue crawler
-# ---------------------------------------------------------------------------
-
-@api_bp.route("/venues/crawl/status")
-@login_required
-def api_venue_crawl_status():
-    from app.scheduler import get_scheduler_status
-
-    scheduler_status = get_scheduler_status()
-    venue_job = next(
-        (j for j in scheduler_status.get("jobs", []) if j["id"] == "imax_venue_crawl"),
-        None,
-    )
-
-    total   = Theater.query.count()
-    crawled = Theater.query.filter(Theater.crawl_source == "imax_fandom").count()
-    manual  = Theater.query.filter(Theater.crawl_source == "manual").count()
-    last_crawled = (
-        Theater.query.filter(Theater.last_crawled_at.isnot(None))
-        .order_by(Theater.last_crawled_at.desc())
-        .with_entities(Theater.last_crawled_at)
-        .first()
-    )
-
-    return jsonify({
-        "scheduler_running": scheduler_status.get("running", False),
-        "crawl_running": _crawl_running,
-        "next_crawl": venue_job["next_run_iso"] if venue_job else None,
-        "total_theaters": total,
-        "crawl_source_imax_fandom": crawled,
-        "crawl_source_manual": manual,
-        "last_crawled_at": last_crawled[0].isoformat() if last_crawled and last_crawled[0] else None,
-        "last_summary": _crawl_last_summary,
-    })
-
-
 @api_bp.route("/admin/theaters/sync-csv", methods=["POST"])
 @require_role("admin")
 def api_sync_theaters_from_csv():
@@ -3316,38 +3270,6 @@ def api_sync_theaters_from_csv():
     from app import _upsert_theaters_from_csv
     summary = _upsert_theaters_from_csv(current_app._get_current_object())
     return jsonify(summary)
-
-
-@api_bp.route("/venues/crawl/trigger", methods=["POST"])
-@require_role("admin")
-def api_trigger_venue_crawl():
-    """Trigger an immediate venue crawl asynchronously."""
-    global _crawl_running
-
-    if _crawl_running:
-        return jsonify({"status": "already_running"}), 409
-
-    from flask import current_app
-    app = current_app._get_current_object()
-
-    def _run():
-        global _crawl_running, _crawl_last_summary
-        _crawl_running = True
-        try:
-            from app.venue_crawler import run_venue_crawl
-            with app.app_context():
-                summary = run_venue_crawl()
-            _crawl_last_summary = {**summary, "finished_at": datetime.now(timezone.utc).isoformat()}
-            logger.info("Background venue crawl complete: %s", summary)
-        except Exception as exc:  # noqa: BLE001
-            _crawl_last_summary = {"error": str(exc), "finished_at": datetime.now(timezone.utc).isoformat()}
-            logger.error("Background venue crawl failed: %s", exc)
-        finally:
-            _crawl_running = False
-
-    thread = threading.Thread(target=_run, daemon=True, name="venue-crawl")
-    thread.start()
-    return jsonify({"status": "started"})
 
 
 # ---------------------------------------------------------------------------

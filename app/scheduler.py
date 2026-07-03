@@ -1,11 +1,10 @@
 """
-Scheduler for periodic IMAX showtime scraping, venue list crawling,
-alert processing, and expired showtime cleanup.
+Scheduler for periodic IMAX showtime scraping, alert processing, and
+expired showtime cleanup.
 
-Uses APScheduler to run six jobs on independent schedules:
+Uses APScheduler to run five jobs on independent schedules:
   - Showtime scraper:    every N minutes (default 30)
   - Alert processor:     every N minutes (default 15)
-  - Venue crawler:       every N days    (default 7)
   - Showtime cleanup:    every N hours   (default 24)
   - Browse schedules:    every N minutes (default 30)
   - Scraper health check: cron schedule configured in Settings
@@ -191,41 +190,6 @@ def _scrape_job(app):
         except Exception as exc:  # noqa: BLE001
             logger.error("Scheduled scrape failed: %s", exc)
             write_log("scrape", f"Scheduled scrape failed: {exc}", level="ERROR")
-
-
-def _venue_crawl_job(app):
-    """Scheduled job: crawl IMAX venue list and refresh theater DB rows."""
-    from app.venue_crawler import run_venue_crawl
-
-    with app.app_context():
-        from app.log_utils import write_log
-        logger.info("Scheduled venue crawl starting...")
-        write_log("scrape", "Scheduled venue crawl starting")
-        try:
-            summary = run_venue_crawl()
-            logger.info(
-                "Venue crawl complete: %d venues found, %d inserted, %d updated, "
-                "%d geocoded, %d geocode failures, %d errors",
-                summary["venues_found"],
-                summary["inserted"],
-                summary["updated"],
-                summary["geocoded"],
-                summary["geocode_failed"],
-                len(summary["errors"]),
-            )
-            level = "WARNING" if summary["errors"] else "INFO"
-            write_log("scrape",
-                      f"Venue crawl complete: {summary['venues_found']} venues, "
-                      f"{summary['inserted']} inserted, {summary['updated']} updated, "
-                      f"{len(summary['errors'])} errors",
-                      level=level,
-                      details=summary)
-            if summary["errors"]:
-                for err in summary["errors"]:
-                    logger.warning("Venue crawl error: %s", err)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Scheduled venue crawl failed: %s", exc)
-            write_log("scrape", f"Scheduled venue crawl failed: {exc}", level="ERROR")
 
 
 def _alert_job(app):
@@ -444,9 +408,6 @@ def start_scheduler(app) -> None:
     alert_minutes = _setting_int(
         "alert_interval_minutes", "ALERT_INTERVAL_MINUTES", 15
     )
-    venue_crawl_days = _setting_int(
-        "venue_crawl_interval_days", "VENUE_CRAWL_INTERVAL_DAYS", 7
-    )
     cleanup_hours = _setting_int(
         "cleanup_interval_hours", "CLEANUP_INTERVAL_HOURS", 24
     )
@@ -488,15 +449,6 @@ def start_scheduler(app) -> None:
         replace_existing=True,
     )
 
-    # Venue crawler — runs every N days
-    _scheduler.add_job(
-        func=lambda: _venue_crawl_job(app),
-        trigger=IntervalTrigger(days=venue_crawl_days),
-        id="imax_venue_crawl",
-        name="Venue crawler",
-        replace_existing=True,
-    )
-
     # Expired showtime cleanup — runs every N hours
     _scheduler.add_job(
         func=lambda: _cleanup_job(app),
@@ -527,11 +479,10 @@ def start_scheduler(app) -> None:
     _scheduler.start()
     logger.info(
         "Scheduler started; scraping every %d min, alerts every %d min, "
-        "venue crawl every %d days, cleanup every %d hours, "
+        "cleanup every %d hours, "
         "browse schedules every %d min, health check on its configured cron schedule.",
         interval_minutes,
         alert_minutes,
-        venue_crawl_days,
         cleanup_hours,
         browse_check_minutes,
     )
@@ -567,15 +518,14 @@ def get_scheduler_status() -> dict:
 
 def reschedule_jobs(
     scraper_minutes: int,
-    crawl_days: int,
     cleanup_hours: int = 24,
     alert_minutes: int = 15,
 ) -> None:
     """
     Update trigger intervals for all scheduled jobs without restarting.
 
-    Safe to call at any time after ``start_scheduler()``. All four job
-    intervals (scraper, alerts, venue crawl, cleanup) are updated atomically.
+    Safe to call at any time after ``start_scheduler()``. All three job
+    intervals (scraper, alerts, cleanup) are updated atomically.
     """
     if not _scheduler or not _scheduler.running:
         logger.warning(
@@ -590,17 +540,13 @@ def reschedule_jobs(
         "imax_alerts", trigger=IntervalTrigger(minutes=alert_minutes)
     )
     _scheduler.reschedule_job(
-        "imax_venue_crawl", trigger=IntervalTrigger(days=crawl_days)
-    )
-    _scheduler.reschedule_job(
         "imax_cleanup", trigger=IntervalTrigger(hours=cleanup_hours)
     )
     logger.info(
         "Jobs rescheduled: scraper every %d min, alerts every %d min, "
-        "venue crawl every %d days, cleanup every %d hours.",
+        "cleanup every %d hours.",
         scraper_minutes,
         alert_minutes,
-        crawl_days,
         cleanup_hours,
     )
 

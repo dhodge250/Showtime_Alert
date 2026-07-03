@@ -319,13 +319,11 @@
             </p>
 
             {% if scheduler_status.running %}
-              {% set scrape_job = scheduler_status.jobs | selectattr("id","equalto","imax_scrape")      | first | default(None) %}
-              {% set alert_job  = scheduler_status.jobs | selectattr("id","equalto","imax_alerts")      | first | default(None) %}
-              {% set crawl_job  = scheduler_status.jobs | selectattr("id","equalto","imax_venue_crawl") | first | default(None) %}
+              {% set scrape_job = scheduler_status.jobs | selectattr("id","equalto","imax_scrape") | first | default(None) %}
+              {% set alert_job  = scheduler_status.jobs | selectattr("id","equalto","imax_alerts") | first | default(None) %}
             {% else %}
               {% set scrape_job = None %}
               {% set alert_job  = None %}
-              {% set crawl_job  = None %}
             {% endif %}
 
             <div class="settings-security-rows">
@@ -359,24 +357,6 @@
                 {% if alert_job and alert_job.next_run_iso %}
                 <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
                   Next run: <strong class="local-time" data-iso="{{ alert_job.next_run_iso }}"></strong>
-                </small>
-                {% elif not scheduler_status.running %}
-                <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>
-                {% endif %}
-              </div>
-
-              <div class="form-group">
-                <label for="venue_crawl_interval_days">Venue list refresh interval (days)</label>
-                <input type="number" id="venue_crawl_interval_days" name="venue_crawl_interval_days"
-                       min="1" max="365"
-                       value="{{ settings.get('venue_crawl_interval_days', '7') }}"
-                       style="width:120px" />
-                <small class="text-muted" style="font-size:11px;margin-top:2px">
-                  How often to crawl for new or closed theaters. Min: 1 day, Max: 365 days.
-                </small>
-                {% if crawl_job and crawl_job.next_run_iso %}
-                <small style="font-size:11px;margin-top:4px;color:var(--text-primary)">
-                  Next run: <strong class="local-time" data-iso="{{ crawl_job.next_run_iso }}"></strong>
                 </small>
                 {% elif not scheduler_status.running %}
                 <small style="font-size:11px;margin-top:4px;color:var(--warning)">Scheduler not running.</small>

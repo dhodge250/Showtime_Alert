@@ -2433,7 +2433,6 @@ class TestAdminSettingsNotification:
                 "tmdb_api_key": "",
                 "app_measurement_unit": "metric",
                 "scraper_interval_minutes": "30",
-                "venue_crawl_interval_days": "7",
                 "cleanup_interval_hours": "24",
             },
             follow_redirects=True,
