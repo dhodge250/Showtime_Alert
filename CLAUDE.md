@@ -114,7 +114,7 @@ docker logs imax-alert -f
 
 **Playwright + plain requests (TCL):** Playwright fetches the homepage to bypass Cloudflare and extract the `gasToken` from `__NEXT_DATA__`; browser is closed immediately after. All subsequent OCAPI calls use plain `requests` with the token as a Bearer header.
 
-**`scrape_all()` override:** Playwright scrapers (AMC, Regal) override `scrape_all()` to launch one browser and share it across all theaters. Plain HTTP scrapers rely on the base class `scrape_all()`, which calls `scrape_theater()` per theater. When writing a new Playwright scraper, copy the override pattern from `app/scrapers/regal.py`.
+**`scrape_all()` override:** Playwright scrapers (AMC, Regal) subclass `PlaywrightBatchScraper` (`app/scrapers/base.py`) to launch one browser and share it across all theaters. Plain HTTP scrapers rely on the base class `scrape_all()`, which calls `scrape_theater()` per theater. When writing a new Playwright scraper, subclass `PlaywrightBatchScraper` and implement `_scrape_with_context`.
 
 **Adding a new scraper:** Create `app/scrapers/chain.py`, then register it in `ALL_SCRAPERS` in `app/scrapers/__init__.py`. Without the registration step the scraper is never called.
 
