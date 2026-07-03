@@ -347,7 +347,7 @@ def import_theaters_from_csv_str(csv_text: str) -> dict:
 
     Uses the same column layout as export_theaters_csv() / imax_theaters.csv.
     Match priority: venue_key > exact name > case-insensitive name > insert new.
-    Non-empty CSV fields overwrite DB values; empty fields are left unchanged.
+    Non-empty CSV fields overwrite DB values; empty fields are left unchanged (except Active, which defaults to Yes when blank/missing).
     Returns {"inserted": N, "updated": N, "skipped": N, "errors": [], "warnings": []}.
     """
     inserted = updated = skipped = 0
