@@ -370,7 +370,16 @@ def to_km(value: float, unit: str) -> float:
 def theater_ids_within_radius(
     lat: float, lon: float, radius_km: float, theaters: Optional[list[Theater]] = None
 ) -> set[int]:
-    """IDs of active, geocoded theaters within radius_km of (lat, lon)."""
+    """IDs of active, geocoded theaters within radius_km of (lat, lon).
+
+    Args:
+        lat: Latitude of the centre point.
+        lon: Longitude of the centre point.
+        radius_km: Search radius in kilometres.
+        theaters: Optional pre-fetched list of active geocoded theaters.  When
+            provided the DB is not queried; callers in a loop should pass this
+            to avoid repeated queries.
+    """
     if theaters is None:
         theaters = (
             Theater.query.filter_by(is_active=True)
@@ -402,6 +411,14 @@ def _get_active_targets() -> dict:
     """
     active_prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
 
+    # Pre-fetch all active geocoded theaters once so radius checks avoid
+    # repeated DB queries inside the preference loop.
+    geocoded_theaters = (
+        Theater.query.filter_by(is_active=True)
+        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+        .all()
+    )
+
     targets: dict = {}
 
     for pref in active_prefs:
@@ -411,7 +428,8 @@ def _get_active_targets() -> dict:
             if user is None or user.location_lat is None or user.location_lon is None:
                 continue
             theater_ids_in_radius = theater_ids_within_radius(
-                user.location_lat, user.location_lon, pref.radius_km
+                user.location_lat, user.location_lon, pref.radius_km,
+                theaters=geocoded_theaters,
             )
             movie_ids: set = set()
             am_count = pref.alert_movies.count()
