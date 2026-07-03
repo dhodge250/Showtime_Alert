@@ -39,17 +39,10 @@ class Config:
     # because the list of IMAX theaters changes rarely (new openings, closures).
     VENUE_CRAWL_INTERVAL_DAYS = int(os.environ.get("VENUE_CRAWL_INTERVAL_DAYS", 7))
 
-    # Run the venue crawler once on startup if the theaters table is empty.
-    # Set to "false" to disable the startup crawl (e.g. if seeding manually).
-    VENUE_CRAWL_ON_EMPTY = os.environ.get("VENUE_CRAWL_ON_EMPTY", "true").lower() == "true"
-
     # Tie CSRF token lifetime to the session rather than a fixed 1-hour window.
     # Without this, Mobile Safari suspends background tabs long enough for the
     # default 3600 s limit to expire, causing "CSRF token expired" on next use.
     WTF_CSRF_TIME_LIMIT = None
-
-    # Google Maps / Leaflet (no API key needed for Leaflet + OpenStreetMap)
-    MAPS_ENABLED = True
 
 
 class DevelopmentConfig(Config):
@@ -70,7 +63,6 @@ class TestingConfig(Config):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     WTF_CSRF_ENABLED = False
-    VENUE_CRAWL_ON_EMPTY = False
     # Skip the 1927-row CSV upsert and incremental column migrations in tests —
     # create_all() builds the schema fresh, and tests supply their own fixture data.
     SKIP_CSV_SEED = True

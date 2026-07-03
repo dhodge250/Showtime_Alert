@@ -368,19 +368,6 @@ def _build_sms_body_multi(user: User, showtimes: list[Showtime]) -> str:
     return msg
 
 
-# ---------------------------------------------------------------------------
-# Legacy single-showtime builders (kept so existing call sites still compile)
-# ---------------------------------------------------------------------------
-
-def _build_email_body(user: User, showtime: Showtime) -> tuple[str, str, str]:
-    """Single-showtime wrapper around _build_email_body_multi."""
-    return _build_email_body_multi(user, [showtime])
-
-
-def _build_sms_body(user: User, showtime: Showtime) -> str:
-    """Single-showtime wrapper around _build_sms_body_multi."""
-    return _build_sms_body_multi(user, [showtime])
-
 
 # ---------------------------------------------------------------------------
 # Core notification logic

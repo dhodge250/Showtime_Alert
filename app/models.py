@@ -623,8 +623,6 @@ class User(db.Model, UserMixin):
 
     def generate_reset_token(self, expiry_hours: int = 1) -> str:
         """Create a secure password-reset token, store its hash, and return the raw token."""
-        import secrets
-        from datetime import timedelta
         raw = secrets.token_urlsafe(32)
         self.reset_token = generate_password_hash(raw)
         # Store as naive UTC: SQLAlchemy/SQLite strips timezone info on read-back,

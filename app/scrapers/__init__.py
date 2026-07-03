@@ -1,8 +1,8 @@
 """
 IMAX theater scraper package.
 
-Each chain lives in its own module.  Import from here (or from the legacy
-shim app.scraper) — callers should not import individual modules directly.
+Each chain lives in its own module.  Import from here — callers should
+not import individual modules directly.
 """
 import logging
 import threading
@@ -353,7 +353,6 @@ def run_browse_schedules() -> list[Showtime]:
         len(all_theater_ids), len(processed_schedules),
     )
 
-    from app import db
     from app.models import LogEntry
     from app.scrapers.base import browse_schedule_scrape
     start = datetime.utcnow()
