@@ -565,6 +565,93 @@ class TestLookupAPI:
         resp = auth_client.get("/api/lookup/audio-systems")
         assert resp.status_code == 200
 
+    def test_delete_continent_not_in_use(self, auth_client, app):
+        r = auth_client.post("/api/lookup/continents", json={"name": "DeleteContinent"})
+        obj_id = r.get_json()["id"]
+        resp = auth_client.delete(f"/api/lookup/continents/{obj_id}")
+        assert resp.status_code == 200
+        assert resp.get_json() == {"deleted": True}
+
+    def test_delete_continent_in_use(self, auth_client, app, sample_theater):
+        from app.models import Continent
+
+        with app.app_context():
+            cont = Continent(name="InUseContinent")
+            db.session.add(cont)
+            db.session.commit()
+            cont_id = cont.id
+            theater = Theater.query.get(sample_theater)
+            theater.continent_id = cont_id
+            db.session.commit()
+
+        resp = auth_client.delete(f"/api/lookup/continents/{cont_id}")
+        assert resp.status_code == 409
+        assert resp.get_json() == {"error": "In use by one or more theaters"}
+
+    def test_create_region_duplicate(self, auth_client, app):
+        from app.lookup_helpers import get_or_create_country
+
+        with app.app_context():
+            country = get_or_create_country("RegionDupCountry")
+            db.session.commit()
+            country_id = country.id
+
+        r1 = auth_client.post(
+            "/api/lookup/regions", json={"name": "DupRegion", "country_id": country_id}
+        )
+        assert r1.status_code == 201
+        r2 = auth_client.post(
+            "/api/lookup/regions", json={"name": "DupRegion", "country_id": country_id}
+        )
+        assert r2.status_code == 409
+
+    def test_create_city_duplicate(self, auth_client, app):
+        from app.lookup_helpers import get_or_create_country
+
+        with app.app_context():
+            country = get_or_create_country("CityDupCountry")
+            db.session.commit()
+            country_id = country.id
+
+        r1 = auth_client.post(
+            "/api/lookup/cities", json={"name": "DupCity", "country_id": country_id}
+        )
+        assert r1.status_code == 201
+        r2 = auth_client.post(
+            "/api/lookup/cities", json={"name": "DupCity", "country_id": country_id}
+        )
+        assert r2.status_code == 409
+
+    def test_lookup_crud_roundtrip_all_types(self, auth_client, app):
+        """Every lookup type in the generic factory supports POST -> PATCH -> DELETE."""
+        from app.lookup_api import _LOOKUPS
+        from app.lookup_helpers import get_or_create_country
+
+        with app.app_context():
+            country = get_or_create_country("RoundTripCountry")
+            db.session.commit()
+            country_id = country.id
+
+        for key, spec in _LOOKUPS.items():
+            create_payload = {spec.name_attr: f"RoundTrip-{key}"}
+            for col in spec.required_scope_cols:
+                create_payload[col] = country_id
+
+            r = auth_client.post(f"/api/lookup/{spec.url}", json=create_payload)
+            assert r.status_code == 201, f"{key} create failed: {r.get_json()}"
+            obj_id = r.get_json()["id"]
+
+            r = auth_client.patch(
+                f"/api/lookup/{spec.url}/{obj_id}",
+                json={spec.name_attr: f"RoundTrip-{key}-renamed"},
+            )
+            assert r.status_code == 200, f"{key} patch failed: {r.get_json()}"
+            assert r.get_json()[spec.name_attr] == f"RoundTrip-{key}-renamed"
+
+            r = auth_client.delete(f"/api/lookup/{spec.url}/{obj_id}")
+            assert r.status_code == 200, f"{key} delete failed: {r.get_json()}"
+            assert r.get_json() == {"deleted": True}
+
 
 # ── API: Showtimes ────────────────────────────────────────────────────
 
