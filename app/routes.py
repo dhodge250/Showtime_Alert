@@ -372,14 +372,12 @@ def alert_detail(pref_id):
     q = Showtime.query
     if pref.radius_km is not None:
         # Radius alert: limit to theaters within radius of user's saved location
-        from app.scrapers.base import _haversine_km
+        from app.scrapers.base import theater_ids_within_radius
         alert_user = User.query.get(pref.user_id)
         if alert_user and alert_user.location_lat is not None and alert_user.location_lon is not None:
-            nearby_ids = [
-                t.id for t in Theater.query.filter_by(is_active=True).all()
-                if t.latitude is not None and t.longitude is not None
-                and _haversine_km(alert_user.location_lat, alert_user.location_lon, t.latitude, t.longitude) <= pref.radius_km
-            ]
+            nearby_ids = theater_ids_within_radius(
+                alert_user.location_lat, alert_user.location_lon, pref.radius_km
+            )
             q = q.filter(Showtime.theater_id.in_(nearby_ids))
     elif pref.theater_id:
         q = q.filter_by(theater_id=pref.theater_id)
@@ -559,8 +557,7 @@ def api_browse_schedule_run_now():
         queue_theaters_for_scrape, is_scraping_in_flight,
         is_browse_run_in_progress, _browse_run_users, _browse_run_lock,
     )
-    from app.scrapers.base import _haversine_km
-    from app.models import Theater
+    from app.scrapers.base import theater_ids_within_radius, to_km
 
     user = current_user._get_current_object()
     schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
@@ -570,16 +567,8 @@ def api_browse_schedule_run_now():
     if user.location_lat is None or user.location_lon is None:
         return jsonify({"error": "No location saved in your profile"}), 400
 
-    radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
-    active_theaters = (
-        Theater.query.filter_by(is_active=True)
-        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
-        .all()
-    )
-    theater_ids = {
-        t.id for t in active_theaters
-        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km
-    }
+    radius_km = to_km(schedule.radius, schedule.radius_unit)
+    theater_ids = theater_ids_within_radius(user.location_lat, user.location_lon, radius_km)
 
     if not theater_ids:
         return jsonify({"status": "ok", "message": "No theaters found within your radius"}), 200
@@ -683,9 +672,9 @@ def api_browse_schedule_run_now():
 @login_required
 def api_browse_schedule_status():
     """Return how many radius theaters are currently in-flight and the schedule's last/next run."""
-    from app.models import BrowseSchedule, Theater
+    from app.models import BrowseSchedule
     from app.scrapers import is_scraping_in_flight, is_browse_run_in_progress
-    from app.scrapers.base import _haversine_km
+    from app.scrapers.base import theater_ids_within_radius, to_km
 
     user = current_user._get_current_object()
     schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
@@ -702,15 +691,10 @@ def api_browse_schedule_status():
             "next_run": None,
         })
 
-    radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
-    total = 0
-    in_flight = 0
-    for t in (Theater.query.filter_by(is_active=True)
-              .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))):
-        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km:
-            total += 1
-            if is_scraping_in_flight(t.id):
-                in_flight += 1
+    radius_km = to_km(schedule.radius, schedule.radius_unit)
+    theater_ids = theater_ids_within_radius(user.location_lat, user.location_lon, radius_km)
+    total = len(theater_ids)
+    in_flight = sum(1 for tid in theater_ids if is_scraping_in_flight(tid))
 
     return jsonify({
         "in_flight": in_flight,

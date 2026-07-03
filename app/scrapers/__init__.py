@@ -282,7 +282,7 @@ def run_browse_schedules() -> list[Showtime]:
     """
     from app import db
     from app.models import BrowseSchedule, Theater, User
-    from app.scrapers.base import _haversine_km
+    from app.scrapers.base import theater_ids_within_radius, to_km
     from app.log_utils import write_log
 
     now = datetime.utcnow()
@@ -296,7 +296,9 @@ def run_browse_schedules() -> list[Showtime]:
 
     logger.info("Browse schedules: %d schedule(s) due", len(due))
 
-    active_theaters = (
+    # Fetch active geocoded theaters once and reuse across all radius calculations
+    # to avoid an extra DB query per due schedule.
+    all_geocoded_theaters = (
         Theater.query.filter_by(is_active=True)
         .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
         .all()
@@ -318,17 +320,11 @@ def run_browse_schedules() -> list[Showtime]:
             )
             continue
 
-        radius_km = (
-            schedule.radius if schedule.radius_unit == "km"
-            else schedule.radius * 1.60934
+        radius_km = to_km(schedule.radius, schedule.radius_unit)
+        theater_ids = theater_ids_within_radius(
+            user.location_lat, user.location_lon, radius_km,
+            theaters=all_geocoded_theaters,
         )
-        in_radius = [
-            t for t in active_theaters
-            if _haversine_km(
-                user.location_lat, user.location_lon, t.latitude, t.longitude
-            ) <= radius_km
-        ]
-        theater_ids = {t.id for t in in_radius}
         all_theater_ids |= theater_ids
         schedule_info.append({
             "user": user.name,

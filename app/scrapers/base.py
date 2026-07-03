@@ -362,6 +362,36 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def to_km(value: float, unit: str) -> float:
+    """Convert a radius value to km ('miles' converts, anything else is km)."""
+    return value * 1.60934 if unit == "miles" else value
+
+
+def theater_ids_within_radius(
+    lat: float, lon: float, radius_km: float, theaters: Optional[list[Theater]] = None
+) -> set[int]:
+    """IDs of active, geocoded theaters within radius_km of (lat, lon).
+
+    Args:
+        lat: Latitude of the centre point.
+        lon: Longitude of the centre point.
+        radius_km: Search radius in kilometres.
+        theaters: Optional pre-fetched list of active geocoded theaters.  When
+            provided the DB is not queried; callers in a loop should pass this
+            to avoid repeated queries.
+    """
+    if theaters is None:
+        theaters = (
+            Theater.query.filter_by(is_active=True)
+            .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+            .all()
+        )
+    return {
+        t.id for t in theaters
+        if _haversine_km(lat, lon, t.latitude, t.longitude) <= radius_km
+    }
+
+
 def _get_active_targets() -> dict:
     """
     Return {theater_id: set[movie_id]} for all active, unsent alerts.
@@ -381,9 +411,15 @@ def _get_active_targets() -> dict:
     """
     active_prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
 
-    targets: dict = {}
+    # Pre-fetch all active geocoded theaters once so radius checks avoid
+    # repeated DB queries inside the preference loop.
+    geocoded_theaters = (
+        Theater.query.filter_by(is_active=True)
+        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+        .all()
+    )
 
-    active_theaters = Theater.query.filter_by(is_active=True).all()
+    targets: dict = {}
 
     for pref in active_prefs:
         # --- radius-based alert ---
@@ -391,11 +427,10 @@ def _get_active_targets() -> dict:
             user = User.query.get(pref.user_id)
             if user is None or user.location_lat is None or user.location_lon is None:
                 continue
-            theaters_in_radius = [
-                t for t in active_theaters
-                if t.latitude is not None and t.longitude is not None
-                and _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= pref.radius_km
-            ]
+            theater_ids_in_radius = theater_ids_within_radius(
+                user.location_lat, user.location_lon, pref.radius_km,
+                theaters=geocoded_theaters,
+            )
             movie_ids: set = set()
             am_count = pref.alert_movies.count()
             if am_count == 0:
@@ -403,10 +438,10 @@ def _get_active_targets() -> dict:
             else:
                 for am in pref.alert_movies.filter_by(alert_sent=False).all():
                     movie_ids.add(am.movie_id)
-            for theater in theaters_in_radius:
-                if theater.id not in targets:
-                    targets[theater.id] = set()
-                targets[theater.id] |= movie_ids
+            for theater_id in theater_ids_in_radius:
+                if theater_id not in targets:
+                    targets[theater_id] = set()
+                targets[theater_id] |= movie_ids
             continue
 
         # --- specific or any-theater alert ---
