@@ -328,10 +328,17 @@ def _run_chain(
                     # the cooldown window.
                     succeeded_ids = [t.id for t in worker_theaters if t.id not in failed]
                     if succeeded_ids:
-                        Theater.query.filter(Theater.id.in_(succeeded_ids)).update(
-                            {"last_scraped_at": utcnow()}, synchronize_session=False,
-                        )
-                        db.session.commit()
+                        try:
+                            Theater.query.filter(Theater.id.in_(succeeded_ids)).update(
+                                {"last_scraped_at": utcnow()}, synchronize_session=False,
+                            )
+                            db.session.commit()
+                        except Exception as exc:  # noqa: BLE001
+                            db.session.rollback()
+                            logger.warning(
+                                "Coordinator: could not update last_scraped_at for chain '%s': %s",
+                                chain_name, exc,
+                            )
                 except Exception as exc:  # noqa: BLE001
                     logger.error("Coordinator: chain '%s' batch failed: %s", chain_name, exc)
                     # Clear the failed transaction so a retry on the next
