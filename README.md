@@ -163,7 +163,6 @@ TWILIO_FROM_NUMBER=+15551234567
 # Scheduler intervals
 SCRAPER_INTERVAL_MINUTES=30
 ALERT_INTERVAL_MINUTES=15
-VENUE_CRAWL_INTERVAL_DAYS=7
 ```
 
 ### Gmail Setup
@@ -211,8 +210,6 @@ All endpoints return JSON. Endpoints under `/api/admin/*` require admin role.
 |---|---|---|
 | GET | `/api/scheduler/status` | Scheduler state + next run times |
 | POST | `/api/scheduler/trigger` | Manually trigger a showtime scrape |
-| GET | `/api/venues/crawl/status` | Venue crawler status |
-| POST | `/api/venues/crawl/trigger` | Manually trigger a venue crawl |
 
 ### Geocoding
 
