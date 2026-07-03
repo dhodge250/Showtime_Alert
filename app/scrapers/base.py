@@ -367,13 +367,16 @@ def to_km(value: float, unit: str) -> float:
     return value * 1.60934 if unit == "miles" else value
 
 
-def theater_ids_within_radius(lat: float, lon: float, radius_km: float) -> set[int]:
+def theater_ids_within_radius(
+    lat: float, lon: float, radius_km: float, theaters: Optional[list[Theater]] = None
+) -> set[int]:
     """IDs of active, geocoded theaters within radius_km of (lat, lon)."""
-    theaters = (
-        Theater.query.filter_by(is_active=True)
-        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
-        .all()
-    )
+    if theaters is None:
+        theaters = (
+            Theater.query.filter_by(is_active=True)
+            .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+            .all()
+        )
     return {
         t.id for t in theaters
         if _haversine_km(lat, lon, t.latitude, t.longitude) <= radius_km
