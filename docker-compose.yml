@@ -36,7 +36,9 @@ services:
       # Redirect SQLite DB to the bind-mounted data directory.
       # Four slashes = absolute path inside the container.
       - DATABASE_URL=sqlite:////app/data/imax_alert.db
-      # Override any of these here or in .env:
+      # SECRET_KEY is required — the app refuses to start in production without
+      # it. Set it here or in .env (generate with `python -c "import secrets;
+      # print(secrets.token_hex(32))"`).
       # - SECRET_KEY=change-me
       # - SCRAPER_INTERVAL_MINUTES=30
 

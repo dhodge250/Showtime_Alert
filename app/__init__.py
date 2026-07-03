@@ -35,6 +35,12 @@ def create_app(config_name="default"):
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config.from_object(config[config_name])
 
+    if config_name == "production" and app.config["SECRET_KEY"] == "dev-secret-key-change-in-production":
+        raise RuntimeError(
+            "SECRET_KEY environment variable must be set in production — "
+            "refusing to start with the built-in development key."
+        )
+
     # Trust one layer of proxy headers (Cloudflare / NPM) so rate-limiting and
     # IP logging use the real client IP, not the proxy address.
     from werkzeug.middleware.proxy_fix import ProxyFix
