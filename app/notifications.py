@@ -50,6 +50,30 @@ def _fmt_dt(show_datetime: datetime, tz: ZoneInfo, fmt: str) -> str:
 _SMTP_TIMEOUT = 8
 
 
+def _smtp_send(app_config: dict, to_address: str, msg) -> tuple[bool, str]:
+    """Send a prebuilt MIME message via SMTP. Returns (success, error_message)."""
+    username = app_config.get("MAIL_USERNAME", "")
+    password = app_config.get("MAIL_PASSWORD", "")
+    if not username or not password:
+        logger.warning("Email credentials not configured; skipping email to %s", to_address)
+        return False, "Email credentials not configured"
+    host = app_config.get("MAIL_SERVER", "smtp.gmail.com")
+    port = int(app_config.get("MAIL_PORT", 587))
+    use_tls = app_config.get("MAIL_USE_TLS", True)
+    try:
+        smtp_cls = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
+        with smtp_cls(host, port, timeout=_SMTP_TIMEOUT) as server:
+            if port != 465 and use_tls:
+                server.starttls()
+            server.login(username, password)
+            server.sendmail(msg["From"], to_address, msg.as_string())
+        logger.info("Email sent to %s", to_address)
+        return True, ""
+    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
+        logger.error("Failed to send email to %s: %s", to_address, exc)
+        return False, str(exc)
+
+
 def send_email(
     app_config: dict,
     to_address: str,
@@ -66,43 +90,14 @@ def send_email(
 
     Returns (success, error_message).
     """
-    username = app_config.get("MAIL_USERNAME", "")
-    password = app_config.get("MAIL_PASSWORD", "")
-    from_address = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
-
-    if not username or not password:
-        logger.warning(
-            "Email credentials not configured; skipping email to %s",
-            to_address,
-        )
-        return False, "Email credentials not configured"
-
-    host = app_config.get("MAIL_SERVER", "smtp.gmail.com")
-    port = int(app_config.get("MAIL_PORT", 587))
-    use_tls = app_config.get("MAIL_USE_TLS", True)
-
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = from_address
+    msg["From"] = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
     msg["To"] = to_address
     msg.attach(MIMEText(body_text, "plain"))
     msg.attach(MIMEText(body_html, "html"))
 
-    try:
-        if port == 465:
-            server = smtplib.SMTP_SSL(host, port, timeout=_SMTP_TIMEOUT)
-        else:
-            server = smtplib.SMTP(host, port, timeout=_SMTP_TIMEOUT)
-            if use_tls:
-                server.starttls()
-        server.login(username, password)
-        server.sendmail(from_address, to_address, msg.as_string())
-        server.quit()
-        logger.info("Email sent to %s", to_address)
-        return True, ""
-    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
-        logger.error("Failed to send email to %s: %s", to_address, exc)
-        return False, str(exc)
+    return _smtp_send(app_config, to_address, msg)
 
 
 def send_email_with_attachment(
@@ -119,20 +114,9 @@ def send_email_with_attachment(
     from email import encoders as _enc
     from email.mime.base import MIMEBase
 
-    username = app_config.get("MAIL_USERNAME", "")
-    password = app_config.get("MAIL_PASSWORD", "")
-    from_address = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
-
-    if not username or not password:
-        return False, "Email credentials not configured"
-
-    host = app_config.get("MAIL_SERVER", "smtp.gmail.com")
-    port = int(app_config.get("MAIL_PORT", 587))
-    use_tls = app_config.get("MAIL_USE_TLS", True)
-
     outer = MIMEMultipart("mixed")
     outer["Subject"] = subject
-    outer["From"] = from_address
+    outer["From"] = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
     outer["To"] = to_address
 
     alt = MIMEMultipart("alternative")
@@ -147,21 +131,7 @@ def send_email_with_attachment(
     part.add_header("Content-Type", attachment_content_type)
     outer.attach(part)
 
-    try:
-        if port == 465:
-            server = smtplib.SMTP_SSL(host, port, timeout=_SMTP_TIMEOUT)
-        else:
-            server = smtplib.SMTP(host, port, timeout=_SMTP_TIMEOUT)
-            if use_tls:
-                server.starttls()
-        server.login(username, password)
-        server.sendmail(from_address, to_address, outer.as_string())
-        server.quit()
-        logger.info("Email with attachment sent to %s", to_address)
-        return True, ""
-    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
-        logger.error("Failed to send email with attachment to %s: %s", to_address, exc)
-        return False, str(exc)
+    return _smtp_send(app_config, to_address, outer)
 
 
 # ---------------------------------------------------------------------------

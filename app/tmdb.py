@@ -31,11 +31,12 @@ def is_configured() -> bool:
     return bool(_get_api_key())
 
 
-def search_movies(query: str) -> list[dict]:
+def _search(query: str, context: str = "search") -> list[dict]:
     """
-    Search TMDB for movies matching *query*.
+    Query TMDB's /search/movie endpoint and return the raw results list.
 
-    Returns a list of dicts suitable for JSON serialisation.
+    Shared by search_movies and find_movie_by_title. *context* distinguishes
+    log messages between callers ("search" vs "title lookup").
     """
     api_key = _get_api_key()
     if not api_key or not query:
@@ -54,16 +55,23 @@ def search_movies(query: str) -> list[dict]:
         )
         if resp.status_code == 429:
             logger.warning(
-                "TMDB rate limit hit (429) during search for %r", query
+                "TMDB rate limit hit (429) during %s for %r", context, query
             )
             return []
         resp.raise_for_status()
-        results = resp.json().get("results", [])
+        return resp.json().get("results", [])
     except Exception as exc:  # noqa: BLE001
-        logger.warning("TMDB search error: %s", exc)
+        logger.warning("TMDB %s error for %r: %s", context, query, exc)
         return []
 
-    return [_format_result(r) for r in results[:20]]
+
+def search_movies(query: str) -> list[dict]:
+    """
+    Search TMDB for movies matching *query*.
+
+    Returns a list of dicts suitable for JSON serialisation.
+    """
+    return [_format_result(r) for r in _search(query, "search")[:20]]
 
 
 def find_movie_by_title(title: str) -> Optional[dict]:
@@ -77,36 +85,8 @@ def find_movie_by_title(title: str) -> Optional[dict]:
     This is intentionally lenient — it takes the first result and trusts the
     caller to decide whether the match is good enough.
     """
-    api_key = _get_api_key()
-    if not api_key or not title:
-        return None
-
-    try:
-        resp = requests.get(
-            f"{TMDB_BASE}/search/movie",
-            params={
-                "api_key": api_key,
-                "query": title,
-                "page": 1,
-                "include_adult": "false",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code == 429:
-            logger.warning(
-                "TMDB rate limit hit (429) during title lookup for %r", title
-            )
-            return None
-        resp.raise_for_status()
-        results = resp.json().get("results", [])
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("TMDB find_movie_by_title error for %r: %s", title, exc)
-        return None
-
-    if not results:
-        return None
-
-    return _format_result(results[0])
+    results = _search(title, "title lookup")
+    return _format_result(results[0]) if results else None
 
 
 def get_movie_details(tmdb_id: int) -> dict:
