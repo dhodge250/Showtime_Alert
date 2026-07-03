@@ -84,8 +84,8 @@ def _upsert_theater_row(row, *, preserve_existing: bool, source: str,
     always overwrite, the Active column controls is_active, and crawl_source
     is only stamped on insert (existing rows keep their prior source).
 
-    Row-level validation problems are appended to `errors`/`warnings` rather
-    than raised; the row is still upserted with the offending field cleared.
+    Row-level validation problems are appended to `errors` rather than raised;
+    the row is still upserted with the offending field cleared.
 
     Returns "inserted", "updated", or "skipped".
     """
