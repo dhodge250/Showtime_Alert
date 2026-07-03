@@ -31,11 +31,6 @@
       <div class="actions-dropdown" id="dropdown-venue">
         <button class="btn btn-outline" onclick="toggleDropdown(event, 'menu-venue')">Venue Data ▾</button>
         <div class="actions-dropdown-menu" id="menu-venue">
-          <button class="actions-dropdown-item" id="crawl-btn"
-                  onclick="closeActionsDropdown(); triggerCrawl(this)">
-            {% if crawl_running %}Crawl Running…{% else %}Refresh Theater List{% endif %}
-            <span class="actions-dropdown-item-desc">Crawl theater websites to discover new or renamed locations</span>
-          </button>
           <button class="actions-dropdown-item" id="geocode-btn"
                   onclick="closeActionsDropdown(); triggerGeocode(this)"
                   {% if geocode_status.running %}disabled{% endif %}>
@@ -94,28 +89,6 @@
 <div id="scrape-status-bar" class="admin-crawl-summary is-indeterminate" style="display:none">
   <span class="bar-text" id="scrape-status-text">Scraping…</span>
 </div>
-
-{% if last_summary %}
-<div id="crawl-summary-bar" class="admin-crawl-summary" style="--progress:0%">
-  <span class="bar-text" id="crawl-status-text">
-    <strong>Last crawl:</strong>
-    {{ last_summary.get('finished_at', '') }} &mdash;
-    {% if last_summary.get('error') %}
-      <span class="text-error">Error: {{ last_summary.error }}</span>
-    {% else %}
-      {{ last_summary.get('venues_found', 0) }} found,
-      {{ last_summary.get('inserted', 0) }} inserted,
-      {{ last_summary.get('updated', 0) }} updated,
-      {{ last_summary.get('geocoded', 0) }} geocoded,
-      {{ last_summary.get('geocode_failed', 0) }} geocode failures
-    {% endif %}
-  </span>
-</div>
-{% else %}
-<div id="crawl-summary-bar" class="admin-crawl-summary is-indeterminate" style="display:none">
-  <span class="bar-text" id="crawl-status-text">Crawl in progress…</span>
-</div>
-{% endif %}
 
 {# Geocode status bar — hidden until a job has run or is running #}
 <div id="geocode-status-bar" class="admin-crawl-summary"
@@ -780,41 +753,6 @@ function syncFromCSV(btn) {
       btn.textContent = 'Error';
       setTimeout(() => { btn.disabled = false; btn.textContent = 'Sync from CSV'; }, 3000);
     });
-}
-
-// ── Crawl controls ────────────────────────────────────────────────────
-function triggerCrawl(btn) {
-  btn.disabled = true; btn.textContent = 'Starting…';
-  const bar = document.getElementById('crawl-summary-bar');
-  const barText = document.getElementById('crawl-status-text') || bar.querySelector('.bar-text');
-  bar.style.display = ''; bar.classList.add('is-indeterminate'); bar.style.setProperty('--progress', '0%');
-  if (barText) barText.textContent = 'Crawl in progress…';
-  fetch('/api/venues/crawl/trigger', {method:'POST'})
-    .then(r => r.json())
-    .then(data => {
-      if (data.status === 'started') { btn.textContent = 'Crawl Running…'; pollCrawl(btn); }
-      else if (data.status === 'already_running') {
-        btn.textContent = 'Already Running';
-        pollCrawl(btn);
-      }
-      else { btn.textContent = 'Error — check logs'; btn.disabled = false; bar.classList.remove('is-indeterminate'); bar.style.setProperty('--progress', '0%'); }
-    })
-    .catch(() => { btn.textContent='Error'; btn.disabled=false; bar.classList.remove('is-indeterminate'); });
-}
-function pollCrawl(btn) {
-  const bar = document.getElementById('crawl-summary-bar');
-  const barText = document.getElementById('crawl-status-text') || (bar && bar.querySelector('.bar-text'));
-  const interval = setInterval(() => {
-    fetch('/api/venues/crawl/status').then(r => r.json()).then(data => {
-      if (!data.crawl_running) {
-        clearInterval(interval);
-        if (bar) { bar.classList.remove('is-indeterminate'); bar.style.setProperty('--progress', '100%'); }
-        if (barText) barText.textContent = 'Crawl complete — reloading…';
-        btn.textContent = 'Done — Reloading…';
-        setTimeout(() => location.reload(), 1000);
-      }
-    });
-  }, 3000);
 }
 
 // ── Bulk geocoder controls ────────────────────────────────────────────

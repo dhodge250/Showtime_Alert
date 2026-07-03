@@ -39,7 +39,6 @@ services:
       # Override any of these here or in .env:
       # - SECRET_KEY=change-me
       # - SCRAPER_INTERVAL_MINUTES=30
-      # - VENUE_CRAWL_INTERVAL_DAYS=7
 
     # python-dotenv will load /app/.env automatically at startup.
     # Secrets should live in .env, not hardcoded above.

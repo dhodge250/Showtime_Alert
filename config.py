@@ -35,10 +35,6 @@ class Config:
     # Independent alert processor schedule
     ALERT_INTERVAL_MINUTES = int(os.environ.get("ALERT_INTERVAL_MINUTES", 15))
 
-    # Venue crawler schedule — runs much less frequently than the showtime scraper
-    # because the list of IMAX theaters changes rarely (new openings, closures).
-    VENUE_CRAWL_INTERVAL_DAYS = int(os.environ.get("VENUE_CRAWL_INTERVAL_DAYS", 7))
-
     # Tie CSRF token lifetime to the session rather than a fixed 1-hour window.
     # Without this, Mobile Safari suspends background tabs long enough for the
     # default 3600 s limit to expire, causing "CSRF token expired" on next use.
