@@ -2157,7 +2157,7 @@ def api_clear_showtimes():
     db.session.commit()
     logger.info("Admin cleared %d showtime(s) via API (filters: %s)", count, request.args)
 
-    from app.scraper import cleanup_orphaned_movies
+    from app.scrapers import cleanup_orphaned_movies
     orphaned = cleanup_orphaned_movies()
     return jsonify({"deleted": count, "orphaned_movies_removed": orphaned})
 
@@ -3286,7 +3286,7 @@ def api_trigger_scrape():
     from flask import current_app
 
     from app.notifications import process_new_showtimes
-    from app.scraper import run_all_scrapers
+    from app.scrapers import run_all_scrapers
 
     from app.log_utils import write_log
     write_log("scrape", "Manual scrape triggered", user_id=current_user.id)

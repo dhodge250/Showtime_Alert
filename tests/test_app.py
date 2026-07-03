@@ -778,7 +778,7 @@ class TestProfile:
 
 class TestScraper:
     def test_parse_time_text_valid(self):
-        from app.scraper import _parse_time_text
+        from app.scrapers import _parse_time_text
 
         dt = _parse_time_text("7:30 PM")
         assert dt is not None
@@ -786,20 +786,20 @@ class TestScraper:
         assert dt.minute == 30
 
     def test_parse_time_text_invalid(self):
-        from app.scraper import _parse_time_text
+        from app.scrapers import _parse_time_text
 
         dt = _parse_time_text("not a time")
         assert dt is None
 
     def test_parse_time_text_24h(self):
-        from app.scraper import _parse_time_text
+        from app.scrapers import _parse_time_text
 
         dt = _parse_time_text("14:00")
         assert dt is not None
         assert dt.hour == 14
 
     def test_get_or_create_movie_creates(self, app):
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             scraper = AMCScraper()
@@ -810,7 +810,7 @@ class TestScraper:
             assert movie.title == "Avatar"
 
     def test_get_or_create_movie_deduplicates(self, app):
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             scraper = AMCScraper()
@@ -822,7 +822,7 @@ class TestScraper:
     def test_upsert_showtime_creates(self, app, sample_theater, sample_movie):
         from datetime import datetime, timezone
 
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             theater = Theater.query.get(sample_theater)
@@ -837,7 +837,7 @@ class TestScraper:
     def test_upsert_showtime_deduplicates(self, app, sample_theater, sample_movie):
         from datetime import datetime, timezone
 
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             theater = Theater.query.get(sample_theater)
@@ -853,7 +853,7 @@ class TestScraper:
 
     def test_get_or_create_movie_no_tmdb_enrichment(self, app):
         """When TMDB is not configured, new movies are created without tmdb_id."""
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             scraper = AMCScraper()
@@ -870,7 +870,7 @@ class TestScraper:
 class TestScraperAlertTargeting:
     def test_get_active_targets_empty(self, app):
         """No active alerts → empty dict."""
-        from app.scraper import _get_active_targets
+        from app.scrapers import _get_active_targets
 
         with app.app_context():
             targets = _get_active_targets()
@@ -879,7 +879,7 @@ class TestScraperAlertTargeting:
     def test_get_active_targets_with_alert(self, app, sample_user, sample_theater, sample_movie):
         """Active unsent alert → theater_id key with the movie_id in its set."""
         from app.models import AlertMovie, AlertPreference
-        from app.scraper import _get_active_targets
+        from app.scrapers import _get_active_targets
 
         with app.app_context():
             pref = AlertPreference(
@@ -901,7 +901,7 @@ class TestScraperAlertTargeting:
     def test_get_active_targets_sent_alert_excluded(self, app, sample_user, sample_theater, sample_movie):
         """Sent alert (alert_sent=True) is NOT included in targets."""
         from app.models import AlertMovie, AlertPreference
-        from app.scraper import _get_active_targets
+        from app.scrapers import _get_active_targets
 
         with app.app_context():
             pref = AlertPreference(
@@ -923,7 +923,7 @@ class TestScraperAlertTargeting:
         """scrape_all returns [] immediately when there are no active alerts."""
         from unittest.mock import patch
 
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             scraper = AMCScraper()
@@ -2832,7 +2832,7 @@ class TestExpiredShowtimeCleanup:
         """cleanup_expired_showtimes() deletes showtimes in the past."""
         from datetime import datetime, timedelta, timezone
 
-        from app.scraper import cleanup_expired_showtimes
+        from app.scrapers import cleanup_expired_showtimes
 
         with app.app_context():
             theater = Theater.query.get(sample_theater)
@@ -2856,7 +2856,7 @@ class TestExpiredShowtimeCleanup:
 
     def test_cleanup_returns_zero_when_nothing_expired(self, app):
         """Returns 0 when no past showtimes exist."""
-        from app.scraper import cleanup_expired_showtimes
+        from app.scrapers import cleanup_expired_showtimes
 
         with app.app_context():
             count = cleanup_expired_showtimes()
@@ -2869,7 +2869,7 @@ class TestExpiredShowtimeCleanup:
 class TestOrphanedMovieCleanup:
     def test_orphaned_movie_deleted(self, app):
         """A movie with no showtimes and no alert references is deleted."""
-        from app.scraper import cleanup_orphaned_movies
+        from app.scrapers import cleanup_orphaned_movies
 
         with app.app_context():
             orphan = Movie(title="Orphan Film")
@@ -2883,7 +2883,7 @@ class TestOrphanedMovieCleanup:
 
     def test_movie_with_alert_not_deleted(self, app, sample_user, sample_theater, sample_movie):
         """A movie referenced by an active AlertMovie row is NOT deleted."""
-        from app.scraper import cleanup_orphaned_movies
+        from app.scrapers import cleanup_orphaned_movies
 
         with app.app_context():
             pref = AlertPreference(user_id=sample_user, theater_id=sample_theater)
@@ -2901,7 +2901,7 @@ class TestOrphanedMovieCleanup:
         """A movie that still has showtimes is NOT deleted."""
         from datetime import datetime, timedelta, timezone
 
-        from app.scraper import cleanup_orphaned_movies
+        from app.scrapers import cleanup_orphaned_movies
 
         with app.app_context():
             theater = Theater.query.get(sample_theater)

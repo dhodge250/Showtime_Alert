@@ -2,11 +2,13 @@
 Scheduler for periodic IMAX showtime scraping, venue list crawling,
 alert processing, and expired showtime cleanup.
 
-Uses APScheduler to run four jobs on independent schedules:
-  - Showtime scraper:  every N minutes (default 30)
-  - Alert processor:   every N minutes (default 15)
-  - Venue crawler:     every N days    (default 7)
-  - Showtime cleanup:  every N hours   (default 24)
+Uses APScheduler to run six jobs on independent schedules:
+  - Showtime scraper:    every N minutes (default 30)
+  - Alert processor:     every N minutes (default 15)
+  - Venue crawler:       every N days    (default 7)
+  - Showtime cleanup:    every N hours   (default 24)
+  - Browse schedules:    every N minutes (default 30)
+  - Scraper health check: cron schedule configured in Settings
 """
 import logging
 import threading
@@ -170,7 +172,7 @@ def trigger_single_health_check(scraper, app) -> None:
 def _scrape_job(app):
     """Scheduled job: run all scrapers and dispatch notifications."""
     from app.notifications import process_new_showtimes
-    from app.scraper import run_all_scrapers
+    from app.scrapers import run_all_scrapers
 
     with app.app_context():
         from app.log_utils import write_log
@@ -250,7 +252,7 @@ def _cleanup_job(app):
     """Scheduled job: delete expired showtimes, orphaned movies, and old log entries."""
     from datetime import datetime, timezone, timedelta
 
-    from app.scraper import cleanup_expired_showtimes, cleanup_orphaned_movies
+    from app.scrapers import cleanup_expired_showtimes, cleanup_orphaned_movies
 
     with app.app_context():
         count = cleanup_expired_showtimes()
@@ -525,11 +527,13 @@ def start_scheduler(app) -> None:
     _scheduler.start()
     logger.info(
         "Scheduler started; scraping every %d min, alerts every %d min, "
-        "venue crawl every %d days, cleanup every %d hours.",
+        "venue crawl every %d days, cleanup every %d hours, "
+        "browse schedules every %d min, health check on its configured cron schedule.",
         interval_minutes,
         alert_minutes,
         venue_crawl_days,
         cleanup_hours,
+        browse_check_minutes,
     )
 
 
