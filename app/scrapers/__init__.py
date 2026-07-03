@@ -281,7 +281,7 @@ def run_browse_schedules() -> list[Showtime]:
       5. Update last_run + next_run for every processed schedule.
     """
     from app import db
-    from app.models import BrowseSchedule, User
+    from app.models import BrowseSchedule, Theater, User
     from app.scrapers.base import theater_ids_within_radius, to_km
     from app.log_utils import write_log
 
@@ -295,6 +295,14 @@ def run_browse_schedules() -> list[Showtime]:
         return []
 
     logger.info("Browse schedules: %d schedule(s) due", len(due))
+
+    # Fetch active geocoded theaters once and reuse across all radius calculations
+    # to avoid an extra DB query per due schedule.
+    all_geocoded_theaters = (
+        Theater.query.filter_by(is_active=True)
+        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+        .all()
+    )
 
     all_theater_ids: set[int] = set()
     schedule_info = []
@@ -314,7 +322,8 @@ def run_browse_schedules() -> list[Showtime]:
 
         radius_km = to_km(schedule.radius, schedule.radius_unit)
         theater_ids = theater_ids_within_radius(
-            user.location_lat, user.location_lon, radius_km
+            user.location_lat, user.location_lon, radius_km,
+            theaters=all_geocoded_theaters,
         )
         all_theater_ids |= theater_ids
         schedule_info.append({
