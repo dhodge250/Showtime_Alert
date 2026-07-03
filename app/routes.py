@@ -1459,7 +1459,7 @@ def api_test_smtp():
     """
     from app.notifications import send_email
 
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     config = {
         "MAIL_SERVER":   data.get("mail_server", "smtp.gmail.com"),
         "MAIL_PORT":     int(data.get("mail_port") or 587),
@@ -1923,7 +1923,7 @@ def api_theater_fetch_status(theater_id: int):
 def api_patch_theater(theater_id):
     """Inline-edit a single FK field on a theater row."""
     theater = Theater.query.get_or_404(theater_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
 
     _ALLOWED = {
         # key: (Model, display_key, label_fn, legacy_col)
@@ -2132,7 +2132,7 @@ def api_users():
 @require_role("admin")
 def api_create_user():
     """Create a new user (admin only)."""
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     if not data or not data.get("name"):
         return jsonify({"error": "name is required"}), 400
 
@@ -2169,7 +2169,7 @@ def api_update_user(user_id):
     if current_user.role_name != "admin" and current_user.id != user_id:
         abort(403)
     user = User.query.get_or_404(user_id)
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     allowed = ("name", "email", "phone", "location_lat", "location_lon",
                "location_name", "location_address", "notify_email", "notify_sms",
                "measurement_unit")
@@ -2200,7 +2200,7 @@ def api_alerts():
 @api_bp.route("/alerts", methods=["POST"])
 @login_required
 def api_create_alert():
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     if not data or not data.get("user_id"):
         return jsonify({"error": "user_id is required"}), 400
 
@@ -2578,7 +2578,7 @@ def api_lookup_chains():
 @api_bp.route("/lookup/chains", methods=["POST"])
 @require_role("admin", "editor")
 def api_create_chain():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name is required"}), 400
@@ -2611,7 +2611,7 @@ def api_lookup_countries():
 @api_bp.route("/lookup/countries", methods=["POST"])
 @require_role("admin", "editor")
 def api_create_country():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name is required"}), 400
@@ -2648,7 +2648,7 @@ def api_lookup_regions():
 @api_bp.route("/lookup/regions", methods=["POST"])
 @require_role("admin", "editor")
 def api_create_region():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     country_id = data.get("country_id")
     if not name or not country_id:
@@ -2688,7 +2688,7 @@ def api_lookup_cities():
 @api_bp.route("/lookup/cities", methods=["POST"])
 @require_role("admin", "editor")
 def api_create_city():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     country_id = data.get("country_id")
     if not name or not country_id:
@@ -2724,7 +2724,7 @@ def api_lookup_aspect_ratios():
 @api_bp.route("/lookup/aspect-ratios", methods=["POST"])
 @require_role("admin", "editor")
 def api_create_aspect_ratio():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     label = (data.get("label") or "").strip()
     if not label:
         return jsonify({"error": "label is required"}), 400
@@ -2759,7 +2759,7 @@ def api_lookup_projector_types():
 @api_bp.route("/lookup/projector-types", methods=["POST"])
 @require_role("admin", "editor")
 def api_create_projector_type():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name is required"}), 400
@@ -2794,7 +2794,7 @@ def api_lookup_audio_systems():
 @api_bp.route("/lookup/audio-systems", methods=["POST"])
 @require_role("admin", "editor")
 def api_create_audio_system():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name is required"}), 400
@@ -2825,7 +2825,7 @@ def api_delete_audio_system(obj_id):
 @require_role("admin", "editor")
 def api_patch_aspect_ratio(obj_id):
     obj  = AspectRatio.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     if "label" in data:
         label = (data["label"] or "").strip()
         if not label:
@@ -2847,7 +2847,7 @@ def api_patch_aspect_ratio(obj_id):
 @require_role("admin", "editor")
 def api_patch_projector_type(obj_id):
     obj  = ProjectorType.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     if "name" in data:
         name = (data["name"] or "").strip()
         if not name:
@@ -2867,7 +2867,7 @@ def api_patch_projector_type(obj_id):
 @require_role("admin", "editor")
 def api_patch_audio_system(obj_id):
     obj  = AudioSystem.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     if "name" in data:
         name = (data["name"] or "").strip()
         if not name:
@@ -2887,7 +2887,7 @@ def api_patch_audio_system(obj_id):
 @require_role("admin", "editor")
 def api_patch_chain(obj_id):
     obj  = Chain.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     if "name" in data:
         name = (data["name"] or "").strip()
         if not name:
@@ -2911,7 +2911,7 @@ def api_patch_chain(obj_id):
 @require_role("admin", "editor")
 def api_patch_country(obj_id):
     obj  = Country.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     if "name" in data:
         name = (data["name"] or "").strip()
         if not name:
@@ -2932,7 +2932,7 @@ def api_patch_country(obj_id):
 @require_role("admin", "editor")
 def api_patch_region(obj_id):
     obj  = Region.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     if "name" in data:
         name = (data["name"] or "").strip()
         if not name:
@@ -2954,7 +2954,7 @@ def api_patch_region(obj_id):
 @require_role("admin", "editor")
 def api_patch_city(obj_id):
     obj  = City.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     if "name" in data:
         name = (data["name"] or "").strip()
         if not name:
@@ -2989,7 +2989,7 @@ def api_get_continents():
 @require_role("admin", "editor")
 def api_post_continent():
     """Create a new continent entry."""
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name required"}), 400
@@ -3016,7 +3016,7 @@ def api_delete_continent(obj_id):
 @require_role("admin", "editor")
 def api_patch_continent(obj_id):
     obj  = Continent.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     if "name" in data:
         name = (data["name"] or "").strip()
         if not name:
@@ -3040,7 +3040,7 @@ def api_patch_continent(obj_id):
 @login_required
 def api_geocode():
     """Geocode an address via Nominatim. Returns {latitude, longitude, formatted_address}."""
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     from app.venue_crawler import geocode_venue
     result = geocode_venue(
         name=data.get("name", ""),
@@ -3147,7 +3147,7 @@ def api_geocode_reset():
 def api_reseed_preview():
     """Return how many theaters would be updated by a re-seed (dry run)."""
     from app.venue_crawler import reseed_from_csv
-    columns = (request.get_json(force=True) or {}).get("columns", [])
+    columns = (request.get_json(silent=True) or {}).get("columns", [])
     result = reseed_from_csv(columns, dry_run=True)
     return jsonify(result)
 
@@ -3159,7 +3159,7 @@ def api_reseed_from_csv():
     from app.log_utils import write_log
     from app.venue_crawler import reseed_from_csv
 
-    columns = (request.get_json(force=True) or {}).get("columns", [])
+    columns = (request.get_json(silent=True) or {}).get("columns", [])
     if not columns:
         return jsonify({"status": "error", "message": "No columns specified"}), 400
 
