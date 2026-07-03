@@ -232,10 +232,12 @@ def queue_theaters_for_scrape(
             continue
 
         try:
-            new = scraper.scrape_theaters_batch(chain_theaters, resolved_targets)
+            new, failed = scraper.scrape_theaters_batch(chain_theaters, resolved_targets)
             all_new.extend(new)
-            # Only advance last_scraped_at when the batch completed without exception.
-            _update_last_scraped(chain_theaters)
+            # Only advance last_scraped_at for theaters that didn't fail —
+            # a theater that raised inside scrape_theater() should be retried
+            # on the next cycle rather than waiting out the cooldown window.
+            _update_last_scraped([t for t in chain_theaters if t.id not in failed])
         except Exception as exc:  # noqa: BLE001
             logger.error("Coordinator: chain '%s' batch failed: %s", chain_name, exc)
             # Clear the failed transaction so the remaining chains in this run

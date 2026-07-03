@@ -653,21 +653,32 @@ class BaseScraper:
         """Scrape a single theater. Override in subclasses."""
         raise NotImplementedError
 
-    def scrape_theaters_batch(self, theaters: list, targets: dict) -> list[Showtime]:
+    def _movie_ids_for(self, theater, targets: dict) -> set:
+        """Merge any-theater and per-theater movie targets for one theater."""
+        movie_ids: set = set()
+        if None in targets:
+            movie_ids |= targets[None]
+        if theater.id in targets:
+            movie_ids |= targets[theater.id]
+        return movie_ids
+
+    def scrape_theaters_batch(
+        self, theaters: list, targets: dict
+    ) -> tuple[list[Showtime], set[int]]:
         """
         Scrape an explicit list of theaters with movie-scoped targets.
 
         targets: {theater_id: set[movie_id]}; targets[None] = any-theater movie set.
         Override in Playwright scrapers to share a single browser across theaters.
         Default implementation calls scrape_theater() per theater.
+
+        Returns (new_showtimes, failed_theater_ids) — failed_theater_ids lets the
+        caller avoid stamping last_scraped_at on theaters whose scrape raised.
         """
         new_showtimes: list[Showtime] = []
+        failed_theater_ids: set[int] = set()
         for theater in theaters:
-            movie_ids: set = set()
-            if None in targets:
-                movie_ids |= targets[None]
-            if theater.id in targets:
-                movie_ids |= targets[theater.id]
+            movie_ids = self._movie_ids_for(theater, targets)
             if not movie_ids:
                 continue
             try:
@@ -675,8 +686,9 @@ class BaseScraper:
                 new_showtimes.extend(results)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error scraping %s: %s", theater.name, exc)
+                failed_theater_ids.add(theater.id)
         db.session.commit()
-        return new_showtimes
+        return new_showtimes, failed_theater_ids
 
     def _get_chain_theaters(self, targets: dict) -> list:
         """Return active theaters for this chain scoped to the given alert targets."""
@@ -699,7 +711,55 @@ class BaseScraper:
         theaters = self._get_chain_theaters(targets)
         if not theaters:
             return []
-        return self.scrape_theaters_batch(theaters, targets)
+        new_showtimes, _failed = self.scrape_theaters_batch(theaters, targets)
+        return new_showtimes
+
+
+class PlaywrightBatchScraper(BaseScraper):
+    """
+    Base class for scrapers that share one Playwright browser across a batch
+    of theaters.  Subclasses implement _scrape_with_context(theater, movie_ids,
+    context) and get scrape_theaters_batch() for free.
+    """
+
+    _user_agent: str = HEADERS["User-Agent"]
+
+    def scrape_theaters_batch(
+        self, theaters: list, targets: dict
+    ) -> tuple[list[Showtime], set[int]]:
+        """Share one Playwright browser across all provided theaters.
+
+        Returns (new_showtimes, failed_theater_ids).
+        """
+        if not theaters:
+            return [], set()
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("%s scraper requires playwright — skipping", self.chain_name)
+            return [], set()
+
+        new_showtimes: list[Showtime] = []
+        failed_theater_ids: set[int] = set()
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(user_agent=self._user_agent, locale="en-US")
+                for theater in theaters:
+                    movie_ids = self._movie_ids_for(theater, targets)
+                    if not movie_ids:
+                        continue
+                    try:
+                        new_showtimes.extend(
+                            self._scrape_with_context(theater, movie_ids, context)
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("Error scraping %s: %s", theater.name, exc)
+                        failed_theater_ids.add(theater.id)
+            finally:
+                browser.close()
+        db.session.commit()
+        return new_showtimes, failed_theater_ids
 
 
 # ---------------------------------------------------------------------------

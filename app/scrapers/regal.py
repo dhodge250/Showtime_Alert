@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import requests
 
 from app import db
-from app.scrapers.base import BaseScraper, _get_active_targets, _scrape_ctx
+from app.scrapers.base import PlaywrightBatchScraper, _scrape_ctx
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -154,7 +154,7 @@ def _make_session(playwright_cookies: list) -> requests.Session:
     return session
 
 
-class RegalScraper(BaseScraper):
+class RegalScraper(PlaywrightBatchScraper):
     """
     Scraper for Regal Cinemas IMAX showtimes.
 
@@ -167,50 +167,7 @@ class RegalScraper(BaseScraper):
 
     chain_name = "Regal"
     health_website = "regmovies.com"
-
-    def scrape_theaters_batch(self, theaters: list, targets: dict) -> list[Showtime]:
-        """Share one Playwright browser across all provided Regal theaters."""
-        if not theaters:
-            return []
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            logger.warning("Regal scraper requires playwright — skipping")
-            return []
-
-        new_showtimes: list[Showtime] = []
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=_UA, locale="en-US")
-            for theater in theaters:
-                movie_ids: set = set()
-                if None in targets:
-                    movie_ids |= targets[None]
-                if theater.id in targets:
-                    movie_ids |= targets[theater.id]
-                if not movie_ids:
-                    continue
-                try:
-                    new_showtimes.extend(
-                        self._scrape_with_context(theater, movie_ids, context)
-                    )
-                except Exception as exc:
-                    logger.error("Error scraping %s: %s", theater.name, exc)
-            browser.close()
-
-        db.session.commit()
-        return new_showtimes
-
-    def scrape_all(self) -> list[Showtime]:
-        """Alert-demand scrape: share one Playwright browser across all Regal theaters."""
-        targets = _get_active_targets()
-        if not targets:
-            logger.debug("Regal: no active alerts — skipping scrape")
-            return []
-        theaters = self._get_chain_theaters(targets)
-        if not theaters:
-            return []
-        return self.scrape_theaters_batch(theaters, targets)
+    _user_agent = _UA
 
     def _scrape_with_context(
         self, theater: Theater, movie_ids: set, context

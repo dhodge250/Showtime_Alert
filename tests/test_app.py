@@ -1769,7 +1769,7 @@ class TestScraperCoordinator:
             with coord_mod._inflight_lock:
                 coord_mod._scraping_in_flight.add(theater.id)
             try:
-                with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+                with patch.object(amc, "scrape_theaters_batch", return_value=([], set())) as mock_batch:
                     result = coord_mod.queue_theaters_for_scrape({theater.id})
                 assert result == []
                 mock_batch.assert_not_called()
@@ -1789,12 +1789,12 @@ class TestScraperCoordinator:
             amc = self._amc_scraper()
 
             # Within cooldown window → skipped
-            with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+            with patch.object(amc, "scrape_theaters_batch", return_value=([], set())) as mock_batch:
                 coord_mod.queue_theaters_for_scrape({theater.id}, force=False)
             mock_batch.assert_not_called()
 
             # force=True bypasses cooldown → scrape is attempted
-            with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+            with patch.object(amc, "scrape_theaters_batch", return_value=([], set())) as mock_batch:
                 coord_mod.queue_theaters_for_scrape({theater.id}, force=True)
             mock_batch.assert_called_once()
 
@@ -1818,6 +1818,44 @@ class TestScraperCoordinator:
             assert theater.last_scraped_at is None
             with coord_mod._inflight_lock:
                 assert theater.id not in coord_mod._scraping_in_flight
+
+    def test_failing_theater_in_batch_does_not_advance_last_scraped(self, app):
+        """
+        One theater raising inside scrape_theater() must not block last_scraped_at
+        from advancing for the other theater in the same chain batch.
+        """
+        from unittest.mock import patch
+        import app.scrapers as coord_mod
+        from app.models import Theater as TheaterModel
+
+        with app.app_context():
+            ok_theater = TheaterModel(
+                name="Cinemark IMAX Success", chain="Cinemark",
+                city="Springfield", state="IL", is_active=True,
+            )
+            bad_theater = TheaterModel(
+                name="Cinemark IMAX Failure", chain="Cinemark",
+                city="Othertown", state="NY", is_active=True,
+            )
+            db.session.add_all([ok_theater, bad_theater])
+            db.session.commit()
+
+            cinemark = next(s for s in coord_mod.ALL_SCRAPERS if s.chain_name == "Cinemark")
+
+            def _scrape_theater(theater, movie_ids):
+                if theater.id == bad_theater.id:
+                    raise RuntimeError("scrape failed")
+                return []
+
+            with patch.object(cinemark, "scrape_theater", side_effect=_scrape_theater):
+                coord_mod.queue_theaters_for_scrape(
+                    {ok_theater.id, bad_theater.id}, force=True
+                )
+
+            db.session.refresh(ok_theater)
+            db.session.refresh(bad_theater)
+            assert ok_theater.last_scraped_at is not None
+            assert bad_theater.last_scraped_at is None
 
 
 # ── BrowseSchedule.compute_next_run ───────────────────────────────────
