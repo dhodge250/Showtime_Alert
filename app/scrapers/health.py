@@ -7,7 +7,8 @@ given chain, classifies the result, and persists a ScraperStatus row.
 The caller is responsible for providing an active Flask app context.
 """
 import logging
-from datetime import datetime, timezone
+
+from app.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ def run_health_check(scraper) -> dict:
     from app.scrapers.base import health_check_scrape
 
     chain_name = scraper.chain_name
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
 
     health_website = getattr(scraper, "health_website", None)
     theater_q = Theater.query.filter(

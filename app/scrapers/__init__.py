@@ -6,7 +6,7 @@ not import individual modules directly.
 """
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from app.scrapers.base import (
     HEADERS,
@@ -25,6 +25,7 @@ from app.scrapers.regal import RegalScraper
 from app.scrapers.royal_bc_museum import RoyalBCMuseumScraper
 from app.scrapers.tcl import TCLScraper
 from app.models import Showtime
+from app.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,7 @@ def queue_theaters_for_scrape(
         return []
 
     theaters = Theater.query.filter(Theater.id.in_(theater_ids)).all()
-    now = datetime.utcnow()
+    now = utcnow()
 
     s = Settings.query.filter_by(key="scrape_cooldown_minutes").first()
     try:
@@ -255,7 +256,7 @@ def queue_theaters_for_scrape(
 def _update_last_scraped(theaters: list) -> None:
     """Update last_scraped_at for theaters whose batch completed without exception."""
     from app import db
-    now = datetime.utcnow()
+    now = utcnow()
     for theater in theaters:
         theater.last_scraped_at = now
     try:
@@ -287,7 +288,7 @@ def run_browse_schedules() -> list[Showtime]:
     from app.scrapers.base import theater_ids_within_radius, to_km
     from app.log_utils import write_log
 
-    now = datetime.utcnow()
+    now = utcnow()
     due = BrowseSchedule.query.filter_by(enabled=True).filter(
         BrowseSchedule.next_run <= now
     ).all()
@@ -353,10 +354,10 @@ def run_browse_schedules() -> list[Showtime]:
 
     from app.models import LogEntry
     from app.scrapers.base import browse_schedule_scrape
-    start = datetime.utcnow()
+    start = utcnow()
     with browse_schedule_scrape() as log_buf:
         new_showtimes = queue_theaters_for_scrape(all_theater_ids, targets=None, force=False)
-    elapsed = (datetime.utcnow() - start).total_seconds()
+    elapsed = (utcnow() - start).total_seconds()
 
     # Advance last_run/next_run after the scrape completes so a crash between
     # dispatch and commit causes a retry rather than a silent data-loss with a

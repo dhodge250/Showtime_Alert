@@ -11,7 +11,7 @@ import json
 import logging
 import smtplib
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import db
 from app.models import AlertMovie, AlertPreference, Notification, Showtime, User
+from app.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -526,10 +527,10 @@ def _notify_for_alert(
         for am in pref.alert_movies.all():
             if am.movie_id in notified_movie_ids and not am.alert_sent:
                 am.alert_sent = True
-                am.alert_sent_at = datetime.now(timezone.utc)
+                am.alert_sent_at = utcnow()
         if pref.alert_movies.filter_by(alert_sent=False).count() == 0:
             pref.alert_sent = True
-            pref.alert_sent_at = datetime.now(timezone.utc)
+            pref.alert_sent_at = utcnow()
 
     # Enforce max_notifications cap (applies to both alert types)
     if (
@@ -538,7 +539,7 @@ def _notify_for_alert(
     ):
         pref.is_active = False
         pref.alert_sent = True
-        pref.alert_sent_at = datetime.now(timezone.utc)
+        pref.alert_sent_at = utcnow()
         logger.info(
             "AlertPreference %d reached max_notifications=%d — auto-closing.",
             pref.id,
@@ -579,7 +580,7 @@ def process_new_showtimes(app, new_showtimes: list[Showtime]) -> int:
     if not new_showtimes:
         return 0
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
     future_showtimes = [st for st in new_showtimes if st.show_datetime >= now]
     if not future_showtimes:
         return 0
@@ -613,7 +614,7 @@ def _process_pending_alerts_locked(app) -> int:
         return 0
 
     from datetime import timedelta
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
     # Radius alerts fired by process_pending_alerts (existing DB data) before the
     # scraper has visited every in-radius theater produce incomplete notifications.
     # Give radius alerts a 35-minute grace period so the 30-minute scraper cycle
@@ -623,7 +624,7 @@ def _process_pending_alerts_locked(app) -> int:
     sent = 0
     for pref in prefs:
         if pref.radius_km is not None and pref.created_at is not None:
-            age = now - pref.created_at.replace(tzinfo=None)
+            age = now - pref.created_at
             if age < _RADIUS_GRACE:
                 continue
         q = Showtime.query.filter(Showtime.show_datetime >= now)
