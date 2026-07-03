@@ -271,7 +271,12 @@ def queue_theaters_for_scrape(
     # Showtime rows created inside a worker's own session become detached
     # once its app context pops — re-query on the dispatching thread so
     # callers (counting, process_new_showtimes) get live, attached objects.
-    return Showtime.query.filter(Showtime.id.in_(all_showtime_ids)).all()
+    showtimes: list[Showtime] = []
+    chunk_size = 500
+    for i in range(0, len(all_showtime_ids), chunk_size):
+        chunk = all_showtime_ids[i : i + chunk_size]
+        showtimes.extend(Showtime.query.filter(Showtime.id.in_(chunk)).all())
+    return showtimes
 
 
 def _run_chain(
