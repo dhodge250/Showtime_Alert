@@ -480,6 +480,17 @@ class TestAlertAPI:
         assert isinstance(data, list)
         assert len(data) >= 1
 
+    def test_create_alert_non_json_content_type_not_parsed(self, auth_client, app):
+        # A cross-origin page can send a text/plain body without triggering a
+        # CORS pre-flight. Without force=True, Flask must not parse it as JSON —
+        # the body should be treated as empty, not as {"user_id": 1}.
+        resp = auth_client.post(
+            "/api/alerts", data='{"user_id": 1}', content_type="text/plain"
+        )
+        assert resp.status_code == 400
+        with app.app_context():
+            assert AlertPreference.query.count() == 0
+
 
 # ── API: Lookup tables ────────────────────────────────────────────────
 

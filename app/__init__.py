@@ -96,9 +96,12 @@ def create_app(config_name="default"):
 
     app.jinja_env.filters["in_user_tz"] = _in_user_tz
 
-    # Exempt the JSON API blueprint from CSRF — fetch() calls use JSON bodies
-    # which browsers cannot send cross-origin without CORS pre-flight, so the
-    # risk CSRF tokens protect against doesn't apply to these endpoints.
+    # Exempt the JSON API blueprint from CSRF. Handlers parse request bodies
+    # with request.get_json(silent=True) (no force=True), so Flask only parses
+    # bodies whose Content-Type is application/json — and browsers cannot send
+    # that cross-origin without a CORS pre-flight. A cross-origin page sending
+    # a non-JSON body (e.g. text/plain) gets an empty dict, not a parsed
+    # payload, so the CSRF protection these tokens provide isn't needed here.
     csrf.exempt(api_bp)
 
     # Inject a cache-busting fingerprint into every template context.
