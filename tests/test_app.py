@@ -1974,6 +1974,69 @@ class TestScraperCoordinator:
             assert ok_theater.last_scraped_at is not None
             assert bad_theater.last_scraped_at is None
 
+    def test_two_chains_one_raises_other_still_completes(self, app):
+        """
+        Chains now run in parallel worker threads (one per chain). A whole-batch
+        exception in one chain's worker must not prevent a different chain's
+        worker from completing and stamping last_scraped_at.
+        """
+        from unittest.mock import patch
+        import app.scrapers as coord_mod
+        from app.models import Theater as TheaterModel
+
+        with app.app_context():
+            ok_theater = TheaterModel(
+                name="Cineplex IMAX OK", chain="Cineplex",
+                city="Toronto", state="ON", is_active=True,
+            )
+            bad_theater = TheaterModel(
+                name="Cinemark IMAX Bad", chain="Cinemark",
+                city="Springfield", state="IL", is_active=True,
+            )
+            db.session.add_all([ok_theater, bad_theater])
+            db.session.commit()
+            ok_id, bad_id = ok_theater.id, bad_theater.id
+
+            cineplex = next(s for s in coord_mod.ALL_SCRAPERS if s.chain_name == "Cineplex")
+            cinemark = next(s for s in coord_mod.ALL_SCRAPERS if s.chain_name == "Cinemark")
+
+            with patch.object(cineplex, "scrape_theaters_batch", return_value=([], set())), \
+                 patch.object(cinemark, "scrape_theaters_batch",
+                              side_effect=RuntimeError("chain batch exploded")):
+                coord_mod.queue_theaters_for_scrape({ok_id, bad_id}, force=True)
+
+            db.session.refresh(ok_theater)
+            db.session.refresh(bad_theater)
+            assert ok_theater.last_scraped_at is not None
+            assert bad_theater.last_scraped_at is None
+
+    def test_browse_context_propagates_to_worker_thread(self, app, sample_theater):
+        """
+        browse_only is a thread-local set by browse_schedule_scrape() on the
+        dispatching thread; queue_theaters_for_scrape must propagate it into
+        the per-chain worker thread so provenance flags on new showtimes are
+        correct (losing this reintroduces the browse-data Dashboard leak).
+        """
+        from unittest.mock import patch
+        import app.scrapers as coord_mod
+        from app.scrapers.base import browse_schedule_scrape, _scrape_ctx
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            amc = self._amc_scraper()
+
+            seen = {}
+
+            def _fake_batch(theaters, targets):
+                seen["browse_only"] = getattr(_scrape_ctx, "browse_only", False)
+                return [], set()
+
+            with patch.object(amc, "scrape_theaters_batch", side_effect=_fake_batch):
+                with browse_schedule_scrape():
+                    coord_mod.queue_theaters_for_scrape({theater.id}, force=True)
+
+            assert seen["browse_only"] is True
+
 
 # ── BrowseSchedule.compute_next_run ───────────────────────────────────
 

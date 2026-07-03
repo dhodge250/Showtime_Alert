@@ -4,6 +4,7 @@ IMAX theater scraper package.
 Each chain lives in its own module.  Import from here — callers should
 not import individual modules directly.
 """
+import concurrent.futures
 import logging
 import threading
 from datetime import timedelta
@@ -15,6 +16,7 @@ from app.scrapers.base import (
     _enrich_movie_from_tmdb,
     _get_active_targets,
     _parse_time_text,
+    _scrape_ctx,
     cleanup_expired_showtimes,
     cleanup_orphaned_movies,
 )
@@ -153,11 +155,19 @@ def queue_theaters_for_scrape(
              Pass None to scrape all movies ({None} sentinel per theater).
     force: bypass the cooldown check (used by on-demand Run Now).
     """
-    from app import db
+    from flask import current_app
     from app.models import Theater, Settings
 
     if not theater_ids:
         return []
+
+    # Thread-locals set by on_demand_scrape()/browse_schedule_scrape() on the
+    # calling thread do not propagate to the worker threads spawned below —
+    # capture them, along with the live app object, before dispatching.
+    ctx_on_demand = getattr(_scrape_ctx, "on_demand", False)
+    ctx_browse = getattr(_scrape_ctx, "browse_only", False)
+    ctx_log_buffer = getattr(_scrape_ctx, "log_buffer", None)
+    flask_app = current_app._get_current_object()
 
     theaters = Theater.query.filter(Theater.id.in_(theater_ids)).all()
     now = utcnow()
@@ -195,9 +205,11 @@ def queue_theaters_for_scrape(
     if not to_scrape:
         return []
 
-    # Build per-chain groups and resolve scraper instances.
+    # Build per-chain groups (theater IDs only — chain workers re-query
+    # Theater rows in their own DB session, see _run_chain) and resolve
+    # scraper instances.
     scraper_by_chain = {sc.chain_name: sc for sc in ALL_SCRAPERS}
-    chain_groups: dict[str, list] = {}
+    chain_groups: dict[str, list[int]] = {}
     for theater in to_scrape:
         chain = theater.chain_name
         if chain not in scraper_by_chain:
@@ -205,7 +217,7 @@ def queue_theaters_for_scrape(
             with _inflight_lock:
                 _scraping_in_flight.discard(theater.id)
             continue
-        chain_groups.setdefault(chain, []).append(theater)
+        chain_groups.setdefault(chain, []).append(theater.id)
 
     # Build a resolved targets dict: use {theater_id: {None}} when no targets
     # were provided (scrape all movies).
@@ -215,55 +227,133 @@ def queue_theaters_for_scrape(
     else:
         resolved_targets = targets
 
-    all_new: list[Showtime] = []
+    if not chain_groups:
+        return []
 
-    for chain_name, chain_theaters in chain_groups.items():
-        scraper = scraper_by_chain[chain_name]
+    # Dispatch each chain batch to its own worker thread. The per-chain
+    # semaphores (acquired inside _run_chain) remain the real concurrency
+    # governor — this just lets independent chains run alongside each other
+    # instead of the previous strictly-sequential loop.
+    run_start = utcnow()
+    all_showtime_ids: list[int] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(chain_groups)) as executor:
+        futures = {
+            executor.submit(
+                _run_chain,
+                flask_app,
+                chain_name,
+                scraper_by_chain[chain_name],
+                chain_theater_ids,
+                resolved_targets,
+                ctx_on_demand,
+                ctx_browse,
+                ctx_log_buffer,
+            ): chain_name
+            for chain_name, chain_theater_ids in chain_groups.items()
+        }
+        for future in concurrent.futures.as_completed(futures):
+            chain_name = futures[future]
+            try:
+                new_ids = future.result()
+                all_showtime_ids.extend(new_ids)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Coordinator: chain '%s' worker crashed: %s", chain_name, exc)
+
+    run_elapsed = (utcnow() - run_start).total_seconds()
+    logger.info(
+        "Coordinator: run complete in %.1fs across %d chain(s), %d new showtime(s)",
+        run_elapsed, len(chain_groups), len(all_showtime_ids),
+    )
+
+    if not all_showtime_ids:
+        return []
+
+    # Showtime rows created inside a worker's own session become detached
+    # once its app context pops — re-query on the dispatching thread so
+    # callers (counting, process_new_showtimes) get live, attached objects.
+    return Showtime.query.filter(Showtime.id.in_(all_showtime_ids)).all()
+
+
+def _run_chain(
+    app,
+    chain_name: str,
+    scraper,
+    theater_ids: list[int],
+    resolved_targets: dict,
+    ctx_on_demand: bool,
+    ctx_browse: bool,
+    ctx_log_buffer: list | None,
+) -> list[int]:
+    """
+    Scrape one chain's batch of theaters on a worker thread.
+
+    Runs inside its own app context so it gets its own DB session — the
+    caller's Theater/Settings objects belong to the dispatching thread's
+    session and are never touched here; theaters are re-queried by id so
+    nothing crosses sessions between threads. Returns new Showtime ids only
+    (not ORM objects, which would be detached once this context pops).
+    """
+    # Thread-locals set by on_demand_scrape()/browse_schedule_scrape() on the
+    # dispatching thread do not propagate to this thread — apply them here
+    # for the duration of this chain's scrape, and clear them afterward.
+    _scrape_ctx.on_demand = ctx_on_demand
+    _scrape_ctx.browse_only = ctx_browse
+    _scrape_ctx.log_buffer = ctx_log_buffer
+    try:
         sem = _get_semaphore(chain_name)
-
         acquired = sem.acquire(blocking=True, timeout=300)  # 5 min max wait
         if not acquired:
             logger.warning(
                 "Coordinator: semaphore timeout for chain '%s' — skipping %d theaters",
-                chain_name, len(chain_theaters),
+                chain_name, len(theater_ids),
             )
             with _inflight_lock:
-                for t in chain_theaters:
-                    _scraping_in_flight.discard(t.id)
-            continue
+                for tid in theater_ids:
+                    _scraping_in_flight.discard(tid)
+            return []
 
+        start = utcnow()
         try:
-            new, failed = scraper.scrape_theaters_batch(chain_theaters, resolved_targets)
-            all_new.extend(new)
-            # Only advance last_scraped_at for theaters that didn't fail —
-            # a theater that raised inside scrape_theater() should be retried
-            # on the next cycle rather than waiting out the cooldown window.
-            _update_last_scraped([t for t in chain_theaters if t.id not in failed])
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Coordinator: chain '%s' batch failed: %s", chain_name, exc)
-            # Clear the failed transaction so the remaining chains in this run
-            # don't hit PendingRollbackError on their first query.
-            db.session.rollback()
+            with app.app_context():
+                from app import db
+                from app.models import Theater
+
+                worker_theaters = Theater.query.filter(Theater.id.in_(theater_ids)).all()
+                try:
+                    new, failed = scraper.scrape_theaters_batch(worker_theaters, resolved_targets)
+                    new_ids = [s.id for s in new]
+                    # Only advance last_scraped_at for theaters that didn't
+                    # fail — a theater that raised inside scrape_theater()
+                    # should be retried next cycle rather than waiting out
+                    # the cooldown window.
+                    succeeded_ids = [t.id for t in worker_theaters if t.id not in failed]
+                    if succeeded_ids:
+                        Theater.query.filter(Theater.id.in_(succeeded_ids)).update(
+                            {"last_scraped_at": utcnow()}, synchronize_session=False,
+                        )
+                        db.session.commit()
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Coordinator: chain '%s' batch failed: %s", chain_name, exc)
+                    # Clear the failed transaction so a retry on the next
+                    # cycle doesn't hit PendingRollbackError on its first query.
+                    db.session.rollback()
+                    new_ids = []
         finally:
             sem.release()
             with _inflight_lock:
-                for t in chain_theaters:
-                    _scraping_in_flight.discard(t.id)
+                for tid in theater_ids:
+                    _scraping_in_flight.discard(tid)
 
-    return all_new
-
-
-def _update_last_scraped(theaters: list) -> None:
-    """Update last_scraped_at for theaters whose batch completed without exception."""
-    from app import db
-    now = utcnow()
-    for theater in theaters:
-        theater.last_scraped_at = now
-    try:
-        db.session.commit()
-    except Exception as exc:  # noqa: BLE001
-        db.session.rollback()
-        logger.warning("Coordinator: could not update last_scraped_at: %s", exc)
+        elapsed = (utcnow() - start).total_seconds()
+        logger.info(
+            "Coordinator: chain '%s' finished in %.1fs (%d theater(s))",
+            chain_name, elapsed, len(theater_ids),
+        )
+        return new_ids
+    finally:
+        _scrape_ctx.on_demand = False
+        _scrape_ctx.browse_only = False
+        _scrape_ctx.log_buffer = None
 
 
 def run_browse_schedules() -> list[Showtime]:
