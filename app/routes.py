@@ -3145,7 +3145,7 @@ def api_geocode_reset():
 @require_role("admin")
 def api_reseed_preview():
     """Return how many theaters would be updated by a re-seed (dry run)."""
-    from app.venue_crawler import reseed_from_csv
+    from app.theater_csv import reseed_from_csv
     columns = (request.get_json(silent=True) or {}).get("columns", [])
     result = reseed_from_csv(columns, dry_run=True)
     return jsonify(result)
@@ -3156,7 +3156,7 @@ def api_reseed_preview():
 def api_reseed_from_csv():
     """Restore selected Theater columns from seeds/imax_theaters.csv."""
     from app.log_utils import write_log
-    from app.venue_crawler import reseed_from_csv
+    from app.theater_csv import reseed_from_csv
 
     columns = (request.get_json(silent=True) or {}).get("columns", [])
     if not columns:
@@ -3279,7 +3279,7 @@ def api_sync_theaters_from_csv():
 @require_role("admin", "editor")
 def api_export_theaters():
     """Download all theaters as a CSV file."""
-    from app.venue_crawler import export_theaters_csv
+    from app.theater_csv import export_theaters_csv
 
     csv_data = export_theaters_csv()
     resp = make_response(csv_data)
@@ -3293,7 +3293,7 @@ def api_export_theaters():
 def api_import_theaters():
     """Import/upsert theaters from an uploaded CSV file."""
     from app.log_utils import write_log
-    from app.venue_crawler import import_theaters_from_csv_str
+    from app.theater_csv import import_theaters_from_csv_str
 
     f = request.files.get("file")
     if not f or not f.filename:
@@ -3322,7 +3322,7 @@ def api_import_theaters():
 def api_export_theaters_email():
     """Generate theater CSV and email it to the requesting user."""
     from app.notifications import send_email_with_attachment
-    from app.venue_crawler import export_theaters_csv
+    from app.theater_csv import export_theaters_csv
 
     to_addr = current_user.email
     if not to_addr:
@@ -3351,7 +3351,7 @@ def api_export_theaters_email():
 def api_export_theaters_save():
     """Save theater CSV to the server's persistent data directory."""
     import os
-    from app.venue_crawler import export_theaters_csv
+    from app.theater_csv import export_theaters_csv
 
     db_url = current_app.config.get("SQLALCHEMY_DATABASE_URI", "")
     if db_url.startswith("sqlite:///"):
