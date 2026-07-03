@@ -743,20 +743,21 @@ class PlaywrightBatchScraper(BaseScraper):
         failed_theater_ids: set[int] = set()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=self._user_agent, locale="en-US")
-            for theater in theaters:
-                movie_ids = self._movie_ids_for(theater, targets)
-                if not movie_ids:
-                    continue
-                try:
-                    new_showtimes.extend(
-                        self._scrape_with_context(theater, movie_ids, context)
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Error scraping %s: %s", theater.name, exc)
-                    failed_theater_ids.add(theater.id)
-            browser.close()
-
+            try:
+                context = browser.new_context(user_agent=self._user_agent, locale="en-US")
+                for theater in theaters:
+                    movie_ids = self._movie_ids_for(theater, targets)
+                    if not movie_ids:
+                        continue
+                    try:
+                        new_showtimes.extend(
+                            self._scrape_with_context(theater, movie_ids, context)
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("Error scraping %s: %s", theater.name, exc)
+                        failed_theater_ids.add(theater.id)
+            finally:
+                browser.close()
         db.session.commit()
         return new_showtimes, failed_theater_ids
 
