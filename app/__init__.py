@@ -1,6 +1,5 @@
 """IMAX Alert Flask application factory."""
 import logging
-import urllib.parse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Flask
@@ -730,57 +729,28 @@ def _migrate_legacy_alert_movies():
 
 def _upsert_theaters_from_csv(app):
     """
-    Upsert theaters from seeds/imax_theaters.csv.
+    Upsert theaters from seeds/imax_theaters.csv (startup seed).
 
-    Match priority per row:
-      1. venue_key  — if the CSV row has a non-empty Venue Key and a Theater with
-                      that key exists, update that row.
-      2. name       — case-insensitive fallback for rows without a key (legacy).
-      3. no match   — insert a new Theater row.
-
-    Fields updated when non-empty in the CSV: venue_key, chain/chain_id,
-    website, audio_system/audio_system_id, address, zip_code (only when DB
-    row has none), phone, and all screen/projector/dimension fields.
-
-    Fields never overwritten: is_active, latitude, longitude,
-    phone (preserved if CSV is blank), image_url.
+    Thin wrapper around app.theater_csv._upsert_theater_row with
+    preserve_existing=True: website/zip_code are only filled in when the
+    existing row has none, and is_active is never modified on an existing row.
 
     Returns a summary dict: {"inserted": N, "updated": N, "skipped": N, "errors": []}.
     """
     import csv
     import os
-    import re
 
-    from sqlalchemy import func
+    from app.theater_csv import _CSV_SEED_PATH, _upsert_theater_row
 
-    from app.lookup_helpers import (
-        get_or_create_aspect_ratio,
-        get_or_create_audio_system,
-        get_or_create_chain,
-        get_or_create_city,
-        get_or_create_continent,
-        get_or_create_country,
-        get_or_create_projector_type,
-        get_or_create_region,
-        parse_screen_dims,
-    )
-    from app.models import Theater
-
-    csv_path = os.path.join(os.path.dirname(__file__), "..", "seeds", "imax_theaters.csv")
-    csv_path = os.path.abspath(csv_path)
+    csv_path = str(_CSV_SEED_PATH)
     if not os.path.exists(csv_path):
         logger.warning("CSV upsert skipped: file not found at %s.", csv_path)
         return {"inserted": 0, "updated": 0, "skipped": 0, "errors": []}
 
-    def _normalise_ar(raw: str) -> str:
-        """Fix '2.30:01' → '2.30:1'."""
-        if not raw:
-            return raw
-        return re.sub(r":0+(\d)$", r":\1", raw.strip())
-
     logger.info("CSV theater upsert started: %s", csv_path)
     inserted = updated = skipped = 0
-    errors = []
+    errors: list = []
+    warnings: list = []
     processed = 0
 
     with app.app_context():
@@ -788,121 +758,16 @@ def _upsert_theaters_from_csv(app):
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    location_name = (row.get("Location Name") or "").strip()
-                    if not location_name:
-                        skipped += 1
-                        continue
-
-                    # --- Parse all CSV fields ---
-                    continent_name  = (row.get("Region") or "").strip()
-                    country_name    = (row.get("Country") or "").strip()
-                    state_name      = (row.get("State/Province") or "").strip()
-                    city_name       = (row.get("City") or "").strip()
-                    screen_ar_raw   = _normalise_ar(row.get("Screen AR") or "")
-                    digital_proj    = (row.get("Digital Projector") or "").strip()
-                    digital_ar_raw  = _normalise_ar(
-                        row.get(" max AR (Digital)") or row.get("max AR (Digital)") or ""
+                    status = _upsert_theater_row(
+                        row, preserve_existing=True, source="csv",
+                        errors=errors, warnings=warnings,
                     )
-                    film_proj_raw   = (row.get("Film Projector") or "").strip()
-                    screen_dims_str = (row.get("Screen Dimensions") or "").strip()
-                    commercial      = (row.get("Commercial Films Shown") or "").strip() or None
-                    venue_key       = (row.get("Venue Key") or "").strip() or None
-                    chain_name      = (row.get("Chain") or "").strip() or None
-                    website_url     = (row.get("Website") or "").strip() or None
-                    audio_sys_name  = (row.get("Audio System") or "").strip() or None
-                    address         = (row.get("Address") or "").strip() or None
-                    postal_code     = (row.get("Postal Code") or "").strip() or None
-                    phone           = (row.get("Phone") or "").strip() or None
-
-                    # --- Resolve FK objects ---
-                    continent_obj  = get_or_create_continent(continent_name) if continent_name else None
-                    country_obj    = get_or_create_country(country_name) if country_name else None
-                    region_obj     = (
-                        get_or_create_region(state_name, country_obj)
-                        if state_name and country_obj else None
-                    )
-                    city_obj       = (
-                        get_or_create_city(city_name, country_obj, region_obj)
-                        if city_name and country_obj else None
-                    )
-                    ar_obj         = get_or_create_aspect_ratio(screen_ar_raw) if screen_ar_raw else None
-                    dig_proj_obj   = get_or_create_projector_type(digital_proj) if digital_proj else None
-                    dig_ar_obj     = get_or_create_aspect_ratio(digital_ar_raw) if digital_ar_raw else None
-                    film_pt_obj    = get_or_create_projector_type(film_proj_raw) if film_proj_raw else None
-                    chain_root     = None
-                    if website_url:
-                        _p = urllib.parse.urlparse(website_url)
-                        chain_root = f"{_p.scheme}://{_p.netloc}" if _p.netloc else None
-                    chain_obj      = get_or_create_chain(chain_name, website=chain_root or "") if chain_name else None
-                    audio_sys_obj  = get_or_create_audio_system(audio_sys_name) if audio_sys_name else None
-                    w_m, h_m       = parse_screen_dims(screen_dims_str) if screen_dims_str else (None, None)
-
-                    # --- Find existing theater ---
-                    t = None
-                    if venue_key:
-                        t = Theater.query.filter_by(venue_key=venue_key).first()
-                    if t is None:
-                        # Exact match first so Unicode names (e.g. Turkish İ) that
-                        # SQLite lower() can't fold still match correctly after the
-                        # first upsert stores them verbatim.
-                        t = Theater.query.filter_by(name=location_name).first()
-                    if t is None:
-                        t = Theater.query.filter(
-                            func.lower(Theater.name) == location_name.lower()
-                        ).first()
-
-                    if t is None:
-                        # Insert
-                        t = Theater(
-                            name=location_name,
-                            is_active=True,
-                            crawl_source="csv",
-                        )
-                        db.session.add(t)
+                    if status == "inserted":
                         inserted += 1
-                    else:
+                    elif status == "updated":
                         updated += 1
-
-                    # --- Apply CSV fields (always update non-empty values) ---
-                    t.name = location_name
-                    if venue_key:
-                        t.venue_key = venue_key
-                    t.country     = country_name or t.country
-                    t.state       = state_name or t.state
-                    t.city        = city_name or t.city
-                    t.screen_size = screen_ar_raw or t.screen_size
-                    t.projector_type = digital_proj or t.projector_type
-                    t.screen_dims = screen_dims_str or t.screen_dims
-                    if chain_name:
-                        t.chain    = chain_name
-                        t.chain_id = chain_obj.id if chain_obj else t.chain_id
-                    if website_url and not t.website:
-                        t.website = website_url
-                    if audio_sys_name:
-                        t.audio_system    = audio_sys_name
-                        t.audio_system_id = audio_sys_obj.id if audio_sys_obj else t.audio_system_id
-                    if address:
-                        t.address = address
-                    if postal_code and not t.zip_code:
-                        t.zip_code = postal_code
-                    if phone:
-                        t.phone = phone
-                    t.country_id            = country_obj.id if country_obj else t.country_id
-                    t.region_id             = region_obj.id if region_obj else t.region_id
-                    t.city_id               = city_obj.id if city_obj else t.city_id
-                    t.aspect_ratio_id       = ar_obj.id if ar_obj else t.aspect_ratio_id
-                    t.projector_type_id     = dig_proj_obj.id if dig_proj_obj else t.projector_type_id
-                    t.continent_id          = continent_obj.id if continent_obj else t.continent_id
-                    t.digital_projector_ar_id = dig_ar_obj.id if dig_ar_obj else t.digital_projector_ar_id
-                    t.film_projector_type_id  = film_pt_obj.id if film_pt_obj else t.film_projector_type_id
-                    t.film_projector_type   = film_proj_raw or t.film_projector_type
-                    if commercial is not None:
-                        t.commercial_films = commercial
-                    if w_m is not None:
-                        t.screen_width_m  = w_m
-                    if h_m is not None:
-                        t.screen_height_m = h_m
-                    t.crawl_source = "csv"
+                    else:
+                        skipped += 1
 
                     processed += 1
                     if processed % 50 == 0:

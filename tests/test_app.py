@@ -2227,6 +2227,37 @@ class TestCSVSeeding:
         assert normalise_ar("2:30:01") == "2:30:1"   # trailing :01 → :1
         assert normalise_ar("1.90:1") == "1.90:1"    # already correct
 
+    def test_preserve_vs_overwrite_website_semantics(self, app):
+        """preserve_existing=True (seed) must not clobber an existing website;
+        preserve_existing=False (admin import) must overwrite it."""
+        from app.theater_csv import _upsert_theater_row  # noqa: PLC0415
+
+        with app.app_context():
+            t = Theater(name="Test Cinema IMAX", venue_key="TESTKEY001",
+                        website="http://original.example.com", is_active=True)
+            db.session.add(t)
+            db.session.commit()
+
+            row = {
+                "Location Name": "Test Cinema IMAX",
+                "Venue Key": "TESTKEY001",
+                "Website": "http://updated.example.com",
+            }
+
+            status = _upsert_theater_row(row, preserve_existing=True, source="csv",
+                                          errors=[], warnings=[])
+            db.session.commit()
+            assert status == "updated"
+            assert Theater.query.filter_by(venue_key="TESTKEY001").first().website == \
+                "http://original.example.com"
+
+            status = _upsert_theater_row(row, preserve_existing=False, source="import",
+                                          errors=[], warnings=[])
+            db.session.commit()
+            assert status == "updated"
+            assert Theater.query.filter_by(venue_key="TESTKEY001").first().website == \
+                "http://updated.example.com"
+
 
 # ── New PATCH fields ──────────────────────────────────────────────────
 
