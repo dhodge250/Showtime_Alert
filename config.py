@@ -1,7 +1,8 @@
 """Configuration for IMAX Alert application."""
 import os
+import tempfile
+import uuid
 from dotenv import load_dotenv
-from sqlalchemy.pool import StaticPool
 
 load_dotenv()
 
@@ -59,16 +60,17 @@ class TestingConfig(Config):
     """Testing configuration."""
 
     TESTING = True
-    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     # The coordinator dispatches chain batches to worker threads (see
-    # queue_theaters_for_scrape), each opening its own connection. SQLite's
-    # default :memory: pool (SingletonThreadPool) hands each thread a private,
-    # empty database; StaticPool + check_same_thread=False shares the single
-    # in-memory DB across threads so worker threads see the same schema/fixtures.
-    SQLALCHEMY_ENGINE_OPTIONS = {
-        "poolclass": StaticPool,
-        "connect_args": {"check_same_thread": False},
-    }
+    # queue_theaters_for_scrape), each opening its own connection. A plain
+    # ":memory:" DB is private per thread (SingletonThreadPool), and sharing
+    # one via StaticPool + check_same_thread=False hands both worker threads
+    # the *same* raw sqlite3.Connection object — concurrent execute()/commit()
+    # calls on it race and can silently drop a commit. A temp file-based DB
+    # (same as production, which never uses :memory:) gives each thread its
+    # own connection, safely serialized by SQLite's normal file locking.
+    SQLALCHEMY_DATABASE_URI = (
+        f"sqlite:///{os.path.join(tempfile.gettempdir(), f'imax_alert_test_{uuid.uuid4().hex}.db')}"
+    )
     WTF_CSRF_ENABLED = False
     # Skip the 1927-row CSV upsert and incremental column migrations in tests —
     # create_all() builds the schema fresh, and tests supply their own fixture data.
