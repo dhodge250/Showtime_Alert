@@ -1864,6 +1864,98 @@ class TestScheduler:
         status = get_scheduler_status()
         assert status["running"] is False
 
+    def test_on_demand_fetch_keeps_stale_rows_when_scrape_raises(
+        self, app, sample_theater, sample_movie
+    ):
+        """
+        _theater_fetch_job must not delete existing on-demand rows when the
+        scrape raises — leaving stale data visible beats showing nothing
+        (issue #279 item 1).
+        """
+        from datetime import timedelta
+        from app.scheduler import _theater_fetch_job
+        from app.time_utils import utcnow
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            old_showtime = Showtime(
+                theater_id=theater.id,
+                movie_id=sample_movie,
+                show_datetime=utcnow() + timedelta(days=1),
+                on_demand=True,
+            )
+            db.session.add(old_showtime)
+            db.session.commit()
+            old_showtime.last_checked = utcnow() - timedelta(hours=1)
+            db.session.commit()
+            old_id = old_showtime.id
+
+            class _RaisingScraper:
+                chain_name = "Test"
+
+                def scrape_theater(self, theater, movie_ids):
+                    raise RuntimeError("scrape failed")
+
+            _theater_fetch_job(theater.id, _RaisingScraper())
+
+            assert Showtime.query.get(old_id) is not None
+
+    def test_on_demand_fetch_deletes_stale_rows_after_successful_scrape(
+        self, app, sample_theater, sample_movie
+    ):
+        """
+        On success, on-demand rows the scraper didn't touch (last_checked
+        before scrape_start) must be deleted — but only after the scrape
+        succeeds, and upserted/new rows from this run must survive
+        (issue #279 item 1).
+        """
+        from datetime import timedelta
+        from app.scheduler import _theater_fetch_job
+        from app.time_utils import utcnow
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            old_showtime = Showtime(
+                theater_id=theater.id,
+                movie_id=sample_movie,
+                show_datetime=utcnow() + timedelta(days=1),
+                on_demand=True,
+            )
+            db.session.add(old_showtime)
+            db.session.commit()
+            old_showtime.last_checked = utcnow() - timedelta(hours=1)
+            db.session.commit()
+            old_id = old_showtime.id
+
+            new_movie = Movie(title="A Different Movie")
+            db.session.add(new_movie)
+            db.session.commit()
+            new_movie_id = new_movie.id
+
+            class _SucceedingScraper:
+                chain_name = "Test"
+
+                def __init__(self, movie_id):
+                    self.movie_id = movie_id
+
+                def scrape_theater(self, theater, movie_ids):
+                    new_st = Showtime(
+                        theater_id=theater.id,
+                        movie_id=self.movie_id,
+                        show_datetime=utcnow() + timedelta(days=2),
+                        on_demand=True,
+                    )
+                    db.session.add(new_st)
+                    db.session.commit()
+                    return [new_st]
+
+            _theater_fetch_job(theater.id, _SucceedingScraper(new_movie_id))
+
+            assert Showtime.query.get(old_id) is None
+            remaining = Showtime.query.filter_by(theater_id=theater.id, on_demand=True).all()
+            assert len(remaining) == 1
+            assert remaining[0].movie_id == new_movie_id
+
 
 # ── Scraper coordinator ───────────────────────────────────────────────
 

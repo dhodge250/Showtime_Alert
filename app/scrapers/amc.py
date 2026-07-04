@@ -3,16 +3,17 @@ import re
 
 from bs4 import BeautifulSoup
 
-from app.scrapers.base import PlaywrightBatchScraper, _local_to_utc, _parse_time_text, _scrape_ctx
+from app.scrapers.base import (
+    USER_AGENT,
+    PlaywrightBatchScraper,
+    _local_to_utc,
+    _parse_time_text,
+    _scrape_ctx,
+)
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
 _WAIT_MS = 7000
 _IMAX_ARIA = re.compile(r"IMAX", re.I)
 _SECTION_PREFIX = "Showtimes for "
@@ -102,7 +103,7 @@ class AMCScraper(PlaywrightBatchScraper):
 
     chain_name = "AMC"
     health_website = "amctheatres.com"
-    _user_agent = _UA
+    _user_agent = USER_AGENT
 
     def _scrape_with_context(self, theater: Theater, movie_ids: set, context) -> list[Showtime]:
         if not theater.website:
@@ -130,7 +131,7 @@ class AMCScraper(PlaywrightBatchScraper):
         url = _showtimes_url(theater.website)
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=_UA, locale="en-US")
+            context = browser.new_context(user_agent=USER_AGENT, locale="en-US")
             page = context.new_page()
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30_000)

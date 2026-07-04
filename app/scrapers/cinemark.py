@@ -14,24 +14,26 @@ No Playwright / headless browser needed.
 
 import logging
 import re
-import time
 from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
 
 from app import db
-from app.scrapers.base import BaseScraper, _local_to_utc, _scrape_ctx
+from app.scrapers.base import (
+    REQUEST_TIMEOUT,
+    USER_AGENT,
+    BaseScraper,
+    _local_to_utc,
+    _scrape_ctx,
+    polite_get,
+)
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
 
 _PAGE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": USER_AGENT,
     "Accept-Language": "en-US,en;q=0.9",
 }
 _API_HEADERS = {
@@ -43,7 +45,6 @@ _SHOWTIMES_API = (
     "https://www.cinemark.com/umbraco/surface/Showtimes/GetByTheaterId"
 )
 _THEATER_ID_RE = re.compile(r"var\s+currentTheaterId\s*=\s*(\d+)")
-_REQUEST_TIMEOUT = 15
 _MAX_RETRY_WAIT = 60  # skip a date rather than sleeping longer than this on a 429
 
 
@@ -178,9 +179,8 @@ class CinemarkScraper(BaseScraper):
         )
 
         # Fetch each remaining date via the GetByTheaterId API endpoint.
-        # A short inter-request delay avoids triggering the rate limiter.
+        # polite_get() sleeps before each request to avoid triggering the rate limiter.
         for date_iso in dates[1:]:
-            time.sleep(0.5)
             date_soup = self._fetch_date(session, theater_id, date_iso, theater.website)
             if date_soup:
                 new_showtimes.extend(
@@ -191,7 +191,7 @@ class CinemarkScraper(BaseScraper):
 
     def _fetch_page(self, session: requests.Session, url: str) -> BeautifulSoup | None:
         try:
-            r = session.get(url, timeout=_REQUEST_TIMEOUT)
+            r = session.get(url, timeout=REQUEST_TIMEOUT)
             r.raise_for_status()
             return BeautifulSoup(r.text, "lxml")
         except requests.RequestException as exc:
@@ -203,37 +203,26 @@ class CinemarkScraper(BaseScraper):
     ) -> BeautifulSoup | None:
         url = f"{_SHOWTIMES_API}?theaterId={theater_id}&showDate={date_iso}"
         headers = {**_API_HEADERS, "Referer": referer}
-        for attempt in range(3):
-            try:
-                r = session.get(url, headers=headers, timeout=_REQUEST_TIMEOUT)
-                if r.status_code == 429:
-                    try:
-                        wait = max(1, int(float(r.headers.get("Retry-After") or "10")))
-                    except (ValueError, TypeError):
-                        wait = 10
-                    if wait > _MAX_RETRY_WAIT:
-                        logger.warning(
-                            "Cinemark: rate-limited for theater %s on %s — "
-                            "Retry-After=%ds exceeds limit, skipping date",
-                            theater_id, date_iso, wait,
-                        )
-                        return None
-                    logger.warning(
-                        "Cinemark: rate-limited for theater %s on %s — waiting %ds (attempt %d/3)",
-                        theater_id, date_iso, wait, attempt + 1,
-                    )
-                    time.sleep(wait)
-                    continue
-                r.raise_for_status()
-                return BeautifulSoup(r.text, "lxml")
-            except requests.RequestException as exc:
-                logger.warning(
-                    "Cinemark: GetByTheaterId failed for theater %s on %s: %s",
-                    theater_id, date_iso, exc,
-                )
-                return None
-        logger.warning(
-            "Cinemark: gave up on theater %s on %s after 3 rate-limited attempts",
-            theater_id, date_iso,
-        )
-        return None
+        try:
+            r = polite_get(
+                session, url, headers=headers, timeout=REQUEST_TIMEOUT,
+                max_retry_wait=_MAX_RETRY_WAIT,
+                log_prefix=f"Cinemark: theater {theater_id} on {date_iso}",
+            )
+        except requests.RequestException as exc:
+            logger.warning(
+                "Cinemark: GetByTheaterId failed for theater %s on %s: %s",
+                theater_id, date_iso, exc,
+            )
+            return None
+        if r is None:
+            return None
+        try:
+            r.raise_for_status()
+            return BeautifulSoup(r.text, "lxml")
+        except requests.RequestException as exc:
+            logger.warning(
+                "Cinemark: GetByTheaterId failed for theater %s on %s: %s",
+                theater_id, date_iso, exc,
+            )
+            return None

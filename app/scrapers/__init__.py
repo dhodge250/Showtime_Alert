@@ -66,6 +66,12 @@ def is_browse_run_in_progress(user_id: int) -> bool:
 # Chain names that require a Playwright browser (expensive — RAM + CPU).
 PLAYWRIGHT_CHAIN_NAMES: frozenset[str] = frozenset(["AMC", "Regal", "TCL"])
 
+# Default concurrency caps — used both as the Settings fallback in
+# initialize_coordinator() and as _get_semaphore()'s own fallback if it is
+# ever called before initialize_coordinator() has run.
+_DEFAULT_PLAYWRIGHT_CAP = 2
+_DEFAULT_HTTP_CAP = 5
+
 # Semaphores are pre-warmed by initialize_coordinator() at startup so that
 # background threads never need an app context to call _get_semaphore().
 # If somehow called before initialisation, _get_semaphore() falls back to
@@ -88,15 +94,15 @@ def initialize_coordinator() -> None:
     with _semaphore_lock:
         pw_s = Settings.query.filter_by(key="playwright_concurrency").first()
         try:
-            pw_cap = max(1, int(pw_s.value)) if pw_s and pw_s.value else 2
+            pw_cap = max(1, int(pw_s.value)) if pw_s and pw_s.value else _DEFAULT_PLAYWRIGHT_CAP
         except (ValueError, TypeError):
-            pw_cap = 2
+            pw_cap = _DEFAULT_PLAYWRIGHT_CAP
 
         http_s = Settings.query.filter_by(key="http_concurrency").first()
         try:
-            http_cap = max(1, int(http_s.value)) if http_s and http_s.value else 5
+            http_cap = max(1, int(http_s.value)) if http_s and http_s.value else _DEFAULT_HTTP_CAP
         except (ValueError, TypeError):
-            http_cap = 5
+            http_cap = _DEFAULT_HTTP_CAP
 
         _playwright_semaphore = threading.Semaphore(pw_cap)
         _http_semaphore = threading.Semaphore(http_cap)
@@ -119,13 +125,13 @@ def _get_semaphore(chain_name: str) -> threading.Semaphore:
         if _playwright_semaphore is None:
             with _semaphore_lock:
                 if _playwright_semaphore is None:
-                    _playwright_semaphore = threading.Semaphore(2)
+                    _playwright_semaphore = threading.Semaphore(_DEFAULT_PLAYWRIGHT_CAP)
         return _playwright_semaphore
     else:
         if _http_semaphore is None:
             with _semaphore_lock:
                 if _http_semaphore is None:
-                    _http_semaphore = threading.Semaphore(5)
+                    _http_semaphore = threading.Semaphore(_DEFAULT_HTTP_CAP)
         return _http_semaphore
 
 
