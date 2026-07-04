@@ -167,6 +167,7 @@ docker logs imax-alert -f
 | v1.21.0 | Theater detail page, scraper status/on-demand scraping, movie TMDB matching improvements, movies filter/sort/pagination, configurable page sizes (#225 #226 #227) |
 | v1.21.1 | Hotfix: apply v1.21 code missing from main due to release branch merge base collision |
 | v1.22.0 | Scheduled Proximity Browsing: unified scraper coordinator (cooldown, in-flight, concurrency caps), browse schedule model + settings UI + Run Now, format type normalization across all scrapers, Regal rate-limit + date-range fixes, multi-user scrape isolation (#243 #242 #245) |
+| v1.23.0 | Hardening & Cleanup: production SECRET_KEY enforcement, JSON-CSRF content-type gate, naive-UTC datetime standardization, legacy venue crawler removal (CSV is sole theater data source), CSV upsert/radius-helper/lookup-CRUD dedup, parallel scraper chain dispatch via coordinator worker threads, shared HTTP constants + rate-limit politeness across all scrapers (#253–#256 #259 #261–#268 #275 #279) |
 
 ### In Progress & Upcoming
 
