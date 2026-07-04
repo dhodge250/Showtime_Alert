@@ -129,7 +129,7 @@ def _theater_fetch_job(theater_id: int, scraper) -> None:
             Showtime.theater_id == theater_id,
             Showtime.on_demand == True,  # noqa: E712
             Showtime.last_checked < scrape_start,
-        ).delete()
+        ).delete(synchronize_session=False)
         now = utcnow()
         theater.on_demand_fetched_at = now
         theater.last_scraped_at = now
