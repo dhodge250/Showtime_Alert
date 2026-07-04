@@ -10,14 +10,16 @@ user sees everything in one place with a link for each individual showtime.
 import json
 import logging
 import smtplib
-from datetime import datetime, timezone
+import threading
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import db
-from app.models import AlertMovie, AlertPreference, Notification, Showtime, Theater, User
+from app.models import AlertMovie, AlertPreference, Notification, Showtime, User
+from app.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,30 @@ def _fmt_dt(show_datetime: datetime, tz: ZoneInfo, fmt: str) -> str:
 _SMTP_TIMEOUT = 8
 
 
+def _smtp_send(app_config: dict, to_address: str, msg) -> tuple[bool, str]:
+    """Send a prebuilt MIME message via SMTP. Returns (success, error_message)."""
+    username = app_config.get("MAIL_USERNAME", "")
+    password = app_config.get("MAIL_PASSWORD", "")
+    if not username or not password:
+        logger.warning("Email credentials not configured; skipping email to %s", to_address)
+        return False, "Email credentials not configured"
+    host = app_config.get("MAIL_SERVER", "smtp.gmail.com")
+    port = int(app_config.get("MAIL_PORT", 587))
+    use_tls = app_config.get("MAIL_USE_TLS", True)
+    try:
+        smtp_cls = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
+        with smtp_cls(host, port, timeout=_SMTP_TIMEOUT) as server:
+            if port != 465 and use_tls:
+                server.starttls()
+            server.login(username, password)
+            server.sendmail(msg["From"], to_address, msg.as_string())
+        logger.info("Email sent to %s", to_address)
+        return True, ""
+    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
+        logger.error("Failed to send email to %s: %s", to_address, exc)
+        return False, str(exc)
+
+
 def send_email(
     app_config: dict,
     to_address: str,
@@ -65,43 +91,14 @@ def send_email(
 
     Returns (success, error_message).
     """
-    username = app_config.get("MAIL_USERNAME", "")
-    password = app_config.get("MAIL_PASSWORD", "")
-    from_address = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
-
-    if not username or not password:
-        logger.warning(
-            "Email credentials not configured; skipping email to %s",
-            to_address,
-        )
-        return False, "Email credentials not configured"
-
-    host = app_config.get("MAIL_SERVER", "smtp.gmail.com")
-    port = int(app_config.get("MAIL_PORT", 587))
-    use_tls = app_config.get("MAIL_USE_TLS", True)
-
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = from_address
+    msg["From"] = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
     msg["To"] = to_address
     msg.attach(MIMEText(body_text, "plain"))
     msg.attach(MIMEText(body_html, "html"))
 
-    try:
-        if port == 465:
-            server = smtplib.SMTP_SSL(host, port, timeout=_SMTP_TIMEOUT)
-        else:
-            server = smtplib.SMTP(host, port, timeout=_SMTP_TIMEOUT)
-            if use_tls:
-                server.starttls()
-        server.login(username, password)
-        server.sendmail(from_address, to_address, msg.as_string())
-        server.quit()
-        logger.info("Email sent to %s", to_address)
-        return True, ""
-    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
-        logger.error("Failed to send email to %s: %s", to_address, exc)
-        return False, str(exc)
+    return _smtp_send(app_config, to_address, msg)
 
 
 def send_email_with_attachment(
@@ -118,20 +115,9 @@ def send_email_with_attachment(
     from email import encoders as _enc
     from email.mime.base import MIMEBase
 
-    username = app_config.get("MAIL_USERNAME", "")
-    password = app_config.get("MAIL_PASSWORD", "")
-    from_address = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
-
-    if not username or not password:
-        return False, "Email credentials not configured"
-
-    host = app_config.get("MAIL_SERVER", "smtp.gmail.com")
-    port = int(app_config.get("MAIL_PORT", 587))
-    use_tls = app_config.get("MAIL_USE_TLS", True)
-
     outer = MIMEMultipart("mixed")
     outer["Subject"] = subject
-    outer["From"] = from_address
+    outer["From"] = app_config.get("MAIL_FROM", "noreply@imaxalert.com")
     outer["To"] = to_address
 
     alt = MIMEMultipart("alternative")
@@ -146,21 +132,7 @@ def send_email_with_attachment(
     part.add_header("Content-Type", attachment_content_type)
     outer.attach(part)
 
-    try:
-        if port == 465:
-            server = smtplib.SMTP_SSL(host, port, timeout=_SMTP_TIMEOUT)
-        else:
-            server = smtplib.SMTP(host, port, timeout=_SMTP_TIMEOUT)
-            if use_tls:
-                server.starttls()
-        server.login(username, password)
-        server.sendmail(from_address, to_address, outer.as_string())
-        server.quit()
-        logger.info("Email with attachment sent to %s", to_address)
-        return True, ""
-    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
-        logger.error("Failed to send email with attachment to %s: %s", to_address, exc)
-        return False, str(exc)
+    return _smtp_send(app_config, to_address, outer)
 
 
 # ---------------------------------------------------------------------------
@@ -367,23 +339,19 @@ def _build_sms_body_multi(user: User, showtimes: list[Showtime]) -> str:
     return msg
 
 
-# ---------------------------------------------------------------------------
-# Legacy single-showtime builders (kept so existing call sites still compile)
-# ---------------------------------------------------------------------------
-
-def _build_email_body(user: User, showtime: Showtime) -> tuple[str, str, str]:
-    """Single-showtime wrapper around _build_email_body_multi."""
-    return _build_email_body_multi(user, [showtime])
-
-
-def _build_sms_body(user: User, showtime: Showtime) -> str:
-    """Single-showtime wrapper around _build_sms_body_multi."""
-    return _build_sms_body_multi(user, [showtime])
-
 
 # ---------------------------------------------------------------------------
 # Core notification logic
 # ---------------------------------------------------------------------------
+
+# Serialises the notification dispatch phase across threads.  The scheduled
+# scrape job (process_new_showtimes) and the independent alert processor
+# (process_pending_alerts) run in different APScheduler worker threads; both
+# read "unsent" state (alert_sent flags, notified_showtime_ids) that is only
+# committed at the end of _notify_for_alert, so without this lock they can
+# both pass the dedup checks for the same alert and double-notify the user.
+_notify_lock = threading.Lock()
+
 
 def _radius_theater_ids(pref: AlertPreference) -> Optional[set[int]]:
     """
@@ -397,12 +365,8 @@ def _radius_theater_ids(pref: AlertPreference) -> Optional[set[int]]:
     user = User.query.get(pref.user_id)
     if user is None or user.location_lat is None or user.location_lon is None:
         return None
-    from app.scrapers.base import _haversine_km
-    return {
-        t.id for t in Theater.query.filter_by(is_active=True).all()
-        if t.latitude is not None and t.longitude is not None
-        and _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= pref.radius_km
-    }
+    from app.scrapers.base import theater_ids_within_radius
+    return theater_ids_within_radius(user.location_lat, user.location_lon, pref.radius_km)
 
 
 def _get_matching_showtimes_for_pref(
@@ -563,10 +527,10 @@ def _notify_for_alert(
         for am in pref.alert_movies.all():
             if am.movie_id in notified_movie_ids and not am.alert_sent:
                 am.alert_sent = True
-                am.alert_sent_at = datetime.now(timezone.utc)
+                am.alert_sent_at = utcnow()
         if pref.alert_movies.filter_by(alert_sent=False).count() == 0:
             pref.alert_sent = True
-            pref.alert_sent_at = datetime.now(timezone.utc)
+            pref.alert_sent_at = utcnow()
 
     # Enforce max_notifications cap (applies to both alert types)
     if (
@@ -575,7 +539,7 @@ def _notify_for_alert(
     ):
         pref.is_active = False
         pref.alert_sent = True
-        pref.alert_sent_at = datetime.now(timezone.utc)
+        pref.alert_sent_at = utcnow()
         logger.info(
             "AlertPreference %d reached max_notifications=%d — auto-closing.",
             pref.id,
@@ -591,13 +555,14 @@ def _notify_for_showtime(app, showtime: Showtime) -> int:
     Backward-compatible wrapper: find all alerts matching a single showtime
     and call _notify_for_alert for each.
     """
-    prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
-    sent = 0
-    for pref in prefs:
-        matching = _get_matching_showtimes_for_pref(pref, [showtime])
-        if matching:
-            sent += _notify_for_alert(app, pref, matching)
-    return sent
+    with _notify_lock:
+        prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
+        sent = 0
+        for pref in prefs:
+            matching = _get_matching_showtimes_for_pref(pref, [showtime])
+            if matching:
+                sent += _notify_for_alert(app, pref, matching)
+        return sent
 
 
 # ---------------------------------------------------------------------------
@@ -615,18 +580,19 @@ def process_new_showtimes(app, new_showtimes: list[Showtime]) -> int:
     if not new_showtimes:
         return 0
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
     future_showtimes = [st for st in new_showtimes if st.show_datetime >= now]
     if not future_showtimes:
         return 0
 
-    prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
-    sent = 0
-    for pref in prefs:
-        matching = _get_matching_showtimes_for_pref(pref, future_showtimes)
-        if matching:
-            sent += _notify_for_alert(app, pref, matching)
-    return sent
+    with _notify_lock:
+        prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
+        sent = 0
+        for pref in prefs:
+            matching = _get_matching_showtimes_for_pref(pref, future_showtimes)
+            if matching:
+                sent += _notify_for_alert(app, pref, matching)
+        return sent
 
 
 def process_pending_alerts(app) -> int:
@@ -637,12 +603,18 @@ def process_pending_alerts(app) -> int:
     found nothing new.  Each alert receives one consolidated notification
     listing all matching showtimes.
     """
+    with _notify_lock:
+        return _process_pending_alerts_locked(app)
+
+
+def _process_pending_alerts_locked(app) -> int:
+    """Body of process_pending_alerts; caller must hold _notify_lock."""
     prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
     if not prefs:
         return 0
 
     from datetime import timedelta
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
     # Radius alerts fired by process_pending_alerts (existing DB data) before the
     # scraper has visited every in-radius theater produce incomplete notifications.
     # Give radius alerts a 35-minute grace period so the 30-minute scraper cycle
@@ -652,7 +624,7 @@ def process_pending_alerts(app) -> int:
     sent = 0
     for pref in prefs:
         if pref.radius_km is not None and pref.created_at is not None:
-            age = now - pref.created_at.replace(tzinfo=None)
+            age = now - pref.created_at
             if age < _RADIUS_GRACE:
                 continue
         q = Showtime.query.filter(Showtime.show_datetime >= now)

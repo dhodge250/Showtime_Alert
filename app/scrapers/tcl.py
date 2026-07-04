@@ -21,26 +21,26 @@ import re
 from datetime import datetime, timezone
 
 import requests
-from playwright.sync_api import sync_playwright
 
-from app.scrapers.base import BaseScraper, _local_to_utc, _scrape_ctx
+from app.scrapers.base import (
+    REQUEST_TIMEOUT,
+    USER_AGENT,
+    BaseScraper,
+    _local_to_utc,
+    _scrape_ctx,
+    polite_get,
+)
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
-_PAGE_HEADERS = {"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9"}
+_PAGE_HEADERS = {"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"}
 _OCAPI_BASE = "https://digital-api.tclchinesetheatres.com"
 _SITE_PAGE = "https://www.tclchinesetheatres.com/"
 _SITE_ID = "0001"
 _IMAX_ATTR_ID = "0000000009"
 # API titles carry format prefixes like "(IMAX) ", "(DBOX) " — strip before DB lookup
 _TITLE_PREFIX_RE = re.compile(r"^\([^)]+\)\s+")
-_REQUEST_TIMEOUT = 15
 _NEXT_DATA_RE = re.compile(
     r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
 )
@@ -55,10 +55,17 @@ def _fetch_gas_token(page_url: str = _SITE_PAGE) -> str:
     page load; no cookies are needed for subsequent OCAPI calls — only the
     token itself matters.
     """
+    # Lazy import with graceful degradation, same as AMC/Regal — a missing
+    # playwright install must disable this scraper, not crash app startup.
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning("TCL scraper requires playwright — skipping")
+        return ""
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            ctx = browser.new_context(user_agent=_UA, locale="en-US")
+            ctx = browser.new_context(user_agent=USER_AGENT, locale="en-US")
             page = ctx.new_page()
             page.goto(page_url, wait_until="domcontentloaded", timeout=30_000)
             page.wait_for_timeout(3_000)
@@ -115,7 +122,7 @@ class TCLScraper(BaseScraper):
                 f"{_OCAPI_BASE}/ocapi/v1/film-screening-dates",
                 params={"siteIds": _SITE_ID},
                 headers=hdrs,
-                timeout=_REQUEST_TIMEOUT,
+                timeout=REQUEST_TIMEOUT,
             )
             r.raise_for_status()
             all_dates_data = r.json().get("filmScreeningDates", [])
@@ -131,20 +138,24 @@ class TCLScraper(BaseScraper):
         logger.debug("TCL: %d dates to scrape (on_demand=%s)", len(dates), on_demand)
         new_showtimes: list[Showtime] = []
         for date_iso in dates:
-            new_showtimes.extend(self._scrape_date(theater, movie_ids, hdrs, date_iso))
+            new_showtimes.extend(
+                self._scrape_date(theater, movie_ids, hdrs, date_iso, all_formats)
+            )
 
         return new_showtimes
 
     def _scrape_date(
-        self, theater: Theater, movie_ids: set, hdrs: dict, date_iso: str
+        self, theater: Theater, movie_ids: set, hdrs: dict, date_iso: str,
+        all_formats: bool,
     ) -> list[Showtime]:
+        url = f"{_OCAPI_BASE}/ocapi/v1/showtimes/by-business-date/{date_iso}?siteIds={_SITE_ID}"
         try:
-            r = requests.get(
-                f"{_OCAPI_BASE}/ocapi/v1/showtimes/by-business-date/{date_iso}",
-                params={"siteIds": _SITE_ID},
-                headers=hdrs,
-                timeout=_REQUEST_TIMEOUT,
+            r = polite_get(
+                requests, url, headers=hdrs, timeout=REQUEST_TIMEOUT,
+                log_prefix=f"TCL: showtimes on {date_iso}",
             )
+            if r is None:
+                return []
             r.raise_for_status()
         except Exception as exc:
             logger.warning("TCL: showtimes failed for %s: %s", date_iso, exc)
@@ -156,8 +167,6 @@ class TCLScraper(BaseScraper):
             for f in data.get("relatedData", {}).get("films", [])
         }
 
-        on_demand = getattr(_scrape_ctx, "on_demand", False)
-        all_formats = on_demand or getattr(_scrape_ctx, "browse_only", False)
         new_showtimes: list[Showtime] = []
         for show in data.get("showtimes", []):
             attr_ids = show.get("attributeIds", [])

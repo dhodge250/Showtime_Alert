@@ -1,9 +1,6 @@
 """IMAX Alert Flask application factory."""
 import logging
-import urllib.parse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-import click as _click
 
 from flask import Flask
 from flask_limiter import Limiter
@@ -36,6 +33,15 @@ def create_app(config_name="default"):
 
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config.from_object(config[config_name])
+
+    secret_key = (app.config.get("SECRET_KEY") or "").strip()
+    if config_name == "production" and (
+        not secret_key or secret_key == "dev-secret-key-change-in-production"
+    ):
+        raise RuntimeError(
+            "SECRET_KEY environment variable must be set to a non-empty, non-default value in production — "
+            "refusing to start with an insecure key."
+        )
 
     # Trust one layer of proxy headers (Cloudflare / NPM) so rate-limiting and
     # IP logging use the real client IP, not the proxy address.
@@ -89,9 +95,12 @@ def create_app(config_name="default"):
 
     app.jinja_env.filters["in_user_tz"] = _in_user_tz
 
-    # Exempt the JSON API blueprint from CSRF — fetch() calls use JSON bodies
-    # which browsers cannot send cross-origin without CORS pre-flight, so the
-    # risk CSRF tokens protect against doesn't apply to these endpoints.
+    # Exempt the JSON API blueprint from CSRF. Handlers parse request bodies
+    # with request.get_json(silent=True) (no force=True), so Flask only parses
+    # bodies whose Content-Type is application/json — and browsers cannot send
+    # that cross-origin without a CORS pre-flight. A cross-origin page sending
+    # a non-JSON body (e.g. text/plain) gets an empty dict, not a parsed
+    # payload, so the CSRF protection these tokens provide isn't needed here.
     csrf.exempt(api_bp)
 
     # Inject a cache-busting fingerprint into every template context.
@@ -121,260 +130,8 @@ def create_app(config_name="default"):
             app.config["SESSION_TIMEOUT_MINUTES"] = minutes
         return {"session_timeout_minutes": minutes}
 
-    # ------------------------------------------------------------------
-    # Flask CLI: flask cleanup-chains
-    # ------------------------------------------------------------------
-    @app.cli.command("cleanup-chains")
-    @_click.option("--dry-run", is_flag=True, default=False,
-                   help="Preview changes without writing to the database.")
-    def _cleanup_chains_cmd(dry_run):
-        """Merge legacy chain name variants and populate chain homepage URLs.
-
-        Two operations are performed in sequence:
-
-        1. MERGE — For every old suffixed name that now has a simplified
-           equivalent in the database (e.g. "Wanda Cinemas" + "Wanda"),
-           all theater rows are re-pointed to the simplified chain and the
-           old record is deleted.  If only the old name exists (no new
-           counterpart yet), it is renamed in place.
-
-        2. WEBSITES — Sets the homepage URL on every chain that currently
-           has no website, using a built-in name → URL mapping.
-        """
-        import click as _ck
-        from app.models import Chain, Theater
-
-        # Old name → simplified name (mirrors _CHAIN_RENAMES in enrich_csv_chains.py)
-        _RENAMES: dict[str, str] = {
-            "Wanda Cinemas":            "Wanda",
-            "Jinyi Cinema":             "Jinyi",
-            "Bona Film Group":          "Bona",
-            "MixC Cinema":              "MixC",
-            "Cinema XXI":               "XXI",
-            "Odeon Cinemas":            "Odeon",
-            "VOX Cinemas":              "VOX",
-            "SFC Cinema":               "SFC",
-            "Toho Cinemas":             "Toho",
-            "AEON Cinema":              "AEON",
-            "United Cinemas":           "United",
-            "Hengdian Cinema":          "Hengdian",
-            "Lumière Cinema":           "Lumière",
-            "Major Cineplex":           "Major",
-            "Vie Show Cinemas":         "Vie Show",
-            "Emperor Cinemas":          "Emperor",
-            "Landmark Cinemas":         "Landmark",
-            "Galaxy Theatres":          "Galaxy",
-            "Shaw Theatres":            "Shaw",
-            "Event Cinemas":            "Event",
-            "TGV Cinemas":              "TGV",
-            "CMX Cinemas":              "CMX",
-            "Epic Theatres":            "Epic",
-            "Village Cinemas":          "Village",
-            "OSGH Cinemas":             "OSGH",
-            "NOS Cinemas":              "NOS",
-            "Nova Cinemas":             "Nova",
-            "Filmhouse Cinemas":        "Filmhouse",
-            "Vue Cinemas":              "Vue",
-            "HBC Cinema":               "HBC",
-            "Womei Cinema":             "Womei",
-            "UCI Kinoplex":             "UCI",
-            "AmStar Cinemas":           "AmStar",
-            "Phoenix Theatres":         "Phoenix",
-            "RC Theatres":              "RC",
-            "Cathay Cineplexes":        "Cathay",
-            "Celebration! Cinema":      "Celebration!",
-            "Celebration Cinema":       "Celebration!",
-            "Emagine Entertainment":    "Emagine",
-            "EVO Entertainment":        "EVO",
-            "Reading Cinemas":          "Reading",
-            "MetroLux Theatres":        "MetroLux",
-            "Empire Cinemas":           "Empire",
-            "Palace Cinema":            "Palace",
-            "Kronverk Cinema":          "Kronverk",
-            "Paribu Cineverse":         "Paribu",
-            "GSC Cinemas":              "GSC",
-            "Showcase Cinemas":         "Showcase",
-            "Marcus Theatres":          "Marcus",
-            "Malco Theatres":           "Malco",
-            "Dendy Cinemas":            "Dendy",
-            "Golden Screen Cinemas":    "GSC",
-            "Esplanade Cineplex":       "Major",
-            "Apple Cinemas":            "Showcase",
-            "IMAX Entertainment":       "Event",
-            "Gaumont":                  "Pathé",
-            "La Géode":                 "Pathé",
-            "Cine Loire":               "Pathé",
-            "blue Cinema":              "blue",
-            "Hengye Cinema":            "Hengye",
-            "Saga Cinema":              "Saga",
-            "Space Station Cinema":     "Space Station",
-            "Sinake Cinema":            "Sinake",
-            "Tonight Cinema":           "Tonight",
-            "Tai Lai Cinema":           "Tai Lai",
-            "Heping Cinema":            "Heping",
-            "Cando Cinema":             "Cando",
-            "Zose Cinema":              "Zose",
-            "INSUN Cinema":             "INSUN",
-            "Flying Cinema":            "Flying",
-            "Aurora Cinema":            "Aurora",
-            "Xingguangjiaying Cinema":  "Xingguangjiaying",
-            "Fanyang Cinema":           "Fanyang",
-            "InCity Cinema":            "InCity",
-            "Cross Cinema":             "Cross",
-        }
-
-        # Simplified chain name → homepage URL
-        _WEBSITES: dict[str, str] = {
-            # North America
-            "AMC":              "https://www.amctheatres.com",
-            "Regal":            "https://www.regmovies.com",
-            "Cinemark":         "https://www.cinemark.com",
-            "Cineplex":         "https://www.cineplex.com",
-            "Marcus":           "https://www.marcustheatres.com",
-            "Malco":            "https://www.malco.com",
-            "Landmark":         "https://www.landmarkcinemas.com",
-            "Galaxy":           "https://www.galaxytheatres.com",
-            "Epic":             "https://www.epictheatres.com",
-            "Santikos":         "https://www.santikos.com",
-            "NCG":              "https://www.ncgcinemas.com",
-            "CinemaWest":       "https://www.cinemawest.com",
-            "RC":               "https://www.rctheatres.com",
-            "Megaplex":         "https://www.megaplextheatres.com",
-            "AmStar":           "https://www.amstarcinemas.com",
-            "Celebration!":     "https://www.celebrationcinema.com",
-            "Emagine":          "https://www.emagine-entertainment.com",
-            "CMX":              "https://www.cmxcinemas.com",
-            "Phoenix":          "https://www.phoenixtheatres.com",
-            "Showcase":         "https://www.showcasecinemas.com",
-            "Reading":          "https://www.readingcinemas.com",
-            "Cinepolis":        "https://www.cinepolis.com",
-            "Cinemex":          "https://www.cinemex.com",
-            "Supercines":       "https://www.supercines.com",
-            # UK / Ireland / Europe
-            "Cineworld":        "https://www.cineworld.co.uk",
-            "Odeon":            "https://www.odeon.co.uk",
-            "Vue":              "https://www.myvue.com",
-            "CineStar":         "https://www.cinestar.de",
-            "UCI":              "https://www.uci-kinowelt.de",
-            "Kinepolis":        "https://kinepolis.com",
-            "Pathé":            "https://www.pathe.fr",
-            "UGC":              "https://www.ugc.fr",
-            "MK2":              "https://mk2.com",
-            "CGR":              "https://www.cgr.fr",
-            "Megarama":         "https://www.megarama.fr",
-            "CineplexX":        "https://www.cineplexx.at",
-            "Hollywood Megaplex":"https://www.megaplex.at",
-            "Cinema City":      "https://www.cinema-city.pl",
-            "Multikino":        "https://www.multikino.pl",
-            "Filmstaden":       "https://www.filmstaden.se",
-            "Cinesa":           "https://www.cinesa.es",
-            "NOS":              "https://cinemas.nos.pt",
-            "blue":             "https://www.bluecinema.ch",
-            # Asia-Pacific
-            "Hoyts":            "https://www.hoyts.com.au",
-            "Event":            "https://www.eventcinemas.com.au",
-            "Village":          "https://www.villagecinemas.com.au",
-            "Dendy":            "https://www.dendy.com.au",
-            "PVR INOX":         "https://www.pvrinox.com",
-            "CGV":              "https://www.cgv.com.cn",
-            "Wanda":            "https://www.wandacinemas.com/en/",
-            "Jinyi":            "https://www.jycinema.com",
-            "Omnijoi":          "https://www.omnijoi.com",
-            "Bona":             "https://www.bonafilm.cn",
-            "Golden Village":   "https://www.gv.com.sg",
-            "GSC":              "https://www.gsc.com.my",
-            "TGV":              "https://www.tgvcinemas.com",
-            "Cathay":           "https://www.cathaycineplexes.com",
-            "Shaw":             "https://www.shaw.sg",
-            "XXI":              "https://www.cinema21.co.id",
-            "Major":            "https://www.majorcineplex.com",
-            "Toho":             "https://www.tohotheater.jp",
-            "United":           "https://www.unitedcinemas.jp",
-            "AEON":             "https://www.aeoncinema.com",
-            "SFC":              "https://www.sh-sfc.com",
-            "Emperor":          "https://www.emperorcinemas.com",
-            "Paribu":           "https://www.paribucineverse.com",
-            # Middle East / Africa
-            "VOX":              "https://www.voxcinemas.com",
-            "Ster-Kinekor":     "https://www.sterkinekor.com",
-            "Nu Metro":         "https://www.numetro.co.za",
-            # Russia / CIS
-            "Kinomax":          "https://www.kinomax.ru",
-            "Kinopark":         "https://www.kinopark.kz",
-            "Formula Kino":     "https://www.formula-kino.ru",
-            "Kronverk":         "https://www.kronverk.ru",
-            "Planeta Kino":     "https://planetakino.ua",
-        }
-
-        merged_count = 0
-        website_count = 0
-
-        # ── Step 1: merge old → simplified ────────────────────────────
-        _ck.echo("── Merging legacy chain names ──")
-        for old_name, new_name in _RENAMES.items():
-            old = Chain.query.filter(
-                db.func.lower(Chain.name) == old_name.lower()
-            ).first()
-            if not old:
-                continue
-
-            new = Chain.query.filter(
-                db.func.lower(Chain.name) == new_name.lower()
-            ).first()
-
-            theater_count = Theater.query.filter_by(chain_id=old.id).count()
-
-            if new and new.id != old.id:
-                # Both old and simplified exist — re-point theaters and delete old
-                _ck.echo(f"  Merge  {old.name!r} -> {new.name!r}"
-                         f"  ({theater_count} theaters re-pointed)")
-                if not dry_run:
-                    Theater.query.filter_by(chain_id=old.id).update(
-                        {"chain_id": new.id, "chain": new.name},
-                        synchronize_session=False,
-                    )
-                    db.session.delete(old)
-            else:
-                # Only old name exists — rename in place
-                _ck.echo(f"  Rename {old.name!r} -> {new_name!r}"
-                         f"  ({theater_count} theaters updated)")
-                if not dry_run:
-                    Theater.query.filter_by(chain_id=old.id).update(
-                        {"chain": new_name}, synchronize_session=False
-                    )
-                    old.name = new_name
-
-            merged_count += 1
-
-        if not dry_run:
-            db.session.commit()
-            _ck.echo(f"  Committed {merged_count} merge/rename operations.\n")
-        else:
-            _ck.echo(f"  (dry run — {merged_count} would change)\n")
-
-        # ── Step 2: populate chain websites ───────────────────────────
-        _ck.echo("── Populating chain websites ──")
-        for chain_name, homepage in _WEBSITES.items():
-            chain = Chain.query.filter(
-                db.func.lower(Chain.name) == chain_name.lower()
-            ).first()
-            if not chain:
-                continue
-            if chain.website:
-                continue  # already set — don't overwrite
-            _ck.echo(f"  {chain.name:<30}  {homepage}")
-            if not dry_run:
-                chain.website = homepage
-            website_count += 1
-
-        if not dry_run:
-            db.session.commit()
-            _ck.echo(f"  Committed {website_count} website updates.\n")
-        else:
-            _ck.echo(f"  (dry run — {website_count} would be set)\n")
-
-        _ck.echo(f"Done.  Merged/renamed: {merged_count}  Websites set: {website_count}"
-                 + ("  [DRY RUN]" if dry_run else ""))
+    from app.cli import register_cli
+    register_cli(app)
 
     return app
 
@@ -972,57 +729,28 @@ def _migrate_legacy_alert_movies():
 
 def _upsert_theaters_from_csv(app):
     """
-    Upsert theaters from seeds/imax_theaters.csv.
+    Upsert theaters from seeds/imax_theaters.csv (startup seed).
 
-    Match priority per row:
-      1. venue_key  — if the CSV row has a non-empty Venue Key and a Theater with
-                      that key exists, update that row.
-      2. name       — case-insensitive fallback for rows without a key (legacy).
-      3. no match   — insert a new Theater row.
-
-    Fields updated when non-empty in the CSV: venue_key, chain/chain_id,
-    website, audio_system/audio_system_id, address, zip_code (only when DB
-    row has none), phone, and all screen/projector/dimension fields.
-
-    Fields never overwritten: is_active, latitude, longitude,
-    phone (preserved if CSV is blank), image_url.
+    Thin wrapper around app.theater_csv._upsert_theater_row with
+    preserve_existing=True: website/zip_code are only filled in when the
+    existing row has none, and is_active is never modified on an existing row.
 
     Returns a summary dict: {"inserted": N, "updated": N, "skipped": N, "errors": []}.
     """
     import csv
     import os
-    import re
 
-    from sqlalchemy import func
+    from app.theater_csv import _CSV_SEED_PATH, _upsert_theater_row
 
-    from app.lookup_helpers import (
-        get_or_create_aspect_ratio,
-        get_or_create_audio_system,
-        get_or_create_chain,
-        get_or_create_city,
-        get_or_create_continent,
-        get_or_create_country,
-        get_or_create_projector_type,
-        get_or_create_region,
-        parse_screen_dims,
-    )
-    from app.models import Theater
-
-    csv_path = os.path.join(os.path.dirname(__file__), "..", "seeds", "imax_theaters.csv")
-    csv_path = os.path.abspath(csv_path)
+    csv_path = str(_CSV_SEED_PATH)
     if not os.path.exists(csv_path):
         logger.warning("CSV upsert skipped: file not found at %s.", csv_path)
         return {"inserted": 0, "updated": 0, "skipped": 0, "errors": []}
 
-    def _normalise_ar(raw: str) -> str:
-        """Fix '2.30:01' → '2.30:1'."""
-        if not raw:
-            return raw
-        return re.sub(r":0+(\d)$", r":\1", raw.strip())
-
     logger.info("CSV theater upsert started: %s", csv_path)
     inserted = updated = skipped = 0
-    errors = []
+    errors: list = []
+    warnings: list = []
     processed = 0
 
     with app.app_context():
@@ -1030,121 +758,16 @@ def _upsert_theaters_from_csv(app):
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    location_name = (row.get("Location Name") or "").strip()
-                    if not location_name:
-                        skipped += 1
-                        continue
-
-                    # --- Parse all CSV fields ---
-                    continent_name  = (row.get("Region") or "").strip()
-                    country_name    = (row.get("Country") or "").strip()
-                    state_name      = (row.get("State/Province") or "").strip()
-                    city_name       = (row.get("City") or "").strip()
-                    screen_ar_raw   = _normalise_ar(row.get("Screen AR") or "")
-                    digital_proj    = (row.get("Digital Projector") or "").strip()
-                    digital_ar_raw  = _normalise_ar(
-                        row.get(" max AR (Digital)") or row.get("max AR (Digital)") or ""
+                    status = _upsert_theater_row(
+                        row, preserve_existing=True, source="csv",
+                        errors=errors, warnings=warnings,
                     )
-                    film_proj_raw   = (row.get("Film Projector") or "").strip()
-                    screen_dims_str = (row.get("Screen Dimensions") or "").strip()
-                    commercial      = (row.get("Commercial Films Shown") or "").strip() or None
-                    venue_key       = (row.get("Venue Key") or "").strip() or None
-                    chain_name      = (row.get("Chain") or "").strip() or None
-                    website_url     = (row.get("Website") or "").strip() or None
-                    audio_sys_name  = (row.get("Audio System") or "").strip() or None
-                    address         = (row.get("Address") or "").strip() or None
-                    postal_code     = (row.get("Postal Code") or "").strip() or None
-                    phone           = (row.get("Phone") or "").strip() or None
-
-                    # --- Resolve FK objects ---
-                    continent_obj  = get_or_create_continent(continent_name) if continent_name else None
-                    country_obj    = get_or_create_country(country_name) if country_name else None
-                    region_obj     = (
-                        get_or_create_region(state_name, country_obj)
-                        if state_name and country_obj else None
-                    )
-                    city_obj       = (
-                        get_or_create_city(city_name, country_obj, region_obj)
-                        if city_name and country_obj else None
-                    )
-                    ar_obj         = get_or_create_aspect_ratio(screen_ar_raw) if screen_ar_raw else None
-                    dig_proj_obj   = get_or_create_projector_type(digital_proj) if digital_proj else None
-                    dig_ar_obj     = get_or_create_aspect_ratio(digital_ar_raw) if digital_ar_raw else None
-                    film_pt_obj    = get_or_create_projector_type(film_proj_raw) if film_proj_raw else None
-                    chain_root     = None
-                    if website_url:
-                        _p = urllib.parse.urlparse(website_url)
-                        chain_root = f"{_p.scheme}://{_p.netloc}" if _p.netloc else None
-                    chain_obj      = get_or_create_chain(chain_name, website=chain_root or "") if chain_name else None
-                    audio_sys_obj  = get_or_create_audio_system(audio_sys_name) if audio_sys_name else None
-                    w_m, h_m       = parse_screen_dims(screen_dims_str) if screen_dims_str else (None, None)
-
-                    # --- Find existing theater ---
-                    t = None
-                    if venue_key:
-                        t = Theater.query.filter_by(venue_key=venue_key).first()
-                    if t is None:
-                        # Exact match first so Unicode names (e.g. Turkish İ) that
-                        # SQLite lower() can't fold still match correctly after the
-                        # first upsert stores them verbatim.
-                        t = Theater.query.filter_by(name=location_name).first()
-                    if t is None:
-                        t = Theater.query.filter(
-                            func.lower(Theater.name) == location_name.lower()
-                        ).first()
-
-                    if t is None:
-                        # Insert
-                        t = Theater(
-                            name=location_name,
-                            is_active=True,
-                            crawl_source="csv",
-                        )
-                        db.session.add(t)
+                    if status == "inserted":
                         inserted += 1
-                    else:
+                    elif status == "updated":
                         updated += 1
-
-                    # --- Apply CSV fields (always update non-empty values) ---
-                    t.name = location_name
-                    if venue_key:
-                        t.venue_key = venue_key
-                    t.country     = country_name or t.country
-                    t.state       = state_name or t.state
-                    t.city        = city_name or t.city
-                    t.screen_size = screen_ar_raw or t.screen_size
-                    t.projector_type = digital_proj or t.projector_type
-                    t.screen_dims = screen_dims_str or t.screen_dims
-                    if chain_name:
-                        t.chain    = chain_name
-                        t.chain_id = chain_obj.id if chain_obj else t.chain_id
-                    if website_url and not t.website:
-                        t.website = website_url
-                    if audio_sys_name:
-                        t.audio_system    = audio_sys_name
-                        t.audio_system_id = audio_sys_obj.id if audio_sys_obj else t.audio_system_id
-                    if address:
-                        t.address = address
-                    if postal_code and not t.zip_code:
-                        t.zip_code = postal_code
-                    if phone:
-                        t.phone = phone
-                    t.country_id            = country_obj.id if country_obj else t.country_id
-                    t.region_id             = region_obj.id if region_obj else t.region_id
-                    t.city_id               = city_obj.id if city_obj else t.city_id
-                    t.aspect_ratio_id       = ar_obj.id if ar_obj else t.aspect_ratio_id
-                    t.projector_type_id     = dig_proj_obj.id if dig_proj_obj else t.projector_type_id
-                    t.continent_id          = continent_obj.id if continent_obj else t.continent_id
-                    t.digital_projector_ar_id = dig_ar_obj.id if dig_ar_obj else t.digital_projector_ar_id
-                    t.film_projector_type_id  = film_pt_obj.id if film_pt_obj else t.film_projector_type_id
-                    t.film_projector_type   = film_proj_raw or t.film_projector_type
-                    if commercial is not None:
-                        t.commercial_films = commercial
-                    if w_m is not None:
-                        t.screen_width_m  = w_m
-                    if h_m is not None:
-                        t.screen_height_m = h_m
-                    t.crawl_source = "csv"
+                    else:
+                        skipped += 1
 
                     processed += 1
                     if processed % 50 == 0:
@@ -1168,47 +791,3 @@ def _upsert_theaters_from_csv(app):
     for e in errors:
         logger.warning("CSV upsert error: %s", e)
     return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors}
-
-
-def _maybe_seed_venues(app):
-    """
-    Run the venue crawler on first boot if the theaters table is empty.
-    Controlled by the VENUE_CRAWL_ON_EMPTY config flag (default: True).
-    DEPRECATED — superseded by _seed_theaters_from_csv(). Kept for reference.
-    """
-    from app.models import Theater
-
-    if Theater.query.count() > 0:
-        return
-
-    if not app.config.get("VENUE_CRAWL_ON_EMPTY", True):
-        logger.info(
-            "Theaters table is empty and VENUE_CRAWL_ON_EMPTY is disabled. "
-            "Seed the database manually or re-enable VENUE_CRAWL_ON_EMPTY."
-        )
-        return
-
-    logger.info(
-        "Theaters table is empty — running initial venue crawl to populate it. "
-        "This may take a few minutes due to geocoding rate limits."
-    )
-
-    try:
-        from app.venue_crawler import run_venue_crawl
-        summary = run_venue_crawl()
-        logger.info(
-            "Initial venue crawl complete: %d venues found, %d inserted, %d updated.",
-            summary["venues_found"],
-            summary["inserted"],
-            summary["updated"],
-        )
-        if summary["errors"]:
-            for err in summary["errors"]:
-                logger.warning("Initial venue crawl warning: %s", err)
-    except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "Initial venue crawl failed: %s. "
-            "The app will start with an empty theater list. "
-            "Trigger a crawl manually via POST /api/venues/crawl.",
-            exc,
-        )

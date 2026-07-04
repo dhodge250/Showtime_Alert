@@ -1,7 +1,7 @@
 """Flask routes for IMAX Alert application."""
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 
 from flask import (
     Blueprint,
@@ -21,6 +21,8 @@ from sqlalchemy.orm import joinedload
 
 from app import db
 from app.auth import require_role
+from app.lookup_api import register_lookup_routes
+from app.time_utils import utcnow
 from app.models import (
     AlertMovie,
     AlertPreference,
@@ -47,10 +49,6 @@ logger = logging.getLogger(__name__)
 main_bp = Blueprint("main", __name__)
 api_bp = Blueprint("api", __name__)
 
-# Track whether a crawl is currently running (in-process flag)
-_crawl_running = False
-_crawl_last_summary: dict = {}
-
 
 def _get_geocode_status() -> dict:
     """Thin wrapper so the view can call this without importing venue_crawler at module level."""
@@ -75,6 +73,14 @@ def _get_setting_str(key: str, default: str) -> str:
     """Read a string setting from the Settings table, falling back to default."""
     s = Settings.query.filter_by(key=key).first()
     return s.value if s and s.value else default
+
+
+def _form_int(key: str, old: int, lo: int, hi: int) -> int:
+    """Parse an integer form field, clamped to [lo, hi], falling back to old on error."""
+    try:
+        return max(lo, min(hi, int(request.form.get(key, old))))
+    except (ValueError, TypeError):
+        return old
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +124,7 @@ def index():
 
     # Upcoming showtimes scoped to the current user's alerted theaters.
     # Admins see everything; regular users see only theaters they're watching.
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     base_q = (
         Showtime.query
         .filter(Showtime.on_demand == False)    # noqa: E712 — exclude manually-fetched rows
@@ -186,14 +192,13 @@ def theaters():
 def theater_detail(theater_id):
     """Theater detail page."""
     import json
-    from app.scrapers import ALL_SCRAPERS
+    from app.scrapers import ALL_SCRAPERS, is_scraping_in_flight
     from app.scrapers.base import _haversine_km
-    from app.scheduler import is_on_demand_fetch_running
 
     theater = Theater.query.get_or_404(theater_id)
     showtimes = (
         Showtime.query.filter_by(theater_id=theater_id)
-        .filter(Showtime.show_datetime >= datetime.now(timezone.utc).replace(tzinfo=None))
+        .filter(Showtime.show_datetime >= utcnow())
         .order_by(Showtime.show_datetime)
         .all()
     )
@@ -225,13 +230,13 @@ def theater_detail(theater_id):
 
     has_scraper = any(s.chain_name == theater.chain for s in ALL_SCRAPERS)
     cooldown_hours = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
-    fetch_running = is_on_demand_fetch_running(theater_id)
+    fetch_running = is_scraping_in_flight(theater_id)
 
     cooldown_active = False
     cooldown_remaining_sec = 0
     if theater.on_demand_fetched_at and not fetch_running:
         from datetime import timedelta
-        elapsed = datetime.now(timezone.utc).replace(tzinfo=None) - theater.on_demand_fetched_at
+        elapsed = utcnow() - theater.on_demand_fetched_at
         remaining = timedelta(hours=cooldown_hours) - elapsed
         if remaining.total_seconds() > 0:
             cooldown_active = True
@@ -364,14 +369,12 @@ def alert_detail(pref_id):
     q = Showtime.query
     if pref.radius_km is not None:
         # Radius alert: limit to theaters within radius of user's saved location
-        from app.scrapers.base import _haversine_km
+        from app.scrapers.base import theater_ids_within_radius
         alert_user = User.query.get(pref.user_id)
         if alert_user and alert_user.location_lat is not None and alert_user.location_lon is not None:
-            nearby_ids = [
-                t.id for t in Theater.query.filter_by(is_active=True).all()
-                if t.latitude is not None and t.longitude is not None
-                and _haversine_km(alert_user.location_lat, alert_user.location_lon, t.latitude, t.longitude) <= pref.radius_km
-            ]
+            nearby_ids = theater_ids_within_radius(
+                alert_user.location_lat, alert_user.location_lon, pref.radius_km
+            )
             q = q.filter(Showtime.theater_id.in_(nearby_ids))
     elif pref.theater_id:
         q = q.filter_by(theater_id=pref.theater_id)
@@ -439,7 +442,6 @@ def settings_account():
 def settings_browse_schedule():
     """Browse Schedule — configure and manage the user's proximity scrape schedule."""
     from app.models import BrowseSchedule
-    from datetime import datetime
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     user = current_user._get_current_object()
@@ -507,7 +509,7 @@ def settings_browse_schedule():
             else:
                 enabled = request.form.get("enabled") == "on"
 
-            now = datetime.utcnow()
+            now = utcnow()
             if schedule is None:
                 schedule = BrowseSchedule(user_id=user.id)
                 db.session.add(schedule)
@@ -551,8 +553,7 @@ def api_browse_schedule_run_now():
         queue_theaters_for_scrape, is_scraping_in_flight,
         is_browse_run_in_progress, _browse_run_users, _browse_run_lock,
     )
-    from app.scrapers.base import _haversine_km
-    from app.models import Theater
+    from app.scrapers.base import theater_ids_within_radius, to_km
 
     user = current_user._get_current_object()
     schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
@@ -562,16 +563,8 @@ def api_browse_schedule_run_now():
     if user.location_lat is None or user.location_lon is None:
         return jsonify({"error": "No location saved in your profile"}), 400
 
-    radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
-    active_theaters = (
-        Theater.query.filter_by(is_active=True)
-        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
-        .all()
-    )
-    theater_ids = {
-        t.id for t in active_theaters
-        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km
-    }
+    radius_km = to_km(schedule.radius, schedule.radius_unit)
+    theater_ids = theater_ids_within_radius(user.location_lat, user.location_lon, radius_km)
 
     if not theater_ids:
         return jsonify({"status": "ok", "message": "No theaters found within your radius"}), 200
@@ -609,7 +602,6 @@ def api_browse_schedule_run_now():
         from app.scrapers.base import browse_schedule_scrape
         from app.log_utils import write_log
         from app.models import BrowseSchedule, LogEntry
-        from datetime import datetime
 
         try:
             with _app.app_context():
@@ -618,11 +610,11 @@ def api_browse_schedule_run_now():
                     f"Browse schedule Run Now: started — scraping {n_theaters} theater(s)",
                     user_id=user_id,
                 )
-                start = datetime.utcnow()
+                start = utcnow()
                 try:
                     with browse_schedule_scrape() as log_buf:
                         new_showtimes = queue_theaters_for_scrape(theater_ids, targets=None, force=True)
-                    elapsed = (datetime.utcnow() - start).total_seconds()
+                    elapsed = (utcnow() - start).total_seconds()
 
                     # Flush scraper WARNING/ERROR records captured during the scrape.
                     for level, msg in log_buf:
@@ -634,7 +626,7 @@ def api_browse_schedule_run_now():
                     # last_run is still unset.
                     sched = BrowseSchedule.query.filter_by(user_id=user_id).first()
                     if sched:
-                        now = datetime.utcnow()
+                        now = utcnow()
                         sched.last_run = now
                         sched.next_run = sched.compute_next_run(now, user_tz)
                     db.session.commit()
@@ -675,9 +667,9 @@ def api_browse_schedule_run_now():
 @login_required
 def api_browse_schedule_status():
     """Return how many radius theaters are currently in-flight and the schedule's last/next run."""
-    from app.models import BrowseSchedule, Theater
+    from app.models import BrowseSchedule
     from app.scrapers import is_scraping_in_flight, is_browse_run_in_progress
-    from app.scrapers.base import _haversine_km
+    from app.scrapers.base import theater_ids_within_radius, to_km
 
     user = current_user._get_current_object()
     schedule = BrowseSchedule.query.filter_by(user_id=user.id).first()
@@ -694,15 +686,10 @@ def api_browse_schedule_status():
             "next_run": None,
         })
 
-    radius_km = schedule.radius if schedule.radius_unit == "km" else schedule.radius * 1.60934
-    total = 0
-    in_flight = 0
-    for t in (Theater.query.filter_by(is_active=True)
-              .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))):
-        if _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= radius_km:
-            total += 1
-            if is_scraping_in_flight(t.id):
-                in_flight += 1
+    radius_km = to_km(schedule.radius, schedule.radius_unit)
+    theater_ids = theater_ids_within_radius(user.location_lat, user.location_lon, radius_km)
+    total = len(theater_ids)
+    in_flight = sum(1 for tid in theater_ids if is_scraping_in_flight(tid))
 
     return jsonify({
         "in_flight": in_flight,
@@ -797,7 +784,7 @@ def profile_mfa_disable():
 @login_required
 def movies():
     """Movies tab — all movies the user has ever had an alert for, plus on-demand scraped movies."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
 
     # Alert-linked movies (include fired/deleted so tiles persist beyond the alert lifecycle)
     alert_rows = (
@@ -888,7 +875,7 @@ def movie_detail(movie_id):
     from app import tmdb as tmdb_mod
 
     movie = Movie.query.get_or_404(movie_id)
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
 
     # Allow access if user has an alert for this movie, or if it has on-demand showtimes
     has_alert = (
@@ -987,8 +974,6 @@ def admin_theaters():
         regions=regions,
         cities=cities,
         continents=continents,
-        crawl_running=_crawl_running,
-        last_summary=_crawl_last_summary,
         geocode_status=_get_geocode_status(),
     )
 
@@ -1008,7 +993,7 @@ def admin_theater_new():
             phone=request.form.get("phone", "").strip(),
             is_active=request.form.get("is_active") == "on",
             crawl_source="manual",
-            last_crawled_at=datetime.now(timezone.utc),
+            last_crawled_at=utcnow(),
         )
         _apply_lookup_fields(theater, request.form)
         db.session.add(theater)
@@ -1082,7 +1067,7 @@ def admin_users():
     """Admin: list all users and pending invites."""
     users_list = User.query.order_by(User.name).all()
     roles = Role.query.order_by(Role.name).all()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
     pending_invites = UserInvite.query.options(
         joinedload(UserInvite.created_by)
     ).filter(
@@ -1236,7 +1221,7 @@ def admin_user_invite():
     existing = UserInvite.query.filter(
         db.func.lower(UserInvite.email) == email,
         UserInvite.accepted_at.is_(None),
-        UserInvite.expires_at > datetime.now(timezone.utc).replace(tzinfo=None),
+        UserInvite.expires_at > utcnow(),
     ).first()
     if existing:
         flash(f"A pending invite for '{email}' already exists.", "warning")
@@ -1320,45 +1305,21 @@ def admin_settings():
         # --- Schedule keys (integers, validated with sensible bounds) ---
         old_scraper       = _get_setting_int("scraper_interval_minutes", 30)
         old_alert         = _get_setting_int("alert_interval_minutes", 15)
-        old_crawl         = _get_setting_int("venue_crawl_interval_days", 7)
         old_cleanup       = _get_setting_int("cleanup_interval_hours", 24)
         old_rows_per_page = _get_setting_int("rows_per_page", 15)
 
-        try:
-            new_scraper = max(1, min(1440, int(request.form.get("scraper_interval_minutes", old_scraper))))
-        except (ValueError, TypeError):
-            new_scraper = old_scraper
-        try:
-            new_alert = max(1, min(1440, int(request.form.get("alert_interval_minutes", old_alert))))
-        except (ValueError, TypeError):
-            new_alert = old_alert
-        try:
-            new_crawl = max(1, min(365, int(request.form.get("venue_crawl_interval_days", old_crawl))))
-        except (ValueError, TypeError):
-            new_crawl = old_crawl
-        try:
-            new_cleanup = max(1, min(168, int(request.form.get("cleanup_interval_hours", old_cleanup))))
-        except (ValueError, TypeError):
-            new_cleanup = old_cleanup
-        try:
-            new_rows_per_page = max(5, min(100, int(request.form.get("rows_per_page", old_rows_per_page))))
-        except (ValueError, TypeError):
-            new_rows_per_page = old_rows_per_page
+        new_scraper = _form_int("scraper_interval_minutes", old_scraper, 1, 1440)
+        new_alert = _form_int("alert_interval_minutes", old_alert, 1, 1440)
+        new_cleanup = _form_int("cleanup_interval_hours", old_cleanup, 1, 168)
+        new_rows_per_page = _form_int("rows_per_page", old_rows_per_page, 5, 100)
         old_movies_per_page = _get_setting_int("movies_per_page", 50)
-        try:
-            new_movies_per_page = max(10, min(200, int(request.form.get("movies_per_page", old_movies_per_page))))
-        except (ValueError, TypeError):
-            new_movies_per_page = old_movies_per_page
+        new_movies_per_page = _form_int("movies_per_page", old_movies_per_page, 10, 200)
         old_log_retention = _get_setting_int("log_retention_days", 30)
-        try:
-            new_log_retention = max(1, min(365, int(request.form.get("log_retention_days", old_log_retention))))
-        except (ValueError, TypeError):
-            new_log_retention = old_log_retention
+        new_log_retention = _form_int("log_retention_days", old_log_retention, 1, 365)
         old_on_demand_cooldown = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
-        try:
-            new_on_demand_cooldown = max(1, min(168, int(request.form.get("on_demand_fetch_cooldown_hours", old_on_demand_cooldown))))
-        except (ValueError, TypeError):
-            new_on_demand_cooldown = old_on_demand_cooldown
+        new_on_demand_cooldown = _form_int(
+            "on_demand_fetch_cooldown_hours", old_on_demand_cooldown, 1, 168
+        )
         old_session_timeout = _get_setting_int("session_timeout_minutes", 60)
         try:
             raw_timeout = int(request.form.get("session_timeout_minutes", old_session_timeout))
@@ -1387,7 +1348,6 @@ def admin_settings():
         for key, val in (
             ("scraper_interval_minutes",       str(new_scraper)),
             ("alert_interval_minutes",         str(new_alert)),
-            ("venue_crawl_interval_days",      str(new_crawl)),
             ("cleanup_interval_hours",         str(new_cleanup)),
             ("rows_per_page",                  str(new_rows_per_page)),
             ("movies_per_page",                str(new_movies_per_page)),
@@ -1421,15 +1381,8 @@ def admin_settings():
         except (ValueError, TypeError):
             new_hc_time = "00:00"
 
-        try:
-            new_hc_dow = str(max(0, min(6, int(request.form.get("health_check_day_of_week", "0")))))
-        except (ValueError, TypeError):
-            new_hc_dow = "0"
-
-        try:
-            new_hc_dom = str(max(1, min(31, int(request.form.get("health_check_day_of_month", "1")))))
-        except (ValueError, TypeError):
-            new_hc_dom = "1"
+        new_hc_dow = str(_form_int("health_check_day_of_week", 0, 0, 6))
+        new_hc_dom = str(_form_int("health_check_day_of_month", 1, 1, 31))
 
         raw_hc_tz = request.form.get("health_check_timezone", "UTC").strip()
         try:
@@ -1465,10 +1418,10 @@ def admin_settings():
         current_app.config["SESSION_TIMEOUT_MINUTES"] = new_session_timeout
 
         # Reschedule live if the values changed
-        if new_scraper != old_scraper or new_alert != old_alert or new_crawl != old_crawl or new_cleanup != old_cleanup:
+        if new_scraper != old_scraper or new_alert != old_alert or new_cleanup != old_cleanup:
             try:
                 from app.scheduler import reschedule_jobs
-                reschedule_jobs(new_scraper, new_crawl, new_cleanup, new_alert)
+                reschedule_jobs(new_scraper, new_cleanup, new_alert)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not reschedule jobs: %s", exc)
 
@@ -1505,7 +1458,7 @@ def api_test_smtp():
     """
     from app.notifications import send_email
 
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     config = {
         "MAIL_SERVER":   data.get("mail_server", "smtp.gmail.com"),
         "MAIL_PORT":     int(data.get("mail_port") or 587),
@@ -1916,17 +1869,17 @@ def api_theater_fetch_showtimes(theater_id: int):
     """Trigger an on-demand showtime fetch for a single theater."""
     from datetime import timedelta
     from flask import current_app
-    from app.scrapers import ALL_SCRAPERS
-    from app.scheduler import trigger_theater_fetch, is_on_demand_fetch_running
+    from app.scrapers import ALL_SCRAPERS, is_scraping_in_flight
+    from app.scheduler import trigger_theater_fetch
 
     theater = Theater.query.get_or_404(theater_id)
 
-    if is_on_demand_fetch_running(theater_id):
+    if is_scraping_in_flight(theater_id):
         return jsonify({"status": "in_progress"})
 
     cooldown_hours = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
     if theater.on_demand_fetched_at:
-        elapsed = datetime.now(timezone.utc).replace(tzinfo=None) - theater.on_demand_fetched_at
+        elapsed = utcnow() - theater.on_demand_fetched_at
         if elapsed < timedelta(hours=cooldown_hours):
             remaining = timedelta(hours=cooldown_hours) - elapsed
             return jsonify({
@@ -1948,17 +1901,17 @@ def api_theater_fetch_showtimes(theater_id: int):
 def api_theater_fetch_status(theater_id: int):
     """Return on-demand fetch state for a single theater."""
     from app.models import Showtime
-    from app.scheduler import is_on_demand_fetch_running
+    from app.scrapers import is_scraping_in_flight
 
     theater = Theater.query.get_or_404(theater_id)
     on_demand_count = (
         Showtime.query
         .filter_by(theater_id=theater_id, on_demand=True)
-        .filter(Showtime.show_datetime >= datetime.now(timezone.utc).replace(tzinfo=None))
+        .filter(Showtime.show_datetime >= utcnow())
         .count()
     )
     return jsonify({
-        "running": is_on_demand_fetch_running(theater_id),
+        "running": is_scraping_in_flight(theater_id),
         "fetched_at": theater.on_demand_fetched_at.isoformat() if theater.on_demand_fetched_at else None,
         "on_demand_count": on_demand_count,
     })
@@ -1969,7 +1922,7 @@ def api_theater_fetch_status(theater_id: int):
 def api_patch_theater(theater_id):
     """Inline-edit a single FK field on a theater row."""
     theater = Theater.query.get_or_404(theater_id)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
 
     _ALLOWED = {
         # key: (Model, display_key, label_fn, legacy_col)
@@ -2085,7 +2038,7 @@ def api_showtimes():
     """Return upcoming showtimes, optionally filtered by theater and/or movie."""
     theater_id = request.args.get("theater_id", type=int)
     movie_id = request.args.get("movie_id", type=int)
-    query = Showtime.query.filter(Showtime.show_datetime >= datetime.now(timezone.utc))
+    query = Showtime.query.filter(Showtime.show_datetime >= utcnow())
     if theater_id:
         query = query.filter_by(theater_id=theater_id)
     if movie_id:
@@ -2157,7 +2110,7 @@ def api_clear_showtimes():
     db.session.commit()
     logger.info("Admin cleared %d showtime(s) via API (filters: %s)", count, request.args)
 
-    from app.scraper import cleanup_orphaned_movies
+    from app.scrapers import cleanup_orphaned_movies
     orphaned = cleanup_orphaned_movies()
     return jsonify({"deleted": count, "orphaned_movies_removed": orphaned})
 
@@ -2178,7 +2131,7 @@ def api_users():
 @require_role("admin")
 def api_create_user():
     """Create a new user (admin only)."""
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     if not data or not data.get("name"):
         return jsonify({"error": "name is required"}), 400
 
@@ -2215,7 +2168,7 @@ def api_update_user(user_id):
     if current_user.role_name != "admin" and current_user.id != user_id:
         abort(403)
     user = User.query.get_or_404(user_id)
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     allowed = ("name", "email", "phone", "location_lat", "location_lon",
                "location_name", "location_address", "notify_email", "notify_sms",
                "measurement_unit")
@@ -2246,7 +2199,7 @@ def api_alerts():
 @api_bp.route("/alerts", methods=["POST"])
 @login_required
 def api_create_alert():
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     if not data or not data.get("user_id"):
         return jsonify({"error": "user_id is required"}), 400
 
@@ -2582,7 +2535,7 @@ def api_reset_alert(pref_id):
     pref.is_active = True
     pref.notifications_fired = 0
     if pref.radius_km is not None:
-        pref.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        pref.created_at = utcnow()
     db.session.commit()
     from app.log_utils import write_log
     write_log("alert", f"Alert reset (id={pref_id})", user_id=current_user.id,
@@ -2605,477 +2558,16 @@ def api_reset_alert_movie(pref_id, movie_id):
     pref.alert_sent_at = None
     pref.is_active = True
     if pref.radius_km is not None:
-        pref.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        pref.created_at = utcnow()
     db.session.commit()
     return jsonify(am.to_dict())
 
 
 # ---------------------------------------------------------------------------
-# API: Lookup tables (Phases 1–4)
+# API: Lookup tables (Phases 1-4) — generic CRUD factory
 # ---------------------------------------------------------------------------
 
-@api_bp.route("/lookup/chains", methods=["GET"])
-@login_required
-def api_lookup_chains():
-    """Return all theater chains ordered by name."""
-    return jsonify([c.to_dict() for c in Chain.query.order_by(Chain.name).all()])
-
-
-@api_bp.route("/lookup/chains", methods=["POST"])
-@require_role("admin", "editor")
-def api_create_chain():
-    data = request.get_json(force=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
-    if Chain.query.filter(db.func.lower(Chain.name) == name.lower()).first():
-        return jsonify({"error": "already exists"}), 409
-    obj = Chain(name=name, website=data.get("website", ""))
-    db.session.add(obj)
-    db.session.commit()
-    return jsonify(obj.to_dict()), 201
-
-
-@api_bp.route("/lookup/chains/<int:obj_id>", methods=["DELETE"])
-@require_role("admin")
-def api_delete_chain(obj_id):
-    obj = Chain.query.get_or_404(obj_id)
-    if Theater.query.filter_by(chain_id=obj_id).first():
-        return jsonify({"error": "In use by one or more theaters"}), 409
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({"deleted": True})
-
-
-@api_bp.route("/lookup/countries", methods=["GET"])
-@login_required
-def api_lookup_countries():
-    """Return all countries ordered by name."""
-    return jsonify([c.to_dict() for c in Country.query.order_by(Country.name).all()])
-
-
-@api_bp.route("/lookup/countries", methods=["POST"])
-@require_role("admin", "editor")
-def api_create_country():
-    data = request.get_json(force=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
-    if Country.query.filter(db.func.lower(Country.name) == name.lower()).first():
-        return jsonify({"error": "already exists"}), 409
-    obj = Country(name=name)
-    db.session.add(obj)
-    db.session.commit()
-    return jsonify(obj.to_dict()), 201
-
-
-@api_bp.route("/lookup/countries/<int:obj_id>", methods=["DELETE"])
-@require_role("admin")
-def api_delete_country(obj_id):
-    obj = Country.query.get_or_404(obj_id)
-    if Theater.query.filter_by(country_id=obj_id).first():
-        return jsonify({"error": "In use by one or more theaters"}), 409
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({"deleted": True})
-
-
-@api_bp.route("/lookup/regions", methods=["GET"])
-@login_required
-def api_lookup_regions():
-    """Return regions, optionally filtered by country_id."""
-    country_id = request.args.get("country_id", type=int)
-    q = Region.query.order_by(Region.name)
-    if country_id:
-        q = q.filter_by(country_id=country_id)
-    return jsonify([r.to_dict() for r in q.all()])
-
-
-@api_bp.route("/lookup/regions", methods=["POST"])
-@require_role("admin", "editor")
-def api_create_region():
-    data = request.get_json(force=True) or {}
-    name = (data.get("name") or "").strip()
-    country_id = data.get("country_id")
-    if not name or not country_id:
-        return jsonify({"error": "name and country_id are required"}), 400
-    country = Country.query.get_or_404(country_id)
-    from app.lookup_helpers import get_or_create_region
-    obj = get_or_create_region(name, country)
-    db.session.commit()
-    return jsonify(obj.to_dict()), 201
-
-
-@api_bp.route("/lookup/regions/<int:obj_id>", methods=["DELETE"])
-@require_role("admin")
-def api_delete_region(obj_id):
-    obj = Region.query.get_or_404(obj_id)
-    if Theater.query.filter_by(region_id=obj_id).first():
-        return jsonify({"error": "In use by one or more theaters"}), 409
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({"deleted": True})
-
-
-@api_bp.route("/lookup/cities", methods=["GET"])
-@login_required
-def api_lookup_cities():
-    """Return cities, optionally filtered by country_id and/or region_id."""
-    country_id = request.args.get("country_id", type=int)
-    region_id = request.args.get("region_id", type=int)
-    q = City.query.order_by(City.name)
-    if country_id:
-        q = q.filter_by(country_id=country_id)
-    if region_id:
-        q = q.filter_by(region_id=region_id)
-    return jsonify([c.to_dict() for c in q.all()])
-
-
-@api_bp.route("/lookup/cities", methods=["POST"])
-@require_role("admin", "editor")
-def api_create_city():
-    data = request.get_json(force=True) or {}
-    name = (data.get("name") or "").strip()
-    country_id = data.get("country_id")
-    if not name or not country_id:
-        return jsonify({"error": "name and country_id are required"}), 400
-    country = Country.query.get_or_404(country_id)
-    region = Region.query.get(data["region_id"]) if data.get("region_id") else None
-    from app.lookup_helpers import get_or_create_city
-    obj = get_or_create_city(name, country, region)
-    db.session.commit()
-    return jsonify(obj.to_dict()), 201
-
-
-@api_bp.route("/lookup/cities/<int:obj_id>", methods=["DELETE"])
-@require_role("admin")
-def api_delete_city(obj_id):
-    obj = City.query.get_or_404(obj_id)
-    if Theater.query.filter_by(city_id=obj_id).first():
-        return jsonify({"error": "In use by one or more theaters"}), 409
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({"deleted": True})
-
-
-@api_bp.route("/lookup/aspect-ratios", methods=["GET"])
-@login_required
-def api_lookup_aspect_ratios():
-    """Return all aspect ratios ordered by label."""
-    return jsonify(
-        [a.to_dict() for a in AspectRatio.query.order_by(AspectRatio.label).all()]
-    )
-
-
-@api_bp.route("/lookup/aspect-ratios", methods=["POST"])
-@require_role("admin", "editor")
-def api_create_aspect_ratio():
-    data = request.get_json(force=True) or {}
-    label = (data.get("label") or "").strip()
-    if not label:
-        return jsonify({"error": "label is required"}), 400
-    if AspectRatio.query.filter(db.func.lower(AspectRatio.label) == label.lower()).first():
-        return jsonify({"error": "already exists"}), 409
-    obj = AspectRatio(label=label, description=data.get("description", ""))
-    db.session.add(obj)
-    db.session.commit()
-    return jsonify(obj.to_dict()), 201
-
-
-@api_bp.route("/lookup/aspect-ratios/<int:obj_id>", methods=["DELETE"])
-@require_role("admin")
-def api_delete_aspect_ratio(obj_id):
-    obj = AspectRatio.query.get_or_404(obj_id)
-    if Theater.query.filter_by(aspect_ratio_id=obj_id).first():
-        return jsonify({"error": "In use by one or more theaters"}), 409
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({"deleted": True})
-
-
-@api_bp.route("/lookup/projector-types", methods=["GET"])
-@login_required
-def api_lookup_projector_types():
-    """Return all projector types ordered by name."""
-    return jsonify(
-        [p.to_dict() for p in ProjectorType.query.order_by(ProjectorType.name).all()]
-    )
-
-
-@api_bp.route("/lookup/projector-types", methods=["POST"])
-@require_role("admin", "editor")
-def api_create_projector_type():
-    data = request.get_json(force=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
-    if ProjectorType.query.filter(db.func.lower(ProjectorType.name) == name.lower()).first():
-        return jsonify({"error": "already exists"}), 409
-    obj = ProjectorType(name=name)
-    db.session.add(obj)
-    db.session.commit()
-    return jsonify(obj.to_dict()), 201
-
-
-@api_bp.route("/lookup/projector-types/<int:obj_id>", methods=["DELETE"])
-@require_role("admin")
-def api_delete_projector_type(obj_id):
-    obj = ProjectorType.query.get_or_404(obj_id)
-    if Theater.query.filter_by(projector_type_id=obj_id).first():
-        return jsonify({"error": "In use by one or more theaters"}), 409
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({"deleted": True})
-
-
-@api_bp.route("/lookup/audio-systems", methods=["GET"])
-@login_required
-def api_lookup_audio_systems():
-    """Return all audio systems ordered by name."""
-    return jsonify(
-        [a.to_dict() for a in AudioSystem.query.order_by(AudioSystem.name).all()]
-    )
-
-
-@api_bp.route("/lookup/audio-systems", methods=["POST"])
-@require_role("admin", "editor")
-def api_create_audio_system():
-    data = request.get_json(force=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
-    if AudioSystem.query.filter(db.func.lower(AudioSystem.name) == name.lower()).first():
-        return jsonify({"error": "already exists"}), 409
-    obj = AudioSystem(name=name)
-    db.session.add(obj)
-    db.session.commit()
-    return jsonify(obj.to_dict()), 201
-
-
-@api_bp.route("/lookup/audio-systems/<int:obj_id>", methods=["DELETE"])
-@require_role("admin")
-def api_delete_audio_system(obj_id):
-    obj = AudioSystem.query.get_or_404(obj_id)
-    if Theater.query.filter_by(audio_system_id=obj_id).first():
-        return jsonify({"error": "In use by one or more theaters"}), 409
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({"deleted": True})
-
-
-# ---------------------------------------------------------------------------
-# API: Lookup PATCH (rename/edit)
-# ---------------------------------------------------------------------------
-
-@api_bp.route("/lookup/aspect-ratios/<int:obj_id>", methods=["PATCH"])
-@require_role("admin", "editor")
-def api_patch_aspect_ratio(obj_id):
-    obj  = AspectRatio.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
-    if "label" in data:
-        label = (data["label"] or "").strip()
-        if not label:
-            return jsonify({"error": "label cannot be blank"}), 400
-        dup = AspectRatio.query.filter(
-            db.func.lower(AspectRatio.label) == label.lower(),
-            AspectRatio.id != obj_id,
-        ).first()
-        if dup:
-            return jsonify({"error": "already exists"}), 409
-        obj.label = label
-    if "description" in data:
-        obj.description = (data["description"] or "").strip()
-    db.session.commit()
-    return jsonify(obj.to_dict())
-
-
-@api_bp.route("/lookup/projector-types/<int:obj_id>", methods=["PATCH"])
-@require_role("admin", "editor")
-def api_patch_projector_type(obj_id):
-    obj  = ProjectorType.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
-    if "name" in data:
-        name = (data["name"] or "").strip()
-        if not name:
-            return jsonify({"error": "name cannot be blank"}), 400
-        dup = ProjectorType.query.filter(
-            db.func.lower(ProjectorType.name) == name.lower(),
-            ProjectorType.id != obj_id,
-        ).first()
-        if dup:
-            return jsonify({"error": "already exists"}), 409
-        obj.name = name
-    db.session.commit()
-    return jsonify(obj.to_dict())
-
-
-@api_bp.route("/lookup/audio-systems/<int:obj_id>", methods=["PATCH"])
-@require_role("admin", "editor")
-def api_patch_audio_system(obj_id):
-    obj  = AudioSystem.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
-    if "name" in data:
-        name = (data["name"] or "").strip()
-        if not name:
-            return jsonify({"error": "name cannot be blank"}), 400
-        dup = AudioSystem.query.filter(
-            db.func.lower(AudioSystem.name) == name.lower(),
-            AudioSystem.id != obj_id,
-        ).first()
-        if dup:
-            return jsonify({"error": "already exists"}), 409
-        obj.name = name
-    db.session.commit()
-    return jsonify(obj.to_dict())
-
-
-@api_bp.route("/lookup/chains/<int:obj_id>", methods=["PATCH"])
-@require_role("admin", "editor")
-def api_patch_chain(obj_id):
-    obj  = Chain.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
-    if "name" in data:
-        name = (data["name"] or "").strip()
-        if not name:
-            return jsonify({"error": "name cannot be blank"}), 400
-        dup = Chain.query.filter(
-            db.func.lower(Chain.name) == name.lower(),
-            Chain.id != obj_id,
-        ).first()
-        if dup:
-            return jsonify({"error": "already exists"}), 409
-        obj.name = name
-        # Keep denormalized Theater.chain string in sync with the lookup name
-        Theater.query.filter_by(chain_id=obj_id).update({"chain": name})
-    if "website" in data:
-        obj.website = (data["website"] or "").strip()
-    db.session.commit()
-    return jsonify(obj.to_dict())
-
-
-@api_bp.route("/lookup/countries/<int:obj_id>", methods=["PATCH"])
-@require_role("admin", "editor")
-def api_patch_country(obj_id):
-    obj  = Country.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
-    if "name" in data:
-        name = (data["name"] or "").strip()
-        if not name:
-            return jsonify({"error": "name cannot be blank"}), 400
-        dup = Country.query.filter(
-            db.func.lower(Country.name) == name.lower(),
-            Country.id != obj_id,
-        ).first()
-        if dup:
-            return jsonify({"error": "already exists"}), 409
-        obj.name = name
-        Theater.query.filter_by(country_id=obj_id).update({"country": name})
-    db.session.commit()
-    return jsonify(obj.to_dict())
-
-
-@api_bp.route("/lookup/regions/<int:obj_id>", methods=["PATCH"])
-@require_role("admin", "editor")
-def api_patch_region(obj_id):
-    obj  = Region.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
-    if "name" in data:
-        name = (data["name"] or "").strip()
-        if not name:
-            return jsonify({"error": "name cannot be blank"}), 400
-        dup = Region.query.filter(
-            db.func.lower(Region.name) == name.lower(),
-            Region.country_id == obj.country_id,
-            Region.id != obj_id,
-        ).first()
-        if dup:
-            return jsonify({"error": "already exists in this country"}), 409
-        obj.name = name
-        Theater.query.filter_by(region_id=obj_id).update({"state": name})
-    db.session.commit()
-    return jsonify(obj.to_dict())
-
-
-@api_bp.route("/lookup/cities/<int:obj_id>", methods=["PATCH"])
-@require_role("admin", "editor")
-def api_patch_city(obj_id):
-    obj  = City.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
-    if "name" in data:
-        name = (data["name"] or "").strip()
-        if not name:
-            return jsonify({"error": "name cannot be blank"}), 400
-        dup = City.query.filter(
-            db.func.lower(City.name) == name.lower(),
-            City.country_id == obj.country_id,
-            City.region_id  == obj.region_id,
-            City.id != obj_id,
-        ).first()
-        if dup:
-            return jsonify({"error": "already exists in this region"}), 409
-        obj.name = name
-        Theater.query.filter_by(city_id=obj_id).update({"city": name})
-    db.session.commit()
-    return jsonify(obj.to_dict())
-
-
-# ---------------------------------------------------------------------------
-# API: Lookup — Continents
-# ---------------------------------------------------------------------------
-
-@api_bp.route("/lookup/continents", methods=["GET"])
-@login_required
-def api_get_continents():
-    """Return all continents ordered by name."""
-    rows = Continent.query.order_by(Continent.name).all()
-    return jsonify([r.to_dict() for r in rows])
-
-
-@api_bp.route("/lookup/continents", methods=["POST"])
-@require_role("admin", "editor")
-def api_post_continent():
-    """Create a new continent entry."""
-    data = request.get_json(force=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name required"}), 400
-    if Continent.query.filter(db.func.lower(Continent.name) == name.lower()).first():
-        return jsonify({"error": "already exists"}), 409
-    obj = Continent(name=name)
-    db.session.add(obj)
-    db.session.commit()
-    return jsonify(obj.to_dict()), 201
-
-
-@api_bp.route("/lookup/continents/<int:obj_id>", methods=["DELETE"])
-@require_role("admin")
-def api_delete_continent(obj_id):
-    obj = Continent.query.get_or_404(obj_id)
-    if obj.theaters.count() > 0:
-        return jsonify({"error": "Cannot delete: theaters reference this continent"}), 409
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({"deleted": obj_id})
-
-
-@api_bp.route("/lookup/continents/<int:obj_id>", methods=["PATCH"])
-@require_role("admin", "editor")
-def api_patch_continent(obj_id):
-    obj  = Continent.query.get_or_404(obj_id)
-    data = request.get_json(force=True) or {}
-    if "name" in data:
-        name = (data["name"] or "").strip()
-        if not name:
-            return jsonify({"error": "name cannot be blank"}), 400
-        dup = Continent.query.filter(
-            db.func.lower(Continent.name) == name.lower(),
-            Continent.id != obj_id,
-        ).first()
-        if dup:
-            return jsonify({"error": "already exists"}), 409
-        obj.name = name
-    db.session.commit()
-    return jsonify(obj.to_dict())
+register_lookup_routes(api_bp)
 
 
 # ---------------------------------------------------------------------------
@@ -3086,7 +2578,7 @@ def api_patch_continent(obj_id):
 @login_required
 def api_geocode():
     """Geocode an address via Nominatim. Returns {latitude, longitude, formatted_address}."""
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     from app.venue_crawler import geocode_venue
     result = geocode_venue(
         name=data.get("name", ""),
@@ -3192,8 +2684,8 @@ def api_geocode_reset():
 @require_role("admin")
 def api_reseed_preview():
     """Return how many theaters would be updated by a re-seed (dry run)."""
-    from app.venue_crawler import reseed_from_csv
-    columns = (request.get_json(force=True) or {}).get("columns", [])
+    from app.theater_csv import reseed_from_csv
+    columns = (request.get_json(silent=True) or {}).get("columns", [])
     result = reseed_from_csv(columns, dry_run=True)
     return jsonify(result)
 
@@ -3203,9 +2695,9 @@ def api_reseed_preview():
 def api_reseed_from_csv():
     """Restore selected Theater columns from seeds/imax_theaters.csv."""
     from app.log_utils import write_log
-    from app.venue_crawler import reseed_from_csv
+    from app.theater_csv import reseed_from_csv
 
-    columns = (request.get_json(force=True) or {}).get("columns", [])
+    columns = (request.get_json(silent=True) or {}).get("columns", [])
     if not columns:
         return jsonify({"status": "error", "message": "No columns specified"}), 400
 
@@ -3286,7 +2778,7 @@ def api_trigger_scrape():
     from flask import current_app
 
     from app.notifications import process_new_showtimes
-    from app.scraper import run_all_scrapers
+    from app.scrapers import run_all_scrapers
 
     from app.log_utils import write_log
     write_log("scrape", "Manual scrape triggered", user_id=current_user.id)
@@ -3307,43 +2799,6 @@ def api_trigger_scrape():
         return jsonify({"status": "error", "message": str(exc)}), 500
 
 
-# ---------------------------------------------------------------------------
-# API: Venue crawler
-# ---------------------------------------------------------------------------
-
-@api_bp.route("/venues/crawl/status")
-@login_required
-def api_venue_crawl_status():
-    from app.scheduler import get_scheduler_status
-
-    scheduler_status = get_scheduler_status()
-    venue_job = next(
-        (j for j in scheduler_status.get("jobs", []) if j["id"] == "imax_venue_crawl"),
-        None,
-    )
-
-    total   = Theater.query.count()
-    crawled = Theater.query.filter(Theater.crawl_source == "imax_fandom").count()
-    manual  = Theater.query.filter(Theater.crawl_source == "manual").count()
-    last_crawled = (
-        Theater.query.filter(Theater.last_crawled_at.isnot(None))
-        .order_by(Theater.last_crawled_at.desc())
-        .with_entities(Theater.last_crawled_at)
-        .first()
-    )
-
-    return jsonify({
-        "scheduler_running": scheduler_status.get("running", False),
-        "crawl_running": _crawl_running,
-        "next_crawl": venue_job["next_run"] if venue_job else None,
-        "total_theaters": total,
-        "crawl_source_imax_fandom": crawled,
-        "crawl_source_manual": manual,
-        "last_crawled_at": last_crawled[0].isoformat() if last_crawled and last_crawled[0] else None,
-        "last_summary": _crawl_last_summary,
-    })
-
-
 @api_bp.route("/admin/theaters/sync-csv", methods=["POST"])
 @require_role("admin")
 def api_sync_theaters_from_csv():
@@ -3355,38 +2810,6 @@ def api_sync_theaters_from_csv():
     return jsonify(summary)
 
 
-@api_bp.route("/venues/crawl/trigger", methods=["POST"])
-@require_role("admin")
-def api_trigger_venue_crawl():
-    """Trigger an immediate venue crawl asynchronously."""
-    global _crawl_running
-
-    if _crawl_running:
-        return jsonify({"status": "already_running"}), 409
-
-    from flask import current_app
-    app = current_app._get_current_object()
-
-    def _run():
-        global _crawl_running, _crawl_last_summary
-        _crawl_running = True
-        try:
-            from app.venue_crawler import run_venue_crawl
-            with app.app_context():
-                summary = run_venue_crawl()
-            _crawl_last_summary = {**summary, "finished_at": datetime.now(timezone.utc).isoformat()}
-            logger.info("Background venue crawl complete: %s", summary)
-        except Exception as exc:  # noqa: BLE001
-            _crawl_last_summary = {"error": str(exc), "finished_at": datetime.now(timezone.utc).isoformat()}
-            logger.error("Background venue crawl failed: %s", exc)
-        finally:
-            _crawl_running = False
-
-    thread = threading.Thread(target=_run, daemon=True, name="venue-crawl")
-    thread.start()
-    return jsonify({"status": "started"})
-
-
 # ---------------------------------------------------------------------------
 # API: Theater export / import
 # ---------------------------------------------------------------------------
@@ -3395,7 +2818,7 @@ def api_trigger_venue_crawl():
 @require_role("admin", "editor")
 def api_export_theaters():
     """Download all theaters as a CSV file."""
-    from app.venue_crawler import export_theaters_csv
+    from app.theater_csv import export_theaters_csv
 
     csv_data = export_theaters_csv()
     resp = make_response(csv_data)
@@ -3409,7 +2832,7 @@ def api_export_theaters():
 def api_import_theaters():
     """Import/upsert theaters from an uploaded CSV file."""
     from app.log_utils import write_log
-    from app.venue_crawler import import_theaters_from_csv_str
+    from app.theater_csv import import_theaters_from_csv_str
 
     f = request.files.get("file")
     if not f or not f.filename:
@@ -3438,14 +2861,14 @@ def api_import_theaters():
 def api_export_theaters_email():
     """Generate theater CSV and email it to the requesting user."""
     from app.notifications import send_email_with_attachment
-    from app.venue_crawler import export_theaters_csv
+    from app.theater_csv import export_theaters_csv
 
     to_addr = current_user.email
     if not to_addr:
         return jsonify({"status": "error", "message": "Your account has no email address configured"}), 400
 
     csv_data = export_theaters_csv()
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = utcnow().strftime("%Y%m%d_%H%M%S")
     filename = f"imax_theaters_{ts}.csv"
 
     ok, err = send_email_with_attachment(
@@ -3467,7 +2890,7 @@ def api_export_theaters_email():
 def api_export_theaters_save():
     """Save theater CSV to the server's persistent data directory."""
     import os
-    from app.venue_crawler import export_theaters_csv
+    from app.theater_csv import export_theaters_csv
 
     db_url = current_app.config.get("SQLALCHEMY_DATABASE_URI", "")
     if db_url.startswith("sqlite:///"):
@@ -3482,7 +2905,7 @@ def api_export_theaters_save():
     except OSError as exc:
         return jsonify({"status": "error", "message": f"Cannot create exports directory: {exc}"}), 500
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = utcnow().strftime("%Y%m%d_%H%M%S")
     filename = f"imax_theaters_{ts}.csv"
     filepath = os.path.join(exports_dir, filename)
 

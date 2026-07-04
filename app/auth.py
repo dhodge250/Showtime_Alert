@@ -2,7 +2,8 @@
 import functools
 import logging
 import re
-from datetime import datetime, timezone
+
+from app.time_utils import utcnow
 
 from flask import (
     Blueprint,
@@ -125,7 +126,7 @@ def login():
             session.pop("mfa_pending_user_id", None)
             session.pop("mfa_remember", None)
             session.pop("mfa_next", None)
-            user.last_login_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            user.last_login_at = utcnow()
             db.session.commit()
             login_user(user, remember=remember)
             logger.info("User %s logged in.", user.email)
@@ -205,8 +206,8 @@ def forgot_password():
         ).first()
 
         if user and user.is_active:
-            from datetime import datetime, timedelta, timezone
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            from datetime import timedelta
+            now = utcnow()
             # Skip regenerating if a token was issued in the last 2 minutes; prevents
             # multi-IP flooding from continuously invalidating the user's reset link.
             recently_issued = (
@@ -273,8 +274,7 @@ def reset_password(token: str):
 def _find_user_by_token(raw_token: str):
     """Return the User whose stored reset token matches *raw_token*, or None."""
     from app.models import User
-    from datetime import datetime, timezone
-    now_naive_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_naive_utc = utcnow()
     candidates = User.query.filter(
         User.reset_token.isnot(None),
         User.reset_token_expiry > now_naive_utc,
@@ -348,7 +348,7 @@ def mfa_verify():
             verified = user.verify_totp(code)
 
         if verified:
-            user.last_login_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            user.last_login_at = utcnow()
             db.session.commit()
             remember = session.pop("mfa_remember", False)
             next_page = session.pop("mfa_next", None)
@@ -377,7 +377,6 @@ def mfa_verify():
 def accept_invite(token: str):
     """New user signup via invite link."""
     from app.models import User, UserInvite, Role
-    from datetime import datetime, timezone
 
     if current_user.is_authenticated:
         return render_template("accept_invite.html", already_logged_in=True, token=token)
@@ -414,7 +413,7 @@ def accept_invite(token: str):
                 measurement_unit="metric",
             )
             user.set_password(password)
-            invite.accepted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            invite.accepted_at = utcnow()
             db.session.add(user)
             try:
                 db.session.commit()
@@ -434,8 +433,7 @@ def accept_invite(token: str):
 def _find_invite_by_token(raw_token: str):
     """Return a valid UserInvite matching *raw_token*, or None."""
     from app.models import UserInvite
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utcnow()
     candidates = UserInvite.query.filter(
         UserInvite.accepted_at.is_(None),
         UserInvite.expires_at > now,

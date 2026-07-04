@@ -7,6 +7,7 @@ from flask_login import UserMixin
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app import db
+from app.time_utils import utcnow
 
 
 # ---------------------------------------------------------------------------
@@ -21,7 +22,7 @@ class Role(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(50), unique=True, nullable=False)  # 'admin','editor','user'
     description = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     users = db.relationship("User", back_populates="role", lazy="dynamic")
 
@@ -42,7 +43,7 @@ class Chain(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
     website = db.Column(db.String(500))
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     theaters = db.relationship("Theater", back_populates="chain_ref", lazy="dynamic")
 
@@ -62,7 +63,7 @@ class Country(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     regions = db.relationship("Region", back_populates="country", lazy="dynamic")
     cities = db.relationship("City", back_populates="country", lazy="dynamic")
@@ -85,7 +86,7 @@ class Region(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     country_id = db.Column(db.Integer, db.ForeignKey("countries.id"), nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     __table_args__ = (
         db.UniqueConstraint("name", "country_id", name="uq_region_country"),
@@ -118,7 +119,7 @@ class City(db.Model):
     name = db.Column(db.String(100), nullable=False)
     region_id = db.Column(db.Integer, db.ForeignKey("regions.id"), nullable=True)
     country_id = db.Column(db.Integer, db.ForeignKey("countries.id"), nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     __table_args__ = (
         db.UniqueConstraint("name", "country_id", "region_id", name="uq_city_country_region"),
@@ -152,7 +153,7 @@ class AspectRatio(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     label = db.Column(db.String(50), unique=True, nullable=False)  # e.g. "1.43:1"
     description = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     theaters = db.relationship(
         "Theater",
@@ -181,7 +182,7 @@ class ProjectorType(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     theaters = db.relationship(
         "Theater",
@@ -206,7 +207,7 @@ class Continent(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     theaters = db.relationship("Theater", back_populates="continent_ref", lazy="dynamic")
 
@@ -226,7 +227,7 @@ class AudioSystem(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     theaters = db.relationship("Theater", back_populates="audio_system_ref", lazy="dynamic")
 
@@ -249,8 +250,8 @@ class Settings(db.Model):
     value = db.Column(db.Text, default="")
     updated_at = db.Column(
         db.DateTime,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=utcnow,
+        onupdate=utcnow,
     )
 
     def to_dict(self):
@@ -319,11 +320,11 @@ class Theater(db.Model):
     last_crawled_at = db.Column(db.DateTime)
     on_demand_fetched_at = db.Column(db.DateTime, nullable=True)
     last_scraped_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
     updated_at = db.Column(
         db.DateTime,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=utcnow,
+        onupdate=utcnow,
     )
 
     # --- Relationships ---
@@ -501,7 +502,7 @@ class Movie(db.Model):
     genre = db.Column(db.String(100))
     runtime_minutes = db.Column(db.Integer)
     rating = db.Column(db.String(10))
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     showtimes = db.relationship("Showtime", back_populates="movie", lazy="dynamic")
     alert_preferences = db.relationship(
@@ -541,8 +542,8 @@ class Showtime(db.Model):
     tickets_available = db.Column(db.Boolean, default=True)
     tickets_url = db.Column(db.String(500))
     format_type = db.Column(db.String(100))
-    first_seen = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    last_checked = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    first_seen = db.Column(db.DateTime, default=utcnow)
+    last_checked = db.Column(db.DateTime, default=utcnow)
     on_demand = db.Column(db.Boolean, default=False, nullable=False, server_default="0")
     browse_only = db.Column(db.Boolean, default=False, nullable=False, server_default="0")
 
@@ -599,7 +600,7 @@ class User(db.Model, UserMixin):
     mfa_enabled = db.Column(db.Boolean, default=False)
     mfa_recovery_codes = db.Column(db.Text, nullable=True)
     last_login_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     role = db.relationship("Role", back_populates="users")
     alert_preferences = db.relationship(
@@ -623,20 +624,18 @@ class User(db.Model, UserMixin):
 
     def generate_reset_token(self, expiry_hours: int = 1) -> str:
         """Create a secure password-reset token, store its hash, and return the raw token."""
-        import secrets
-        from datetime import timedelta
         raw = secrets.token_urlsafe(32)
         self.reset_token = generate_password_hash(raw)
         # Store as naive UTC: SQLAlchemy/SQLite strips timezone info on read-back,
         # so using naive UTC avoids mismatched comparisons.
-        self.reset_token_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=expiry_hours)
+        self.reset_token_expiry = utcnow() + timedelta(hours=expiry_hours)
         return raw
 
     def verify_reset_token(self, raw_token: str) -> bool:
         """Return True if *raw_token* matches the stored hash and has not expired."""
         if not self.reset_token or not self.reset_token_expiry:
             return False
-        if datetime.now(timezone.utc).replace(tzinfo=None) > self.reset_token_expiry:
+        if utcnow() > self.reset_token_expiry:
             return False
         return check_password_hash(self.reset_token, raw_token)
 
@@ -732,7 +731,7 @@ class UserInvite(db.Model):
     token_hash = db.Column(db.String(256), nullable=False)
     expires_at = db.Column(db.DateTime, nullable=False)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    created_at = db.Column(db.DateTime, default=utcnow)
     accepted_at = db.Column(db.DateTime, nullable=True)
 
     role = db.relationship("Role")
@@ -746,14 +745,14 @@ class UserInvite(db.Model):
             email=email,
             role_id=role_id,
             token_hash=generate_password_hash(raw),
-            expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=expiry_hours),
+            expires_at=utcnow() + timedelta(hours=expiry_hours),
             created_by_id=created_by_id,
         )
         return invite, raw
 
     def is_valid(self) -> bool:
         """Return True if invite has not expired and has not been accepted."""
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = utcnow()
         return self.accepted_at is None and now < self.expires_at
 
     def verify_token(self, raw_token: str) -> bool:
@@ -800,7 +799,7 @@ class AlertPreference(db.Model):
     # Radius-based targeting: notify when a matching movie appears within radius_km
     # of the alert owner's saved location. When set, theater_id is ignored.
     radius_km = db.Column(db.Float, nullable=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     user = db.relationship("User", back_populates="alert_preferences")
     theater = db.relationship("Theater", back_populates="alert_preferences")
@@ -895,7 +894,7 @@ class AlertMovie(db.Model):
     movie_id = db.Column(db.Integer, db.ForeignKey("movies.id"), nullable=False)
     alert_sent = db.Column(db.Boolean, default=False)
     alert_sent_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     __table_args__ = (
         db.UniqueConstraint("alert_id", "movie_id", name="uq_alert_movie"),
@@ -940,7 +939,7 @@ class Notification(db.Model):
     notified_showtime_ids = db.Column(db.Text, nullable=True)
     method = db.Column(db.String(20))
     message = db.Column(db.Text)
-    sent_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sent_at = db.Column(db.DateTime, default=utcnow)
     success = db.Column(db.Boolean, default=True)
     error_message = db.Column(db.Text)
 
@@ -962,7 +961,7 @@ class LogEntry(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     created_at = db.Column(
         db.DateTime,
-        default=lambda: datetime.now(timezone.utc),
+        default=utcnow,
         index=True,
     )
     level = db.Column(db.String(10), default="INFO")
@@ -1021,9 +1020,7 @@ class BrowseSchedule(db.Model):
     enabled = db.Column(db.Boolean, nullable=False, default=True)
     last_run = db.Column(db.DateTime, nullable=True)
     next_run = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(
-        db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
-    )
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     user = db.relationship("User", backref=db.backref("browse_schedule", uselist=False))
 

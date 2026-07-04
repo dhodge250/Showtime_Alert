@@ -1,26 +1,32 @@
 """
-Scheduler for periodic IMAX showtime scraping, venue list crawling,
-alert processing, and expired showtime cleanup.
+Scheduler for periodic IMAX showtime scraping, alert processing, and
+expired showtime cleanup.
 
-Uses APScheduler to run four jobs on independent schedules:
-  - Showtime scraper:  every N minutes (default 30)
-  - Alert processor:   every N minutes (default 15)
-  - Venue crawler:     every N days    (default 7)
-  - Showtime cleanup:  every N hours   (default 24)
+Uses APScheduler to run five jobs on independent schedules:
+  - Showtime scraper:    every N minutes (default 30)
+  - Alert processor:     every N minutes (default 15)
+  - Showtime cleanup:    every N hours   (default 24)
+  - Browse schedules:    every N minutes (default 30)
+  - Scraper health check: cron schedule configured in Settings
 """
 import logging
+import threading
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from app.time_utils import utcnow
+
 logger = logging.getLogger(__name__)
 
 _scheduler: BackgroundScheduler | None = None
 
 # Tracks whether the scheduled health-check job is currently running.
-# Mutated in-place so the reference stays stable for callers.
+# Mutated in-place so the reference stays stable for callers.  All reads and
+# writes must hold _health_state_lock — the dict is shared between the cron
+# job thread, manual-trigger threads, and status-endpoint request threads.
 _health_check_state: dict = {
     "running": False,
     "chain_name": None,
@@ -28,11 +34,13 @@ _health_check_state: dict = {
     "completed": 0,
     "total": 0,
 }
+_health_state_lock = threading.Lock()
 
 
 def get_health_check_state() -> dict:
     """Return a snapshot of the current health-check job state."""
-    return dict(_health_check_state)
+    with _health_state_lock:
+        return dict(_health_check_state)
 
 
 def trigger_health_check(app) -> bool:
@@ -40,10 +48,12 @@ def trigger_health_check(app) -> bool:
     Spawn _health_check_job in a daemon thread.
 
     Returns True if the job was started, False if it was already running.
+    _health_check_job itself claims the running flag atomically, so even if
+    two triggers race past this check, only one run proceeds.
     """
-    import threading
-    if _health_check_state["running"]:
-        return False
+    with _health_state_lock:
+        if _health_check_state["running"]:
+            return False
     thread = threading.Thread(
         target=_health_check_job,
         args=(app,),
@@ -54,12 +64,6 @@ def trigger_health_check(app) -> bool:
     return True
 
 
-def is_on_demand_fetch_running(theater_id: int) -> bool:
-    """Return True if any scrape is currently in progress for this theater."""
-    from app.scrapers import is_scraping_in_flight
-    return is_scraping_in_flight(theater_id)
-
-
 def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
     """
     Start a per-theater on-demand showtime fetch in a background daemon thread.
@@ -67,7 +71,6 @@ def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
     Returns True if the fetch was started, False if one is already in progress.
     The fetch acquires the coordinator semaphore and updates last_scraped_at.
     """
-    import threading
     from app.scrapers import _scraping_in_flight, _inflight_lock, _get_semaphore
 
     with _inflight_lock:
@@ -104,7 +107,6 @@ def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
 
 def _theater_fetch_job(theater_id: int, scraper) -> None:
     """Background job: scrape all showtimes for one theater as on-demand rows."""
-    from datetime import datetime, timezone
     from app import db
     from app.models import Showtime, Theater
     from app.scrapers.base import on_demand_scrape
@@ -113,14 +115,22 @@ def _theater_fetch_job(theater_id: int, scraper) -> None:
     if theater is None:
         return
 
-    # Remove stale on-demand showtimes; alert showtimes (on_demand=False) are untouched.
-    Showtime.query.filter_by(theater_id=theater_id, on_demand=True).delete()
-    db.session.commit()
+    scrape_start = utcnow()
 
     try:
         with on_demand_scrape():
             scraper.scrape_theater(theater, {None})
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        # Delete stale on-demand rows only now that the scrape succeeded —
+        # upsert_showtime() bumps last_checked on every row it touches, so any
+        # on-demand row still stamped before scrape_start is genuinely gone
+        # from the source and safe to drop. Leaves prior data intact if the
+        # scrape below raises instead.
+        Showtime.query.filter(
+            Showtime.theater_id == theater_id,
+            Showtime.on_demand == True,  # noqa: E712
+            Showtime.last_checked < scrape_start,
+        ).delete(synchronize_session=False)
+        now = utcnow()
         theater.on_demand_fetched_at = now
         theater.last_scraped_at = now
         db.session.commit()
@@ -137,7 +147,6 @@ def trigger_single_health_check(scraper, app) -> None:
     run concurrently with a scheduled or on-demand scrape of the same chain.
     Returns immediately — the result is written to the DB by the thread.
     """
-    import threading
     from app.scrapers import _get_semaphore
     from app.scrapers.health import run_health_check
 
@@ -165,7 +174,7 @@ def trigger_single_health_check(scraper, app) -> None:
 def _scrape_job(app):
     """Scheduled job: run all scrapers and dispatch notifications."""
     from app.notifications import process_new_showtimes
-    from app.scraper import run_all_scrapers
+    from app.scrapers import run_all_scrapers
 
     with app.app_context():
         from app.log_utils import write_log
@@ -184,41 +193,6 @@ def _scrape_job(app):
         except Exception as exc:  # noqa: BLE001
             logger.error("Scheduled scrape failed: %s", exc)
             write_log("scrape", f"Scheduled scrape failed: {exc}", level="ERROR")
-
-
-def _venue_crawl_job(app):
-    """Scheduled job: crawl IMAX venue list and refresh theater DB rows."""
-    from app.venue_crawler import run_venue_crawl
-
-    with app.app_context():
-        from app.log_utils import write_log
-        logger.info("Scheduled venue crawl starting...")
-        write_log("scrape", "Scheduled venue crawl starting")
-        try:
-            summary = run_venue_crawl()
-            logger.info(
-                "Venue crawl complete: %d venues found, %d inserted, %d updated, "
-                "%d geocoded, %d geocode failures, %d errors",
-                summary["venues_found"],
-                summary["inserted"],
-                summary["updated"],
-                summary["geocoded"],
-                summary["geocode_failed"],
-                len(summary["errors"]),
-            )
-            level = "WARNING" if summary["errors"] else "INFO"
-            write_log("scrape",
-                      f"Venue crawl complete: {summary['venues_found']} venues, "
-                      f"{summary['inserted']} inserted, {summary['updated']} updated, "
-                      f"{len(summary['errors'])} errors",
-                      level=level,
-                      details=summary)
-            if summary["errors"]:
-                for err in summary["errors"]:
-                    logger.warning("Venue crawl error: %s", err)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Scheduled venue crawl failed: %s", exc)
-            write_log("scrape", f"Scheduled venue crawl failed: {exc}", level="ERROR")
 
 
 def _alert_job(app):
@@ -243,9 +217,9 @@ def _alert_job(app):
 
 def _cleanup_job(app):
     """Scheduled job: delete expired showtimes, orphaned movies, and old log entries."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta
 
-    from app.scraper import cleanup_expired_showtimes, cleanup_orphaned_movies
+    from app.scrapers import cleanup_expired_showtimes, cleanup_orphaned_movies
 
     with app.app_context():
         count = cleanup_expired_showtimes()
@@ -257,7 +231,7 @@ def _cleanup_job(app):
             from app.models import LogEntry, Settings
             s = Settings.query.filter_by(key="log_retention_days").first()
             retention_days = int(s.value) if s and s.value else 30
-            cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            cutoff = utcnow() - timedelta(days=retention_days)
             deleted_logs = LogEntry.query.filter(LogEntry.created_at < cutoff).delete()
             db.session.commit()
         except Exception as exc:  # noqa: BLE001
@@ -293,11 +267,17 @@ def _browse_schedules_job(app):
 
 def _health_check_job(app):
     """Scheduled job: run a lightweight health check against every registered scraper chain."""
-    _health_check_state["running"] = True
-    _health_check_state["chain_name"] = None
-    _health_check_state["started_at"] = datetime.now(timezone.utc).isoformat()
-    _health_check_state["completed"] = 0
-    _health_check_state["total"] = 0
+    # Atomic claim: the cron firing and a manual trigger can race — only one
+    # may proceed, the other exits without touching shared state.
+    with _health_state_lock:
+        if _health_check_state["running"]:
+            logger.info("Health check already running — skipping this invocation.")
+            return
+        _health_check_state["running"] = True
+        _health_check_state["chain_name"] = None
+        _health_check_state["started_at"] = datetime.now(timezone.utc).isoformat()
+        _health_check_state["completed"] = 0
+        _health_check_state["total"] = 0
     try:
         with app.app_context():
             from app.log_utils import write_log
@@ -308,10 +288,12 @@ def _health_check_job(app):
             write_log("scrape", "Scraper health check starting")
             from app.scrapers import _get_semaphore
 
-            _health_check_state["total"] = len(ALL_SCRAPERS)
+            with _health_state_lock:
+                _health_check_state["total"] = len(ALL_SCRAPERS)
             results = []
             for scraper in ALL_SCRAPERS:
-                _health_check_state["chain_name"] = scraper.chain_name
+                with _health_state_lock:
+                    _health_check_state["chain_name"] = scraper.chain_name
                 sem = _get_semaphore(scraper.chain_name)
                 acquired = sem.acquire(blocking=True, timeout=120)
                 if not acquired:
@@ -319,7 +301,8 @@ def _health_check_job(app):
                         "Health check: semaphore timeout for %s — skipping",
                         scraper.chain_name,
                     )
-                    _health_check_state["completed"] += 1
+                    with _health_state_lock:
+                        _health_check_state["completed"] += 1
                     results.append({
                         "status": "error",
                         "chain_name": scraper.chain_name,
@@ -330,7 +313,8 @@ def _health_check_job(app):
                     result = run_health_check(scraper)
                 finally:
                     sem.release()
-                _health_check_state["completed"] += 1
+                with _health_state_lock:
+                    _health_check_state["completed"] += 1
                 results.append(result)
                 logger.info(
                     "Health check %s: status=%s showtimes=%s",
@@ -347,11 +331,12 @@ def _health_check_job(app):
                 details={"results": results},
             )
     finally:
-        _health_check_state["running"] = False
-        _health_check_state["chain_name"] = None
-        _health_check_state["started_at"] = None
-        _health_check_state["completed"] = 0
-        _health_check_state["total"] = 0
+        with _health_state_lock:
+            _health_check_state["running"] = False
+            _health_check_state["chain_name"] = None
+            _health_check_state["started_at"] = None
+            _health_check_state["completed"] = 0
+            _health_check_state["total"] = 0
 
 
 def _build_health_trigger(
@@ -426,9 +411,6 @@ def start_scheduler(app) -> None:
     alert_minutes = _setting_int(
         "alert_interval_minutes", "ALERT_INTERVAL_MINUTES", 15
     )
-    venue_crawl_days = _setting_int(
-        "venue_crawl_interval_days", "VENUE_CRAWL_INTERVAL_DAYS", 7
-    )
     cleanup_hours = _setting_int(
         "cleanup_interval_hours", "CLEANUP_INTERVAL_HOURS", 24
     )
@@ -470,15 +452,6 @@ def start_scheduler(app) -> None:
         replace_existing=True,
     )
 
-    # Venue crawler — runs every N days
-    _scheduler.add_job(
-        func=lambda: _venue_crawl_job(app),
-        trigger=IntervalTrigger(days=venue_crawl_days),
-        id="imax_venue_crawl",
-        name="Venue crawler",
-        replace_existing=True,
-    )
-
     # Expired showtime cleanup — runs every N hours
     _scheduler.add_job(
         func=lambda: _cleanup_job(app),
@@ -509,11 +482,12 @@ def start_scheduler(app) -> None:
     _scheduler.start()
     logger.info(
         "Scheduler started; scraping every %d min, alerts every %d min, "
-        "venue crawl every %d days, cleanup every %d hours.",
+        "cleanup every %d hours, "
+        "browse schedules every %d min, health check on its configured cron schedule.",
         interval_minutes,
         alert_minutes,
-        venue_crawl_days,
         cleanup_hours,
+        browse_check_minutes,
     )
 
 
@@ -547,15 +521,14 @@ def get_scheduler_status() -> dict:
 
 def reschedule_jobs(
     scraper_minutes: int,
-    crawl_days: int,
     cleanup_hours: int = 24,
     alert_minutes: int = 15,
 ) -> None:
     """
     Update trigger intervals for all scheduled jobs without restarting.
 
-    Safe to call at any time after ``start_scheduler()``. All four job
-    intervals (scraper, alerts, venue crawl, cleanup) are updated atomically.
+    Safe to call at any time after ``start_scheduler()``. All three job
+    intervals (scraper, alerts, cleanup) are updated atomically.
     """
     if not _scheduler or not _scheduler.running:
         logger.warning(
@@ -570,17 +543,13 @@ def reschedule_jobs(
         "imax_alerts", trigger=IntervalTrigger(minutes=alert_minutes)
     )
     _scheduler.reschedule_job(
-        "imax_venue_crawl", trigger=IntervalTrigger(days=crawl_days)
-    )
-    _scheduler.reschedule_job(
         "imax_cleanup", trigger=IntervalTrigger(hours=cleanup_hours)
     )
     logger.info(
         "Jobs rescheduled: scraper every %d min, alerts every %d min, "
-        "venue crawl every %d days, cleanup every %d hours.",
+        "cleanup every %d hours.",
         scraper_minutes,
         alert_minutes,
-        crawl_days,
         cleanup_hours,
     )
 

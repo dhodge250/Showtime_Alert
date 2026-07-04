@@ -114,6 +114,25 @@ def sample_user(app):
         return user.id
 
 
+# ── SECRET_KEY production enforcement ───────────────────────────────────
+
+
+class TestSecretKeyEnforcement:
+    @pytest.mark.parametrize("secret", ["dev-secret-key-change-in-production", ""])
+    def test_production_rejects_insecure_secret_key(self, monkeypatch, secret):
+        # config.py reads SECRET_KEY from the environment at import time, so the
+        # config value (not os.environ) is what create_app() checks — patch the
+        # already-loaded Config class directly to simulate an insecure SECRET_KEY.
+        import config as config_module
+
+        monkeypatch.setattr(config_module.Config, "SECRET_KEY", secret)
+        with pytest.raises(RuntimeError, match="SECRET_KEY"):
+            create_app("production")
+    def test_testing_config_still_works(self):
+        app = create_app("testing")
+        assert app is not None
+
+
 # ── Auth ──────────────────────────────────────────────────────────────
 
 
@@ -461,6 +480,17 @@ class TestAlertAPI:
         assert isinstance(data, list)
         assert len(data) >= 1
 
+    def test_create_alert_non_json_content_type_not_parsed(self, auth_client, app):
+        # A cross-origin page can send a text/plain body without triggering a
+        # CORS pre-flight. Without force=True, Flask must not parse it as JSON —
+        # the body should be treated as empty, not as {"user_id": 1}.
+        resp = auth_client.post(
+            "/api/alerts", data='{"user_id": 1}', content_type="text/plain"
+        )
+        assert resp.status_code == 400
+        with app.app_context():
+            assert AlertPreference.query.count() == 0
+
 
 # ── API: Lookup tables ────────────────────────────────────────────────
 
@@ -534,6 +564,93 @@ class TestLookupAPI:
     def test_get_audio_systems(self, auth_client):
         resp = auth_client.get("/api/lookup/audio-systems")
         assert resp.status_code == 200
+
+    def test_delete_continent_not_in_use(self, auth_client, app):
+        r = auth_client.post("/api/lookup/continents", json={"name": "DeleteContinent"})
+        obj_id = r.get_json()["id"]
+        resp = auth_client.delete(f"/api/lookup/continents/{obj_id}")
+        assert resp.status_code == 200
+        assert resp.get_json() == {"deleted": True}
+
+    def test_delete_continent_in_use(self, auth_client, app, sample_theater):
+        from app.models import Continent
+
+        with app.app_context():
+            cont = Continent(name="InUseContinent")
+            db.session.add(cont)
+            db.session.commit()
+            cont_id = cont.id
+            theater = Theater.query.get(sample_theater)
+            theater.continent_id = cont_id
+            db.session.commit()
+
+        resp = auth_client.delete(f"/api/lookup/continents/{cont_id}")
+        assert resp.status_code == 409
+        assert resp.get_json() == {"error": "In use by one or more theaters"}
+
+    def test_create_region_duplicate(self, auth_client, app):
+        from app.lookup_helpers import get_or_create_country
+
+        with app.app_context():
+            country = get_or_create_country("RegionDupCountry")
+            db.session.commit()
+            country_id = country.id
+
+        r1 = auth_client.post(
+            "/api/lookup/regions", json={"name": "DupRegion", "country_id": country_id}
+        )
+        assert r1.status_code == 201
+        r2 = auth_client.post(
+            "/api/lookup/regions", json={"name": "DupRegion", "country_id": country_id}
+        )
+        assert r2.status_code == 409
+
+    def test_create_city_duplicate(self, auth_client, app):
+        from app.lookup_helpers import get_or_create_country
+
+        with app.app_context():
+            country = get_or_create_country("CityDupCountry")
+            db.session.commit()
+            country_id = country.id
+
+        r1 = auth_client.post(
+            "/api/lookup/cities", json={"name": "DupCity", "country_id": country_id}
+        )
+        assert r1.status_code == 201
+        r2 = auth_client.post(
+            "/api/lookup/cities", json={"name": "DupCity", "country_id": country_id}
+        )
+        assert r2.status_code == 409
+
+    def test_lookup_crud_roundtrip_all_types(self, auth_client, app):
+        """Every lookup type in the generic factory supports POST -> PATCH -> DELETE."""
+        from app.lookup_api import _LOOKUPS
+        from app.lookup_helpers import get_or_create_country
+
+        with app.app_context():
+            country = get_or_create_country("RoundTripCountry")
+            db.session.commit()
+            country_id = country.id
+
+        for key, spec in _LOOKUPS.items():
+            create_payload = {spec.name_attr: f"RoundTrip-{key}"}
+            for col in spec.required_scope_cols:
+                create_payload[col] = country_id
+
+            r = auth_client.post(f"/api/lookup/{spec.url}", json=create_payload)
+            assert r.status_code == 201, f"{key} create failed: {r.get_json()}"
+            obj_id = r.get_json()["id"]
+
+            r = auth_client.patch(
+                f"/api/lookup/{spec.url}/{obj_id}",
+                json={spec.name_attr: f"RoundTrip-{key}-renamed"},
+            )
+            assert r.status_code == 200, f"{key} patch failed: {r.get_json()}"
+            assert r.get_json()[spec.name_attr] == f"RoundTrip-{key}-renamed"
+
+            r = auth_client.delete(f"/api/lookup/{spec.url}/{obj_id}")
+            assert r.status_code == 200, f"{key} delete failed: {r.get_json()}"
+            assert r.get_json() == {"deleted": True}
 
 
 # ── API: Showtimes ────────────────────────────────────────────────────
@@ -778,7 +895,7 @@ class TestProfile:
 
 class TestScraper:
     def test_parse_time_text_valid(self):
-        from app.scraper import _parse_time_text
+        from app.scrapers import _parse_time_text
 
         dt = _parse_time_text("7:30 PM")
         assert dt is not None
@@ -786,20 +903,20 @@ class TestScraper:
         assert dt.minute == 30
 
     def test_parse_time_text_invalid(self):
-        from app.scraper import _parse_time_text
+        from app.scrapers import _parse_time_text
 
         dt = _parse_time_text("not a time")
         assert dt is None
 
     def test_parse_time_text_24h(self):
-        from app.scraper import _parse_time_text
+        from app.scrapers import _parse_time_text
 
         dt = _parse_time_text("14:00")
         assert dt is not None
         assert dt.hour == 14
 
     def test_get_or_create_movie_creates(self, app):
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             scraper = AMCScraper()
@@ -810,7 +927,7 @@ class TestScraper:
             assert movie.title == "Avatar"
 
     def test_get_or_create_movie_deduplicates(self, app):
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             scraper = AMCScraper()
@@ -822,7 +939,7 @@ class TestScraper:
     def test_upsert_showtime_creates(self, app, sample_theater, sample_movie):
         from datetime import datetime, timezone
 
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             theater = Theater.query.get(sample_theater)
@@ -837,7 +954,7 @@ class TestScraper:
     def test_upsert_showtime_deduplicates(self, app, sample_theater, sample_movie):
         from datetime import datetime, timezone
 
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             theater = Theater.query.get(sample_theater)
@@ -853,7 +970,7 @@ class TestScraper:
 
     def test_get_or_create_movie_no_tmdb_enrichment(self, app):
         """When TMDB is not configured, new movies are created without tmdb_id."""
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             scraper = AMCScraper()
@@ -870,7 +987,7 @@ class TestScraper:
 class TestScraperAlertTargeting:
     def test_get_active_targets_empty(self, app):
         """No active alerts → empty dict."""
-        from app.scraper import _get_active_targets
+        from app.scrapers import _get_active_targets
 
         with app.app_context():
             targets = _get_active_targets()
@@ -879,7 +996,7 @@ class TestScraperAlertTargeting:
     def test_get_active_targets_with_alert(self, app, sample_user, sample_theater, sample_movie):
         """Active unsent alert → theater_id key with the movie_id in its set."""
         from app.models import AlertMovie, AlertPreference
-        from app.scraper import _get_active_targets
+        from app.scrapers import _get_active_targets
 
         with app.app_context():
             pref = AlertPreference(
@@ -901,7 +1018,7 @@ class TestScraperAlertTargeting:
     def test_get_active_targets_sent_alert_excluded(self, app, sample_user, sample_theater, sample_movie):
         """Sent alert (alert_sent=True) is NOT included in targets."""
         from app.models import AlertMovie, AlertPreference
-        from app.scraper import _get_active_targets
+        from app.scrapers import _get_active_targets
 
         with app.app_context():
             pref = AlertPreference(
@@ -923,7 +1040,7 @@ class TestScraperAlertTargeting:
         """scrape_all returns [] immediately when there are no active alerts."""
         from unittest.mock import patch
 
-        from app.scraper import AMCScraper
+        from app.scrapers import AMCScraper
 
         with app.app_context():
             scraper = AMCScraper()
@@ -1472,7 +1589,7 @@ class TestTCLScraper:
         mock_pw.__enter__ = MagicMock(return_value=mock_pw)
         mock_pw.__exit__ = MagicMock(return_value=False)
         mock_pw.chromium.launch.return_value = mock_browser
-        with patch("app.scrapers.tcl.sync_playwright", return_value=mock_pw):
+        with patch("playwright.sync_api.sync_playwright", return_value=mock_pw):
             token = _fetch_gas_token()
         assert token == "test-gas-token-abc123"
 
@@ -1490,7 +1607,7 @@ class TestTCLScraper:
         mock_pw.__enter__ = MagicMock(return_value=mock_pw)
         mock_pw.__exit__ = MagicMock(return_value=False)
         mock_pw.chromium.launch.return_value = mock_browser
-        with patch("app.scrapers.tcl.sync_playwright", return_value=mock_pw):
+        with patch("playwright.sync_api.sync_playwright", return_value=mock_pw):
             token = _fetch_gas_token()
         assert token == ""
 
@@ -1526,7 +1643,7 @@ class TestTCLScraper:
             theater = Theater.query.get(sample_theater)
             scraper = TCLScraper()
             with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
-                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
 
         assert len(results) == 2
         assert all(st.format_type == "IMAX" for st in results)
@@ -1546,7 +1663,7 @@ class TestTCLScraper:
             theater = Theater.query.get(sample_theater)
             scraper = TCLScraper()
             with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
-                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
             titles = {st.movie.title for st in results}
 
         assert "Non-IMAX Film" not in titles
@@ -1562,7 +1679,7 @@ class TestTCLScraper:
             theater = Theater.query.get(sample_theater)
             scraper = TCLScraper()
             with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
-                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                results = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
 
         available = {st.tickets_available for st in results}
         assert True in available   # 18:30 showtime is not sold out
@@ -1579,9 +1696,9 @@ class TestTCLScraper:
             theater = Theater.query.get(sample_theater)
             scraper = TCLScraper()
             with patch("app.scrapers.tcl.requests.get", return_value=mock_resp):
-                first = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                first = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
                 db.session.commit()
-                second = scraper._scrape_date(theater, {None}, {}, "2026-06-16")
+                second = scraper._scrape_date(theater, {None}, {}, "2026-06-16", False)
 
         assert len(first) == 2
         assert len(second) == 0
@@ -1747,6 +1864,98 @@ class TestScheduler:
         status = get_scheduler_status()
         assert status["running"] is False
 
+    def test_on_demand_fetch_keeps_stale_rows_when_scrape_raises(
+        self, app, sample_theater, sample_movie
+    ):
+        """
+        _theater_fetch_job must not delete existing on-demand rows when the
+        scrape raises — leaving stale data visible beats showing nothing
+        (issue #279 item 1).
+        """
+        from datetime import timedelta
+        from app.scheduler import _theater_fetch_job
+        from app.time_utils import utcnow
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            old_showtime = Showtime(
+                theater_id=theater.id,
+                movie_id=sample_movie,
+                show_datetime=utcnow() + timedelta(days=1),
+                on_demand=True,
+            )
+            db.session.add(old_showtime)
+            db.session.commit()
+            old_showtime.last_checked = utcnow() - timedelta(hours=1)
+            db.session.commit()
+            old_id = old_showtime.id
+
+            class _RaisingScraper:
+                chain_name = "Test"
+
+                def scrape_theater(self, theater, movie_ids):
+                    raise RuntimeError("scrape failed")
+
+            _theater_fetch_job(theater.id, _RaisingScraper())
+
+            assert Showtime.query.get(old_id) is not None
+
+    def test_on_demand_fetch_deletes_stale_rows_after_successful_scrape(
+        self, app, sample_theater, sample_movie
+    ):
+        """
+        On success, on-demand rows the scraper didn't touch (last_checked
+        before scrape_start) must be deleted — but only after the scrape
+        succeeds, and upserted/new rows from this run must survive
+        (issue #279 item 1).
+        """
+        from datetime import timedelta
+        from app.scheduler import _theater_fetch_job
+        from app.time_utils import utcnow
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            old_showtime = Showtime(
+                theater_id=theater.id,
+                movie_id=sample_movie,
+                show_datetime=utcnow() + timedelta(days=1),
+                on_demand=True,
+            )
+            db.session.add(old_showtime)
+            db.session.commit()
+            old_showtime.last_checked = utcnow() - timedelta(hours=1)
+            db.session.commit()
+            old_id = old_showtime.id
+
+            new_movie = Movie(title="A Different Movie")
+            db.session.add(new_movie)
+            db.session.commit()
+            new_movie_id = new_movie.id
+
+            class _SucceedingScraper:
+                chain_name = "Test"
+
+                def __init__(self, movie_id):
+                    self.movie_id = movie_id
+
+                def scrape_theater(self, theater, movie_ids):
+                    new_st = Showtime(
+                        theater_id=theater.id,
+                        movie_id=self.movie_id,
+                        show_datetime=utcnow() + timedelta(days=2),
+                        on_demand=True,
+                    )
+                    db.session.add(new_st)
+                    db.session.commit()
+                    return [new_st]
+
+            _theater_fetch_job(theater.id, _SucceedingScraper(new_movie_id))
+
+            assert Showtime.query.get(old_id) is None
+            remaining = Showtime.query.filter_by(theater_id=theater.id, on_demand=True).all()
+            assert len(remaining) == 1
+            assert remaining[0].movie_id == new_movie_id
+
 
 # ── Scraper coordinator ───────────────────────────────────────────────
 
@@ -1769,7 +1978,7 @@ class TestScraperCoordinator:
             with coord_mod._inflight_lock:
                 coord_mod._scraping_in_flight.add(theater.id)
             try:
-                with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+                with patch.object(amc, "scrape_theaters_batch", return_value=([], set())) as mock_batch:
                     result = coord_mod.queue_theaters_for_scrape({theater.id})
                 assert result == []
                 mock_batch.assert_not_called()
@@ -1789,12 +1998,12 @@ class TestScraperCoordinator:
             amc = self._amc_scraper()
 
             # Within cooldown window → skipped
-            with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+            with patch.object(amc, "scrape_theaters_batch", return_value=([], set())) as mock_batch:
                 coord_mod.queue_theaters_for_scrape({theater.id}, force=False)
             mock_batch.assert_not_called()
 
             # force=True bypasses cooldown → scrape is attempted
-            with patch.object(amc, "scrape_theaters_batch", return_value=[]) as mock_batch:
+            with patch.object(amc, "scrape_theaters_batch", return_value=([], set())) as mock_batch:
                 coord_mod.queue_theaters_for_scrape({theater.id}, force=True)
             mock_batch.assert_called_once()
 
@@ -1818,6 +2027,107 @@ class TestScraperCoordinator:
             assert theater.last_scraped_at is None
             with coord_mod._inflight_lock:
                 assert theater.id not in coord_mod._scraping_in_flight
+
+    def test_failing_theater_in_batch_does_not_advance_last_scraped(self, app):
+        """
+        One theater raising inside scrape_theater() must not block last_scraped_at
+        from advancing for the other theater in the same chain batch.
+        """
+        from unittest.mock import patch
+        import app.scrapers as coord_mod
+        from app.models import Theater as TheaterModel
+
+        with app.app_context():
+            ok_theater = TheaterModel(
+                name="Cinemark IMAX Success", chain="Cinemark",
+                city="Springfield", state="IL", is_active=True,
+            )
+            bad_theater = TheaterModel(
+                name="Cinemark IMAX Failure", chain="Cinemark",
+                city="Othertown", state="NY", is_active=True,
+            )
+            db.session.add_all([ok_theater, bad_theater])
+            db.session.commit()
+
+            cinemark = next(s for s in coord_mod.ALL_SCRAPERS if s.chain_name == "Cinemark")
+
+            def _scrape_theater(theater, movie_ids):
+                if theater.id == bad_theater.id:
+                    raise RuntimeError("scrape failed")
+                return []
+
+            with patch.object(cinemark, "scrape_theater", side_effect=_scrape_theater):
+                coord_mod.queue_theaters_for_scrape(
+                    {ok_theater.id, bad_theater.id}, force=True
+                )
+
+            db.session.refresh(ok_theater)
+            db.session.refresh(bad_theater)
+            assert ok_theater.last_scraped_at is not None
+            assert bad_theater.last_scraped_at is None
+
+    def test_two_chains_one_raises_other_still_completes(self, app):
+        """
+        Chains now run in parallel worker threads (one per chain). A whole-batch
+        exception in one chain's worker must not prevent a different chain's
+        worker from completing and stamping last_scraped_at.
+        """
+        from unittest.mock import patch
+        import app.scrapers as coord_mod
+        from app.models import Theater as TheaterModel
+
+        with app.app_context():
+            ok_theater = TheaterModel(
+                name="Cineplex IMAX OK", chain="Cineplex",
+                city="Toronto", state="ON", is_active=True,
+            )
+            bad_theater = TheaterModel(
+                name="Cinemark IMAX Bad", chain="Cinemark",
+                city="Springfield", state="IL", is_active=True,
+            )
+            db.session.add_all([ok_theater, bad_theater])
+            db.session.commit()
+            ok_id, bad_id = ok_theater.id, bad_theater.id
+
+            cineplex = next(s for s in coord_mod.ALL_SCRAPERS if s.chain_name == "Cineplex")
+            cinemark = next(s for s in coord_mod.ALL_SCRAPERS if s.chain_name == "Cinemark")
+
+            with patch.object(cineplex, "scrape_theaters_batch", return_value=([], set())), \
+                 patch.object(cinemark, "scrape_theaters_batch",
+                              side_effect=RuntimeError("chain batch exploded")):
+                coord_mod.queue_theaters_for_scrape({ok_id, bad_id}, force=True)
+
+            db.session.refresh(ok_theater)
+            db.session.refresh(bad_theater)
+            assert ok_theater.last_scraped_at is not None
+            assert bad_theater.last_scraped_at is None
+
+    def test_browse_context_propagates_to_worker_thread(self, app, sample_theater):
+        """
+        browse_only is a thread-local set by browse_schedule_scrape() on the
+        dispatching thread; queue_theaters_for_scrape must propagate it into
+        the per-chain worker thread so provenance flags on new showtimes are
+        correct (losing this reintroduces the browse-data Dashboard leak).
+        """
+        from unittest.mock import patch
+        import app.scrapers as coord_mod
+        from app.scrapers.base import browse_schedule_scrape, _scrape_ctx
+
+        with app.app_context():
+            theater = Theater.query.get(sample_theater)
+            amc = self._amc_scraper()
+
+            seen = {}
+
+            def _fake_batch(theaters, targets):
+                seen["browse_only"] = getattr(_scrape_ctx, "browse_only", False)
+                return [], set()
+
+            with patch.object(amc, "scrape_theaters_batch", side_effect=_fake_batch):
+                with browse_schedule_scrape():
+                    coord_mod.queue_theaters_for_scrape({theater.id}, force=True)
+
+            assert seen["browse_only"] is True
 
 
 # ── BrowseSchedule.compute_next_run ───────────────────────────────────
@@ -2159,6 +2469,37 @@ class TestCSVSeeding:
         assert normalise_ar("2:30:01") == "2:30:1"   # trailing :01 → :1
         assert normalise_ar("1.90:1") == "1.90:1"    # already correct
 
+    def test_preserve_vs_overwrite_website_semantics(self, app):
+        """preserve_existing=True (seed) must not clobber an existing website;
+        preserve_existing=False (admin import) must overwrite it."""
+        from app.theater_csv import _upsert_theater_row  # noqa: PLC0415
+
+        with app.app_context():
+            t = Theater(name="Test Cinema IMAX", venue_key="TESTKEY001",
+                        website="http://original.example.com", is_active=True)
+            db.session.add(t)
+            db.session.commit()
+
+            row = {
+                "Location Name": "Test Cinema IMAX",
+                "Venue Key": "TESTKEY001",
+                "Website": "http://updated.example.com",
+            }
+
+            status = _upsert_theater_row(row, preserve_existing=True, source="csv",
+                                          errors=[], warnings=[])
+            db.session.commit()
+            assert status == "updated"
+            assert Theater.query.filter_by(venue_key="TESTKEY001").first().website == \
+                "http://original.example.com"
+
+            status = _upsert_theater_row(row, preserve_existing=False, source="import",
+                                          errors=[], warnings=[])
+            db.session.commit()
+            assert status == "updated"
+            assert Theater.query.filter_by(venue_key="TESTKEY001").first().website == \
+                "http://updated.example.com"
+
 
 # ── New PATCH fields ──────────────────────────────────────────────────
 
@@ -2433,7 +2774,6 @@ class TestAdminSettingsNotification:
                 "tmdb_api_key": "",
                 "app_measurement_unit": "metric",
                 "scraper_interval_minutes": "30",
-                "venue_crawl_interval_days": "7",
                 "cleanup_interval_hours": "24",
             },
             follow_redirects=True,
@@ -2692,6 +3032,138 @@ class TestPerMovieReset:
         assert resp.status_code == 404
 
 
+# -- Scraper health check ----------------------------------------------
+
+
+class TestHealthCheck:
+    """Regression tests for #270/#271/#272 — probe data must never persist,
+    counts must reflect parsed (not new) showtimes, and probes must respect
+    the in-flight registry."""
+
+    def _stub_scraper(self, showtimes_to_upsert):
+        """Build a BaseScraper stub whose scrape_theater upserts the given
+        (title, dt) pairs and then commits internally — like Regal does."""
+        from app.scrapers.base import BaseScraper
+
+        class StubScraper(BaseScraper):
+            chain_name = "AMC"  # matches sample_theater fixture chain
+
+            def scrape_theater(self, theater, movie_ids):
+                new = []
+                for title, dt in showtimes_to_upsert:
+                    movie = self.get_or_create_movie(title)
+                    st, is_new = self.upsert_showtime(theater, movie, dt)
+                    if is_new:
+                        new.append(st)
+                db.session.commit()  # internal commit — the Regal leak path
+                return new
+
+        return StubScraper()
+
+    def test_probe_persists_nothing_despite_internal_commit(self, app, sample_theater):
+        from datetime import datetime, timedelta
+        from app.scrapers.health import run_health_check
+
+        future = datetime.utcnow() + timedelta(days=3)
+        scraper = self._stub_scraper([("Probe Only Movie", future)])
+
+        result = run_health_check(scraper)
+
+        assert result["status"] == "ok"
+        assert result["showtime_count"] == 1
+        # The probe's movie and showtime must NOT be in the DB.
+        assert Movie.query.filter(Movie.title.ilike("Probe Only Movie")).first() is None
+        assert Showtime.query.count() == 0
+
+    def test_probe_counts_already_existing_showtimes(self, app, sample_theater, sample_movie):
+        """#271: a theater whose showtimes already exist must report ok, not
+        a false 'no showtimes found' warning."""
+        from datetime import datetime, timedelta
+        from app.scrapers.health import run_health_check
+
+        future = datetime.utcnow() + timedelta(days=3)
+        movie = Movie.query.get(sample_movie)
+        theater = Theater.query.get(sample_theater)
+        db.session.add(Showtime(theater_id=theater.id, movie_id=movie.id,
+                                show_datetime=future))
+        db.session.commit()
+
+        scraper = self._stub_scraper([(movie.title, future)])
+        result = run_health_check(scraper)
+
+        assert result["status"] == "ok"
+        assert result["showtime_count"] == 1
+        assert Showtime.query.count() == 1  # unchanged
+
+    def test_probe_does_not_mutate_existing_rows(self, app, sample_theater, sample_movie):
+        """#270: the probe must not clear browse_only/on_demand provenance flags."""
+        from datetime import datetime, timedelta
+        from app.scrapers.health import run_health_check
+
+        future = datetime.utcnow() + timedelta(days=3)
+        st = Showtime(theater_id=sample_theater, movie_id=sample_movie,
+                      show_datetime=future, browse_only=True)
+        db.session.add(st)
+        db.session.commit()
+        movie = Movie.query.get(sample_movie)
+
+        scraper = self._stub_scraper([(movie.title, future)])
+        run_health_check(scraper)
+
+        db.session.expire_all()
+        st = Showtime.query.first()
+        assert st.browse_only is True
+
+    def test_probe_skips_inflight_theater(self, app, sample_theater):
+        """#272: probe must not scrape a theater another job has claimed."""
+        from datetime import datetime, timedelta
+        import app.scrapers as coord_mod
+        from app.scrapers.health import run_health_check
+
+        future = datetime.utcnow() + timedelta(days=3)
+        scraper = self._stub_scraper([("Probe Only Movie", future)])
+
+        with coord_mod._inflight_lock:
+            coord_mod._scraping_in_flight.add(sample_theater)
+        try:
+            result = run_health_check(scraper)
+        finally:
+            with coord_mod._inflight_lock:
+                coord_mod._scraping_in_flight.discard(sample_theater)
+
+        assert result["status"] == "warning"
+        assert result["error_class"] == "Busy"
+        assert Showtime.query.count() == 0
+
+
+class TestUpsertTicketsUrl:
+    def test_update_refreshes_tickets_url(self, app, sample_theater, sample_movie):
+        """#254: a later scrape providing a URL must update the stored row."""
+        from datetime import datetime, timedelta
+        from app.scrapers.base import BaseScraper
+
+        future = datetime.utcnow() + timedelta(days=3)
+        theater = Theater.query.get(sample_theater)
+        movie = Movie.query.get(sample_movie)
+        scraper = BaseScraper()
+
+        st, is_new = scraper.upsert_showtime(theater, movie, future, tickets_url="")
+        db.session.commit()
+        assert is_new and st.tickets_url == ""
+
+        st2, is_new2 = scraper.upsert_showtime(
+            theater, movie, future, tickets_url="https://example.com/buy"
+        )
+        db.session.commit()
+        assert not is_new2
+        assert st2.tickets_url == "https://example.com/buy"
+
+        # An empty URL on a later scrape must NOT wipe the stored one.
+        st3, _ = scraper.upsert_showtime(theater, movie, future, tickets_url="")
+        db.session.commit()
+        assert st3.tickets_url == "https://example.com/buy"
+
+
 # -- Expired showtime cleanup ------------------------------------------
 
 
@@ -2700,7 +3172,7 @@ class TestExpiredShowtimeCleanup:
         """cleanup_expired_showtimes() deletes showtimes in the past."""
         from datetime import datetime, timedelta, timezone
 
-        from app.scraper import cleanup_expired_showtimes
+        from app.scrapers import cleanup_expired_showtimes
 
         with app.app_context():
             theater = Theater.query.get(sample_theater)
@@ -2724,7 +3196,7 @@ class TestExpiredShowtimeCleanup:
 
     def test_cleanup_returns_zero_when_nothing_expired(self, app):
         """Returns 0 when no past showtimes exist."""
-        from app.scraper import cleanup_expired_showtimes
+        from app.scrapers import cleanup_expired_showtimes
 
         with app.app_context():
             count = cleanup_expired_showtimes()
@@ -2737,7 +3209,7 @@ class TestExpiredShowtimeCleanup:
 class TestOrphanedMovieCleanup:
     def test_orphaned_movie_deleted(self, app):
         """A movie with no showtimes and no alert references is deleted."""
-        from app.scraper import cleanup_orphaned_movies
+        from app.scrapers import cleanup_orphaned_movies
 
         with app.app_context():
             orphan = Movie(title="Orphan Film")
@@ -2751,7 +3223,7 @@ class TestOrphanedMovieCleanup:
 
     def test_movie_with_alert_not_deleted(self, app, sample_user, sample_theater, sample_movie):
         """A movie referenced by an active AlertMovie row is NOT deleted."""
-        from app.scraper import cleanup_orphaned_movies
+        from app.scrapers import cleanup_orphaned_movies
 
         with app.app_context():
             pref = AlertPreference(user_id=sample_user, theater_id=sample_theater)
@@ -2769,7 +3241,7 @@ class TestOrphanedMovieCleanup:
         """A movie that still has showtimes is NOT deleted."""
         from datetime import datetime, timedelta, timezone
 
-        from app.scraper import cleanup_orphaned_movies
+        from app.scrapers import cleanup_orphaned_movies
 
         with app.app_context():
             theater = Theater.query.get(sample_theater)

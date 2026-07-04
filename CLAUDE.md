@@ -114,7 +114,7 @@ docker logs imax-alert -f
 
 **Playwright + plain requests (TCL):** Playwright fetches the homepage to bypass Cloudflare and extract the `gasToken` from `__NEXT_DATA__`; browser is closed immediately after. All subsequent OCAPI calls use plain `requests` with the token as a Bearer header.
 
-**`scrape_all()` override:** Playwright scrapers (AMC, Regal) override `scrape_all()` to launch one browser and share it across all theaters. Plain HTTP scrapers rely on the base class `scrape_all()`, which calls `scrape_theater()` per theater. When writing a new Playwright scraper, copy the override pattern from `app/scrapers/regal.py`.
+**`scrape_all()` override:** Playwright scrapers (AMC, Regal) subclass `PlaywrightBatchScraper` (`app/scrapers/base.py`) to launch one browser and share it across all theaters. Plain HTTP scrapers rely on the base class `scrape_all()`, which calls `scrape_theater()` per theater. When writing a new Playwright scraper, subclass `PlaywrightBatchScraper` and implement `_scrape_with_context`.
 
 **Adding a new scraper:** Create `app/scrapers/chain.py`, then register it in `ALL_SCRAPERS` in `app/scrapers/__init__.py`. Without the registration step the scraper is never called.
 
@@ -166,13 +166,13 @@ docker logs imax-alert -f
 | v1.20.1 | Hotfix: restore base.html/CSS/template changes lost in release merge conflict; remove dead profile.html |
 | v1.21.0 | Theater detail page, scraper status/on-demand scraping, movie TMDB matching improvements, movies filter/sort/pagination, configurable page sizes (#225 #226 #227) |
 | v1.21.1 | Hotfix: apply v1.21 code missing from main due to release branch merge base collision |
+| v1.22.0 | Scheduled Proximity Browsing: unified scraper coordinator (cooldown, in-flight, concurrency caps), browse schedule model + settings UI + Run Now, format type normalization across all scrapers, Regal rate-limit + date-range fixes, multi-user scrape isolation (#243 #242 #245) |
 
 ### In Progress & Upcoming
 
 | Version | Milestone | Status | Issues |
 |---------|-----------|--------|--------|
-| v1.22 | Scheduled Proximity Browsing | 🔄 next | #243 (coordinator, first) #242 (browse schedule) |
-| v2.0 | Full North American Scraper Coverage | ⬜ | #84–#92 #134–#150 |
+| v2.0 | Full North American Scraper Coverage | 🔄 next | #84–#92 #134–#150 |
 | v2.x | Global Expansion | ⬜ | #151 |
-| v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 |
+| v3.0 | Expand to Non-IMAX Theaters | ⬜ | #200 #251 |
 

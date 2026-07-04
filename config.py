@@ -1,5 +1,7 @@
 """Configuration for IMAX Alert application."""
 import os
+import tempfile
+import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,6 +12,7 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 class Config:
     """Base configuration."""
 
+    # Dev-only fallback — create_app() refuses to boot in production with this value.
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         "DATABASE_URL", f"sqlite:///{os.path.join(basedir, 'imax_alert.db')}"
@@ -35,21 +38,10 @@ class Config:
     # Independent alert processor schedule
     ALERT_INTERVAL_MINUTES = int(os.environ.get("ALERT_INTERVAL_MINUTES", 15))
 
-    # Venue crawler schedule — runs much less frequently than the showtime scraper
-    # because the list of IMAX theaters changes rarely (new openings, closures).
-    VENUE_CRAWL_INTERVAL_DAYS = int(os.environ.get("VENUE_CRAWL_INTERVAL_DAYS", 7))
-
-    # Run the venue crawler once on startup if the theaters table is empty.
-    # Set to "false" to disable the startup crawl (e.g. if seeding manually).
-    VENUE_CRAWL_ON_EMPTY = os.environ.get("VENUE_CRAWL_ON_EMPTY", "true").lower() == "true"
-
     # Tie CSRF token lifetime to the session rather than a fixed 1-hour window.
     # Without this, Mobile Safari suspends background tabs long enough for the
     # default 3600 s limit to expire, causing "CSRF token expired" on next use.
     WTF_CSRF_TIME_LIMIT = None
-
-    # Google Maps / Leaflet (no API key needed for Leaflet + OpenStreetMap)
-    MAPS_ENABLED = True
 
 
 class DevelopmentConfig(Config):
@@ -68,9 +60,18 @@ class TestingConfig(Config):
     """Testing configuration."""
 
     TESTING = True
-    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    # The coordinator dispatches chain batches to worker threads (see
+    # queue_theaters_for_scrape), each opening its own connection. A plain
+    # ":memory:" DB is private per thread (SingletonThreadPool), and sharing
+    # one via StaticPool + check_same_thread=False hands both worker threads
+    # the *same* raw sqlite3.Connection object — concurrent execute()/commit()
+    # calls on it race and can silently drop a commit. A temp file-based DB
+    # (same as production, which never uses :memory:) gives each thread its
+    # own connection, safely serialized by SQLite's normal file locking.
+    SQLALCHEMY_DATABASE_URI = (
+        f"sqlite:///{os.path.join(tempfile.gettempdir(), f'imax_alert_test_{uuid.uuid4().hex}.db')}"
+    )
     WTF_CSRF_ENABLED = False
-    VENUE_CRAWL_ON_EMPTY = False
     # Skip the 1927-row CSV upsert and incremental column migrations in tests —
     # create_all() builds the schema fresh, and tests supply their own fixture data.
     SKIP_CSV_SEED = True

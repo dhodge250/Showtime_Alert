@@ -7,7 +7,8 @@ import logging
 import math
 import re
 import threading
-from datetime import date, datetime, timezone
+import time
+from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -16,6 +17,7 @@ from bs4 import BeautifulSoup
 
 from app import db
 from app.models import AlertMovie, AlertPreference, Movie, Showtime, Theater, User
+from app.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +210,31 @@ def browse_schedule_scrape():
         _scrape_ctx.browse_only = False
         _scrape_ctx.log_buffer = None
 
+
+@contextlib.contextmanager
+def health_check_scrape():
+    """Mark all scraper DB writes on this thread as a dry-run health probe.
+
+    While active:
+      - upsert_showtime() counts parsed showtimes but never inserts new rows
+        or mutates existing ones, so probe data can never reach the DB — even
+        when a scraper commits internally (Regal does), which defeats the
+        savepoint-rollback approach because Session.commit() releases
+        savepoints and commits the outermost transaction.
+      - get_or_create_movie() never creates Movie rows and never calls TMDB.
+
+    Yields a counter dict: ``counter["parsed"]`` is the number of showtimes
+    the scraper parsed, whether or not they already exist in the DB — the
+    health check must measure "can the scraper still read the page", not
+    "how many rows were new".
+    """
+    counter = {"parsed": 0}
+    _scrape_ctx.health_check = counter
+    try:
+        yield counter
+    finally:
+        _scrape_ctx.health_check = None
+
 # ---------------------------------------------------------------------------
 # Theater timezone helpers
 # ---------------------------------------------------------------------------
@@ -307,20 +334,68 @@ def _local_to_utc(naive_local: datetime, theater: Theater) -> datetime:
     Convert a naive local-theater datetime to a naive UTC datetime.
 
     All showtime rows are stored as naive UTC so comparisons against
-    datetime.utcnow() are consistent regardless of the scraper source.
+    utcnow() are consistent regardless of the scraper source.
     """
     tz = _theater_tz(theater)
     return naive_local.replace(tzinfo=tz).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": USER_AGENT,
     "Accept-Language": "en-US,en;q=0.9",
 }
 REQUEST_TIMEOUT = 15
+
+
+def polite_get(
+    session_or_requests,
+    url: str,
+    *,
+    headers: dict | None = None,
+    timeout: int = REQUEST_TIMEOUT,
+    delay: float = 0.5,
+    max_retry_wait: int = 30,
+    attempts: int = 3,
+    log_prefix: str = "",
+):
+    """
+    GET url with an inter-request delay and 429 Retry-After handling.
+
+    Sleeps `delay` seconds once before the first attempt (politeness toward
+    the chain's rate limiter), then on HTTP 429 retries up to `attempts`
+    times, sleeping the Retry-After value between attempts (capped by
+    `max_retry_wait`, past which the URL is skipped). Returns the Response
+    for any non-429 status so callers keep their own status/exception
+    handling — connection errors are not caught here and propagate to the
+    caller, which keeps its own log message for that path.
+    """
+    prefix = f"{log_prefix}: " if log_prefix else ""
+    time.sleep(delay)
+    for attempt in range(attempts):
+        r = session_or_requests.get(url, headers=headers, timeout=timeout)
+        if r.status_code != 429:
+            return r
+        try:
+            wait = max(1, int(float(r.headers.get("Retry-After") or "5")))
+        except (ValueError, TypeError):
+            wait = 5
+        if wait > max_retry_wait:
+            logger.warning(
+                "%srate-limited — Retry-After=%ds exceeds cap, skipping",
+                prefix, wait,
+            )
+            return None
+        logger.warning(
+            "%srate-limited — waiting %ds (attempt %d/%d)",
+            prefix, wait, attempt + 1, attempts,
+        )
+        time.sleep(wait)
+    logger.warning("%sgave up after %d rate-limited attempts", prefix, attempts)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +410,36 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlam = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def to_km(value: float, unit: str) -> float:
+    """Convert a radius value to km ('miles' converts, anything else is km)."""
+    return value * 1.60934 if unit == "miles" else value
+
+
+def theater_ids_within_radius(
+    lat: float, lon: float, radius_km: float, theaters: Optional[list[Theater]] = None
+) -> set[int]:
+    """IDs of active, geocoded theaters within radius_km of (lat, lon).
+
+    Args:
+        lat: Latitude of the centre point.
+        lon: Longitude of the centre point.
+        radius_km: Search radius in kilometres.
+        theaters: Optional pre-fetched list of active geocoded theaters.  When
+            provided the DB is not queried; callers in a loop should pass this
+            to avoid repeated queries.
+    """
+    if theaters is None:
+        theaters = (
+            Theater.query.filter_by(is_active=True)
+            .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+            .all()
+        )
+    return {
+        t.id for t in theaters
+        if _haversine_km(lat, lon, t.latitude, t.longitude) <= radius_km
+    }
 
 
 def _get_active_targets() -> dict:
@@ -356,9 +461,15 @@ def _get_active_targets() -> dict:
     """
     active_prefs = AlertPreference.query.filter_by(is_active=True, alert_sent=False).all()
 
-    targets: dict = {}
+    # Pre-fetch all active geocoded theaters once so radius checks avoid
+    # repeated DB queries inside the preference loop.
+    geocoded_theaters = (
+        Theater.query.filter_by(is_active=True)
+        .filter(Theater.latitude.isnot(None), Theater.longitude.isnot(None))
+        .all()
+    )
 
-    active_theaters = Theater.query.filter_by(is_active=True).all()
+    targets: dict = {}
 
     for pref in active_prefs:
         # --- radius-based alert ---
@@ -366,11 +477,10 @@ def _get_active_targets() -> dict:
             user = User.query.get(pref.user_id)
             if user is None or user.location_lat is None or user.location_lon is None:
                 continue
-            theaters_in_radius = [
-                t for t in active_theaters
-                if t.latitude is not None and t.longitude is not None
-                and _haversine_km(user.location_lat, user.location_lon, t.latitude, t.longitude) <= pref.radius_km
-            ]
+            theater_ids_in_radius = theater_ids_within_radius(
+                user.location_lat, user.location_lon, pref.radius_km,
+                theaters=geocoded_theaters,
+            )
             movie_ids: set = set()
             am_count = pref.alert_movies.count()
             if am_count == 0:
@@ -378,10 +488,10 @@ def _get_active_targets() -> dict:
             else:
                 for am in pref.alert_movies.filter_by(alert_sent=False).all():
                     movie_ids.add(am.movie_id)
-            for theater in theaters_in_radius:
-                if theater.id not in targets:
-                    targets[theater.id] = set()
-                targets[theater.id] |= movie_ids
+            for theater_id in theater_ids_in_radius:
+                if theater_id not in targets:
+                    targets[theater_id] = set()
+                targets[theater_id] |= movie_ids
             continue
 
         # --- specific or any-theater alert ---
@@ -425,6 +535,20 @@ class BaseScraper:
              canonical title; opportunistically fix messy stored titles.
           4. Create with canonical TMDB title (or cleaned, or raw as fallback).
         """
+        # Health-check probes are read-only: match existing rows but never
+        # create Movie rows, call TMDB, or mutate stored titles.
+        if getattr(_scrape_ctx, "health_check", None) is not None:
+            movie = Movie.query.filter(Movie.title.ilike(title)).first()
+            if movie:
+                return movie
+            cleaned = _clean_title_for_tmdb(title)
+            if cleaned != title:
+                movie = Movie.query.filter(Movie.title.ilike(cleaned)).first()
+                if movie:
+                    return movie
+            # Transient object — never added to the session (movie.id stays None).
+            return Movie(title=cleaned or title, **kwargs)
+
         # 1. Exact match on raw title
         movie = Movie.query.filter(Movie.title.ilike(title)).first()
         if movie:
@@ -515,10 +639,34 @@ class BaseScraper:
             show_datetime=show_datetime,
         ).first()
 
+        # Health-check probe: count the parsed showtime but write nothing —
+        # neither inserts nor mutations of existing rows may persist.
+        health_check = getattr(_scrape_ctx, "health_check", None)
+        if health_check is not None:
+            health_check["parsed"] += 1
+            if showtime:
+                return showtime, False
+            # Transient row built with FK ids only: assigning the relationship
+            # objects (theater=/movie=) would backref it onto the persistent
+            # parent and cascade it into the session on the next flush.
+            probe = Showtime(
+                theater_id=theater.id,
+                movie_id=movie.id,
+                show_datetime=show_datetime,
+                tickets_available=tickets_available,
+                tickets_url=tickets_url,
+                format_type=format_type,
+            )
+            return probe, True
+
         if showtime:
             showtime.tickets_available = tickets_available
             showtime.format_type = format_type
-            showtime.last_checked = datetime.now(timezone.utc)
+            # Refresh the ticket link when the scraper provided one; keep the
+            # stored value when this scrape couldn't build a URL.
+            if tickets_url:
+                showtime.tickets_url = tickets_url
+            showtime.last_checked = utcnow()
             # Only a scheduled alert scrape should clear provenance flags.
             # on-demand clears browse_only and browse clears on_demand, which
             # both incorrectly change dashboard visibility or provenance tracking.
@@ -555,21 +703,32 @@ class BaseScraper:
         """Scrape a single theater. Override in subclasses."""
         raise NotImplementedError
 
-    def scrape_theaters_batch(self, theaters: list, targets: dict) -> list[Showtime]:
+    def _movie_ids_for(self, theater, targets: dict) -> set:
+        """Merge any-theater and per-theater movie targets for one theater."""
+        movie_ids: set = set()
+        if None in targets:
+            movie_ids |= targets[None]
+        if theater.id in targets:
+            movie_ids |= targets[theater.id]
+        return movie_ids
+
+    def scrape_theaters_batch(
+        self, theaters: list, targets: dict
+    ) -> tuple[list[Showtime], set[int]]:
         """
         Scrape an explicit list of theaters with movie-scoped targets.
 
         targets: {theater_id: set[movie_id]}; targets[None] = any-theater movie set.
         Override in Playwright scrapers to share a single browser across theaters.
         Default implementation calls scrape_theater() per theater.
+
+        Returns (new_showtimes, failed_theater_ids) — failed_theater_ids lets the
+        caller avoid stamping last_scraped_at on theaters whose scrape raised.
         """
         new_showtimes: list[Showtime] = []
+        failed_theater_ids: set[int] = set()
         for theater in theaters:
-            movie_ids: set = set()
-            if None in targets:
-                movie_ids |= targets[None]
-            if theater.id in targets:
-                movie_ids |= targets[theater.id]
+            movie_ids = self._movie_ids_for(theater, targets)
             if not movie_ids:
                 continue
             try:
@@ -577,8 +736,9 @@ class BaseScraper:
                 new_showtimes.extend(results)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error scraping %s: %s", theater.name, exc)
+                failed_theater_ids.add(theater.id)
         db.session.commit()
-        return new_showtimes
+        return new_showtimes, failed_theater_ids
 
     def _get_chain_theaters(self, targets: dict) -> list:
         """Return active theaters for this chain scoped to the given alert targets."""
@@ -601,7 +761,55 @@ class BaseScraper:
         theaters = self._get_chain_theaters(targets)
         if not theaters:
             return []
-        return self.scrape_theaters_batch(theaters, targets)
+        new_showtimes, _failed = self.scrape_theaters_batch(theaters, targets)
+        return new_showtimes
+
+
+class PlaywrightBatchScraper(BaseScraper):
+    """
+    Base class for scrapers that share one Playwright browser across a batch
+    of theaters.  Subclasses implement _scrape_with_context(theater, movie_ids,
+    context) and get scrape_theaters_batch() for free.
+    """
+
+    _user_agent: str = HEADERS["User-Agent"]
+
+    def scrape_theaters_batch(
+        self, theaters: list, targets: dict
+    ) -> tuple[list[Showtime], set[int]]:
+        """Share one Playwright browser across all provided theaters.
+
+        Returns (new_showtimes, failed_theater_ids).
+        """
+        if not theaters:
+            return [], set()
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("%s scraper requires playwright — skipping", self.chain_name)
+            return [], set()
+
+        new_showtimes: list[Showtime] = []
+        failed_theater_ids: set[int] = set()
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(user_agent=self._user_agent, locale="en-US")
+                for theater in theaters:
+                    movie_ids = self._movie_ids_for(theater, targets)
+                    if not movie_ids:
+                        continue
+                    try:
+                        new_showtimes.extend(
+                            self._scrape_with_context(theater, movie_ids, context)
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("Error scraping %s: %s", theater.name, exc)
+                        failed_theater_ids.add(theater.id)
+            finally:
+                browser.close()
+        db.session.commit()
+        return new_showtimes, failed_theater_ids
 
 
 # ---------------------------------------------------------------------------
@@ -742,7 +950,7 @@ def _parse_time_text(text: str) -> Optional[datetime]:
         "%H:%M",
         "%I %p",
     ]
-    today = datetime.now(timezone.utc).date()
+    today = utcnow().date()
 
     for fmt in date_formats:
         try:
@@ -771,11 +979,10 @@ def cleanup_expired_showtimes() -> int:
     Called by the nightly maintenance scheduler job.
     Returns the count of rows deleted.
     """
-    cutoff = datetime.now(timezone.utc)
-    expired = Showtime.query.filter(Showtime.show_datetime < cutoff).all()
-    count = len(expired)
-    for st in expired:
-        db.session.delete(st)
+    cutoff = utcnow()
+    count = Showtime.query.filter(Showtime.show_datetime < cutoff).delete(
+        synchronize_session=False
+    )
     if count:
         db.session.commit()
         logger.info("Cleaned up %d expired showtime(s).", count)

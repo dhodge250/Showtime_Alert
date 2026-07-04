@@ -1,27 +1,24 @@
 import logging
 import re
-import time
 from datetime import datetime, timezone
 
 import requests
 
 from app import db
-from app.scrapers.base import BaseScraper, _get_active_targets, _scrape_ctx
+from app.scrapers.base import (
+    REQUEST_TIMEOUT,
+    USER_AGENT,
+    PlaywrightBatchScraper,
+    _scrape_ctx,
+    polite_get,
+)
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
 _WAIT_MS = 7000
 _THEATRE_CODE_RE = re.compile(r"-(\d{4})$")
 _BASE_URL = "https://www.regmovies.com"
-_REQUEST_TIMEOUT = 15
-_INTER_REQUEST_DELAY = 0.5  # seconds between API calls to stay under Regal's rate limit
-_MAX_RETRY_WAIT = 30        # skip date rather than sleeping longer than this on a 429
 
 
 def _theatre_code_from_url(website: str) -> str:
@@ -142,7 +139,7 @@ def _make_session(playwright_cookies: list) -> requests.Session:
     """
     session = requests.Session()
     session.headers.update({
-        "User-Agent": _UA,
+        "User-Agent": USER_AGENT,
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": _BASE_URL,
@@ -154,7 +151,7 @@ def _make_session(playwright_cookies: list) -> requests.Session:
     return session
 
 
-class RegalScraper(BaseScraper):
+class RegalScraper(PlaywrightBatchScraper):
     """
     Scraper for Regal Cinemas IMAX showtimes.
 
@@ -167,50 +164,7 @@ class RegalScraper(BaseScraper):
 
     chain_name = "Regal"
     health_website = "regmovies.com"
-
-    def scrape_theaters_batch(self, theaters: list, targets: dict) -> list[Showtime]:
-        """Share one Playwright browser across all provided Regal theaters."""
-        if not theaters:
-            return []
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            logger.warning("Regal scraper requires playwright — skipping")
-            return []
-
-        new_showtimes: list[Showtime] = []
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=_UA, locale="en-US")
-            for theater in theaters:
-                movie_ids: set = set()
-                if None in targets:
-                    movie_ids |= targets[None]
-                if theater.id in targets:
-                    movie_ids |= targets[theater.id]
-                if not movie_ids:
-                    continue
-                try:
-                    new_showtimes.extend(
-                        self._scrape_with_context(theater, movie_ids, context)
-                    )
-                except Exception as exc:
-                    logger.error("Error scraping %s: %s", theater.name, exc)
-            browser.close()
-
-        db.session.commit()
-        return new_showtimes
-
-    def scrape_all(self) -> list[Showtime]:
-        """Alert-demand scrape: share one Playwright browser across all Regal theaters."""
-        targets = _get_active_targets()
-        if not targets:
-            logger.debug("Regal: no active alerts — skipping scrape")
-            return []
-        theaters = self._get_chain_theaters(targets)
-        if not theaters:
-            return []
-        return self.scrape_theaters_batch(theaters, targets)
+    _user_agent = USER_AGENT
 
     def _scrape_with_context(
         self, theater: Theater, movie_ids: set, context
@@ -370,45 +324,24 @@ class RegalScraper(BaseScraper):
             f"?theatres={theatre_code}&date={api_date}"
             f"&hoCode=&ignoreCache=false&moviesOnly=false"
         )
-        time.sleep(_INTER_REQUEST_DELAY)
-        for attempt in range(3):
-            try:
-                r = session.get(url, timeout=_REQUEST_TIMEOUT)
-                if r.ok:
-                    return r.json().get("shows") or []
-                if r.status_code == 429:
-                    try:
-                        wait = max(1, int(float(r.headers.get("Retry-After") or "5")))
-                    except (ValueError, TypeError):
-                        wait = 5
-                    if wait > _MAX_RETRY_WAIT:
-                        logger.warning(
-                            "Regal: rate-limited for theatre %s on %s — "
-                            "Retry-After=%ds exceeds cap, skipping date",
-                            theatre_code, date_iso, wait,
-                        )
-                        return []
-                    logger.warning(
-                        "Regal: rate-limited for theatre %s on %s — "
-                        "waiting %ds (attempt %d/3)",
-                        theatre_code, date_iso, wait, attempt + 1,
-                    )
-                    time.sleep(wait)
-                    continue
-                logger.warning(
-                    "Regal: getShowtimes returned HTTP %s for theatre %s on %s",
-                    r.status_code, theatre_code, date_iso,
-                )
-                return []
-            except Exception as exc:
-                logger.warning(
-                    "Regal: getShowtimes failed for %s on %s: %s",
-                    theatre_code, date_iso, exc,
-                )
-                return []
+        try:
+            r = polite_get(
+                session, url, timeout=REQUEST_TIMEOUT,
+                log_prefix=f"Regal: theatre {theatre_code} on {date_iso}",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Regal: getShowtimes failed for %s on %s: %s",
+                theatre_code, date_iso, exc,
+            )
+            return []
+        if r is None:
+            return []
+        if r.ok:
+            return r.json().get("shows") or []
         logger.warning(
-            "Regal: gave up on theatre %s on %s after 3 rate-limited attempts",
-            theatre_code, date_iso,
+            "Regal: getShowtimes returned HTTP %s for theatre %s on %s",
+            r.status_code, theatre_code, date_iso,
         )
         return []
 
@@ -426,7 +359,7 @@ class RegalScraper(BaseScraper):
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=_UA, locale="en-US")
+            context = browser.new_context(user_agent=USER_AGENT, locale="en-US")
             try:
                 result = self._scrape_with_context(theater, movie_ids, context)
                 db.session.commit()
