@@ -64,12 +64,6 @@ def trigger_health_check(app) -> bool:
     return True
 
 
-def is_on_demand_fetch_running(theater_id: int) -> bool:
-    """Return True if any scrape is currently in progress for this theater."""
-    from app.scrapers import is_scraping_in_flight
-    return is_scraping_in_flight(theater_id)
-
-
 def trigger_theater_fetch(theater_id: int, scraper, app) -> bool:
     """
     Start a per-theater on-demand showtime fetch in a background daemon thread.
@@ -121,13 +115,21 @@ def _theater_fetch_job(theater_id: int, scraper) -> None:
     if theater is None:
         return
 
-    # Remove stale on-demand showtimes; alert showtimes (on_demand=False) are untouched.
-    Showtime.query.filter_by(theater_id=theater_id, on_demand=True).delete()
-    db.session.commit()
+    scrape_start = utcnow()
 
     try:
         with on_demand_scrape():
             scraper.scrape_theater(theater, {None})
+        # Delete stale on-demand rows only now that the scrape succeeded —
+        # upsert_showtime() bumps last_checked on every row it touches, so any
+        # on-demand row still stamped before scrape_start is genuinely gone
+        # from the source and safe to drop. Leaves prior data intact if the
+        # scrape below raises instead.
+        Showtime.query.filter(
+            Showtime.theater_id == theater_id,
+            Showtime.on_demand == True,  # noqa: E712
+            Showtime.last_checked < scrape_start,
+        ).delete()
         now = utcnow()
         theater.on_demand_fetched_at = now
         theater.last_scraped_at = now

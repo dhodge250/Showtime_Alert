@@ -73,7 +73,10 @@ def run_health_check(scraper) -> dict:
     )
     if health_website:
         theater_q = theater_q.filter(Theater.website.contains(health_website))
-    theater = theater_q.first()
+    # Rotate the probed theater (oldest-checked first) instead of always
+    # hitting the same one, spreading probe traffic and occasionally
+    # validating other venues in the chain.
+    theater = theater_q.order_by(db.nullsfirst(Theater.last_scraped_at.asc())).first()
 
     theater_count = Theater.query.filter(
         Theater.is_active == True,  # noqa: E712

@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import threading
+import time
 from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -338,15 +339,63 @@ def _local_to_utc(naive_local: datetime, theater: Theater) -> datetime:
     tz = _theater_tz(theater)
     return naive_local.replace(tzinfo=tz).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": USER_AGENT,
     "Accept-Language": "en-US,en;q=0.9",
 }
 REQUEST_TIMEOUT = 15
+
+
+def polite_get(
+    session_or_requests,
+    url: str,
+    *,
+    headers: dict | None = None,
+    timeout: int = REQUEST_TIMEOUT,
+    delay: float = 0.5,
+    max_retry_wait: int = 30,
+    attempts: int = 3,
+    log_prefix: str = "",
+):
+    """
+    GET url with an inter-request delay and 429 Retry-After handling.
+
+    Sleeps `delay` seconds once before the first attempt (politeness toward
+    the chain's rate limiter), then on HTTP 429 retries up to `attempts`
+    times, sleeping the Retry-After value between attempts (capped by
+    `max_retry_wait`, past which the URL is skipped). Returns the Response
+    for any non-429 status so callers keep their own status/exception
+    handling — connection errors are not caught here and propagate to the
+    caller, which keeps its own log message for that path.
+    """
+    prefix = f"{log_prefix}: " if log_prefix else ""
+    time.sleep(delay)
+    for attempt in range(attempts):
+        r = session_or_requests.get(url, headers=headers, timeout=timeout)
+        if r.status_code != 429:
+            return r
+        try:
+            wait = max(1, int(float(r.headers.get("Retry-After") or "5")))
+        except (ValueError, TypeError):
+            wait = 5
+        if wait > max_retry_wait:
+            logger.warning(
+                "%srate-limited — Retry-After=%ds exceeds cap, skipping",
+                prefix, wait,
+            )
+            return None
+        logger.warning(
+            "%srate-limited — waiting %ds (attempt %d/%d)",
+            prefix, wait, attempt + 1, attempts,
+        )
+        time.sleep(wait)
+    logger.warning("%sgave up after %d rate-limited attempts", prefix, attempts)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -931,10 +980,9 @@ def cleanup_expired_showtimes() -> int:
     Returns the count of rows deleted.
     """
     cutoff = utcnow()
-    expired = Showtime.query.filter(Showtime.show_datetime < cutoff).all()
-    count = len(expired)
-    for st in expired:
-        db.session.delete(st)
+    count = Showtime.query.filter(Showtime.show_datetime < cutoff).delete(
+        synchronize_session=False
+    )
     if count:
         db.session.commit()
         logger.info("Cleaned up %d expired showtime(s).", count)

@@ -192,9 +192,8 @@ def theaters():
 def theater_detail(theater_id):
     """Theater detail page."""
     import json
-    from app.scrapers import ALL_SCRAPERS
+    from app.scrapers import ALL_SCRAPERS, is_scraping_in_flight
     from app.scrapers.base import _haversine_km
-    from app.scheduler import is_on_demand_fetch_running
 
     theater = Theater.query.get_or_404(theater_id)
     showtimes = (
@@ -231,7 +230,7 @@ def theater_detail(theater_id):
 
     has_scraper = any(s.chain_name == theater.chain for s in ALL_SCRAPERS)
     cooldown_hours = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
-    fetch_running = is_on_demand_fetch_running(theater_id)
+    fetch_running = is_scraping_in_flight(theater_id)
 
     cooldown_active = False
     cooldown_remaining_sec = 0
@@ -1870,12 +1869,12 @@ def api_theater_fetch_showtimes(theater_id: int):
     """Trigger an on-demand showtime fetch for a single theater."""
     from datetime import timedelta
     from flask import current_app
-    from app.scrapers import ALL_SCRAPERS
-    from app.scheduler import trigger_theater_fetch, is_on_demand_fetch_running
+    from app.scrapers import ALL_SCRAPERS, is_scraping_in_flight
+    from app.scheduler import trigger_theater_fetch
 
     theater = Theater.query.get_or_404(theater_id)
 
-    if is_on_demand_fetch_running(theater_id):
+    if is_scraping_in_flight(theater_id):
         return jsonify({"status": "in_progress"})
 
     cooldown_hours = _get_setting_int("on_demand_fetch_cooldown_hours", 24)
@@ -1902,7 +1901,7 @@ def api_theater_fetch_showtimes(theater_id: int):
 def api_theater_fetch_status(theater_id: int):
     """Return on-demand fetch state for a single theater."""
     from app.models import Showtime
-    from app.scheduler import is_on_demand_fetch_running
+    from app.scrapers import is_scraping_in_flight
 
     theater = Theater.query.get_or_404(theater_id)
     on_demand_count = (
@@ -1912,7 +1911,7 @@ def api_theater_fetch_status(theater_id: int):
         .count()
     )
     return jsonify({
-        "running": is_on_demand_fetch_running(theater_id),
+        "running": is_scraping_in_flight(theater_id),
         "fetched_at": theater.on_demand_fetched_at.isoformat() if theater.on_demand_fetched_at else None,
         "on_demand_count": on_demand_count,
     })

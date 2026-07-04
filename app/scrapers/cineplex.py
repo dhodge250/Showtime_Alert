@@ -5,7 +5,15 @@ from urllib.parse import quote
 
 import requests
 
-from app.scrapers.base import BaseScraper, _local_to_utc, _parse_time_text, _scrape_ctx
+from app.scrapers.base import (
+    REQUEST_TIMEOUT,
+    USER_AGENT,
+    BaseScraper,
+    _local_to_utc,
+    _parse_time_text,
+    _scrape_ctx,
+    polite_get,
+)
 from app.models import Showtime, Theater
 
 logger = logging.getLogger(__name__)
@@ -30,10 +38,7 @@ class CineplexScraper(BaseScraper):
 
     _API_BASE = "https://apis.cineplex.com/prod/cpx/theatrical/api/v1"
     _API_HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": USER_AGENT,
         "ocp-apim-subscription-key": "dcdac5601d864addbc2675a2e96cb1f8",
         "referer": "https://www.cineplex.com/",
         "cctoken": "undefined",
@@ -87,10 +92,14 @@ class CineplexScraper(BaseScraper):
     def _get_bookable_dates(self, location_id: int) -> list[str]:
         """Return YYYY-MM-DD strings for dates that have bookable showtimes."""
         try:
-            r = requests.get(
+            r = polite_get(
+                requests,
                 f"{self._API_BASE}/dates/bookable?locationId={location_id}",
-                headers=self._API_HEADERS, timeout=10,
+                headers=self._API_HEADERS, timeout=REQUEST_TIMEOUT,
+                log_prefix=f"Cineplex: dates/bookable for location {location_id}",
             )
+            if r is None:
+                return []
             if r.status_code != 200:
                 logger.warning("Cineplex: dates/bookable returned %s", r.status_code)
                 return []
@@ -117,8 +126,11 @@ class CineplexScraper(BaseScraper):
                 f"{self._API_BASE}/showtimes"
                 f"?language=en&locationId={location_id}&date={date_param}"
             )
-            r = requests.get(url, headers=self._API_HEADERS, timeout=15)
-            if r.status_code != 200:
+            r = polite_get(
+                requests, url, headers=self._API_HEADERS, timeout=REQUEST_TIMEOUT,
+                log_prefix=f"Cineplex: showtimes for {theater.name} on {date_iso}",
+            )
+            if r is None or r.status_code != 200:
                 return []
 
             data = r.json()
